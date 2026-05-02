@@ -9,20 +9,24 @@ const ALLOWED_HEADERS = "Content-Type, Authorization";
 
 /**
  * Compute the CORS headers for a given request.
- * If the request's Origin matches env.SITE_ORIGIN we echo it back, otherwise
- * we return no Access-Control-Allow-Origin (the browser will block).
+ * If the request's Origin matches env.SITE_ORIGIN we echo it back. Otherwise
+ * we omit Access-Control-Allow-Origin entirely — the browser will then block
+ * the response. Non-browser clients (curl, server-to-server) ignore CORS, so
+ * 200/501/etc bodies still come through; that matches real CORS semantics.
  */
 export function corsHeaders(request, env) {
   const origin = request.headers.get("Origin") || "";
-  const allow = origin && origin === env.SITE_ORIGIN ? origin : env.SITE_ORIGIN;
-  return {
-    "Access-Control-Allow-Origin": allow,
+  const headers = {
     "Access-Control-Allow-Methods": ALLOWED_METHODS,
     "Access-Control-Allow-Headers": ALLOWED_HEADERS,
     "Access-Control-Allow-Credentials": "true",
     "Access-Control-Max-Age": "86400",
     "Vary": "Origin",
   };
+  if (origin && origin === env.SITE_ORIGIN) {
+    headers["Access-Control-Allow-Origin"] = origin;
+  }
+  return headers;
 }
 
 /**

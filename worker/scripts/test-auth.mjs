@@ -22,8 +22,9 @@ import {
   requireAuth,
 } from "../src/auth.js";
 
-const SECRET       = "test-secret-please-do-not-use-in-prod";
-const OTHER_SECRET = "another-secret";
+// 32+ chars required by requireSecret().
+const SECRET       = "test-secret-please-do-not-use-in-prod-xxxxxxxx";
+const OTHER_SECRET = "another-secret-also-32-or-more-characters-yyyy";
 
 let failures = 0;
 const ok   = (msg) => console.log(`  \x1b[32m✓\x1b[0m ${msg}`);
@@ -158,16 +159,20 @@ console.log("\nJWT auth primitives\n");
   }
 }
 
-// 8. Fail-fast on missing/short JWT_SECRET
+// 8. Fail-fast on missing/short JWT_SECRET (must require >= 32 chars)
 {
-  const env = { JWT_SECRET: "", SESSIONS: makeKV(), COOKIE_NAME: "algosize_session" };
-  let threw = false;
-  try { await issueJWT(env, "u", "e@x", "active"); } catch { threw = true; }
-  if (threw) ok("issueJWT refuses missing/short JWT_SECRET"); else fail("issueJWT ran with empty secret");
+  // 31-char secret is one char below the 32-char minimum.
+  for (const badSecret of ["", "tiny", "x".repeat(31)]) {
+    const env = { JWT_SECRET: badSecret, SESSIONS: makeKV(), COOKIE_NAME: "algosize_session" };
+    let threw = false;
+    try { await issueJWT(env, "u", "e@x", "active"); } catch { threw = true; }
+    if (!threw) { fail(`issueJWT accepted weak secret of length ${badSecret.length}`); break; }
 
-  threw = false;
-  try { await requireAuth(new Request("http://x"), env); } catch { threw = true; }
-  if (threw) ok("requireAuth refuses missing/short JWT_SECRET"); else fail("requireAuth ran with empty secret");
+    threw = false;
+    try { await requireAuth(new Request("http://x"), env); } catch { threw = true; }
+    if (!threw) { fail(`requireAuth accepted weak secret of length ${badSecret.length}`); break; }
+  }
+  ok("issueJWT and requireAuth refuse JWT_SECRET shorter than 32 chars");
 }
 
 console.log();

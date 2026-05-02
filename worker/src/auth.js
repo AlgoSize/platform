@@ -130,11 +130,15 @@ export async function verifyJWT(token, secret) {
 // Issue + Revoke (these touch KV)
 // ---------------------------------------------------------------------------
 
+// Minimum JWT signing secret length, in characters. HS256 wants at least the
+// hash output size (32 bytes). We require 32+ characters of secret material.
+const MIN_JWT_SECRET_LEN = 32;
+
 function requireSecret(env) {
-  if (!env || typeof env.JWT_SECRET !== "string" || env.JWT_SECRET.length < 16) {
+  if (!env || typeof env.JWT_SECRET !== "string" || env.JWT_SECRET.length < MIN_JWT_SECRET_LEN) {
     throw new Error(
-      "JWT_SECRET is missing or too short. Set it in worker/.dev.vars (local) " +
-      "or `wrangler secret put JWT_SECRET` (production).",
+      `JWT_SECRET is missing or too short (need >= ${MIN_JWT_SECRET_LEN} chars). ` +
+      "Set it in worker/.dev.vars (local) or `wrangler secret put JWT_SECRET` (production).",
     );
   }
 }
