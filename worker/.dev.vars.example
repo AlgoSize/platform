@@ -1,0 +1,15 @@
+# Algosize Worker — local development secrets.
+#
+# Copy to `.dev.vars` (gitignored) and fill in. Wrangler loads this file
+# automatically when you run `wrangler dev`. Do NOT commit `.dev.vars`.
+#
+# In production these values are set with `wrangler secret put <NAME>`
+# instead — see comments in wrangler.toml.
+
+# 32+ random bytes. Generate with:  openssl rand -base64 48
+JWT_SECRET=replace_with_long_random_string_at_least_32_bytes_please
+
+# Stripe — use TEST keys locally.
+STRIPE_SECRET_KEY=sk_test_replace_me
+STRIPE_WEBHOOK_SECRET=whsec_replace_me
+STRIPE_PRICE_ID=price_replace_me

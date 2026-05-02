@@ -2,20 +2,51 @@ name = "algosize-worker"
 main = "src/index.js"
 compatibility_date = "2024-09-23"
 
-# Local dev defaults. Real KV namespace IDs are filled in at deploy time.
-# kv_namespaces = [
-#   { binding = "SESSIONS", id = "<replace>", preview_id = "<replace>" },
-#   { binding = "USERS",    id = "<replace>", preview_id = "<replace>" },
-# ]
+# ----------------------------------------------------------------------------
+# KV namespace bindings
+# ----------------------------------------------------------------------------
+# These IDs are placeholders for `wrangler dev` — Miniflare auto-stubs them
+# locally. For production, run:
+#   wrangler kv:namespace create SESSIONS   # then paste the printed id below
+#   wrangler kv:namespace create USERS
+# `preview_id` is used by `wrangler dev --remote`.
+[[kv_namespaces]]
+binding    = "SESSIONS"
+id         = "sessions_local"
+preview_id = "sessions_local"
 
+[[kv_namespaces]]
+binding    = "USERS"
+id         = "users_local"
+preview_id = "users_local"
+
+# ----------------------------------------------------------------------------
+# Public env vars (safe to commit — plaintext, surfaced to the worker as
+# env.<NAME>).
+# ----------------------------------------------------------------------------
 [vars]
-SITE_ORIGIN = "http://localhost:5000"
+SITE_ORIGIN  = "http://localhost:5000"
+COOKIE_NAME  = "algosize_session"
 
-# Secrets are set with `wrangler secret put` — never committed:
-#   STRIPE_SECRET_KEY
-#   STRIPE_WEBHOOK_SECRET
-#   STRIPE_PRICE_ID
-#   JWT_SECRET
+# ----------------------------------------------------------------------------
+# Required SECRETS (NOT declared here — never commit secret values).
+# ----------------------------------------------------------------------------
+#   JWT_SECRET             32+ random bytes; HMAC-SHA-256 signing key for sessions
+#   STRIPE_SECRET_KEY      Stripe API key (sk_test_... / sk_live_...)
+#   STRIPE_WEBHOOK_SECRET  Endpoint secret for /api/stripe/webhook
+#   STRIPE_PRICE_ID        Price ID for the monthly subscription plan
+#
+# Local dev: put these in `worker/.dev.vars` (gitignored). See
+# `worker/.dev.vars.example` for the template.
+#
+# Production: set them with:
+#   cd worker && wrangler secret put JWT_SECRET
+#   cd worker && wrangler secret put STRIPE_SECRET_KEY
+#   cd worker && wrangler secret put STRIPE_WEBHOOK_SECRET
+#   cd worker && wrangler secret put STRIPE_PRICE_ID
+#
+# The worker will fail fast at the first request if JWT_SECRET is missing.
 
 [dev]
 port = 8787
+ip   = "127.0.0.1"
