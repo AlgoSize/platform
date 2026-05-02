@@ -1,0 +1,21 @@
+name = "algosize-worker"
+main = "src/index.js"
+compatibility_date = "2024-09-23"
+
+# Local dev defaults. Real KV namespace IDs are filled in at deploy time.
+# kv_namespaces = [
+#   { binding = "SESSIONS", id = "<replace>", preview_id = "<replace>" },
+#   { binding = "USERS",    id = "<replace>", preview_id = "<replace>" },
+# ]
+
+[vars]
+SITE_ORIGIN = "http://localhost:5000"
+
+# Secrets are set with `wrangler secret put` — never committed:
+#   STRIPE_SECRET_KEY
+#   STRIPE_WEBHOOK_SECRET
+#   STRIPE_PRICE_ID
+#   JWT_SECRET
+
+[dev]
+port = 8787

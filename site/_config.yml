@@ -1,0 +1,18 @@
+title: Algosize
+description: >-
+  Algosize helps engineering teams cut cloud spend, find vulnerabilities,
+  and optimize critical algorithms.
+url: "https://algosize.com"
+baseurl: ""
+
+permalink: /:path/
+
+plugins:
+  - jekyll-feed
+
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - vendor
+  - node_modules
+  - README.md
