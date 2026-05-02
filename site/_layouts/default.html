@@ -10,5 +10,12 @@
   </head>
   <body>
     {{ content }}
+    <script>
+      // API base for the Worker. Empty in production (same origin via
+      // Cloudflare route algosize.com/api/*); set to the wrangler dev URL
+      // in local development. See site/_config.yml.
+      window.ALGOSIZE_API_BASE = {{ site.api_base | default: "" | jsonify }};
+    </script>
+    <script src="{{ '/assets/js/checkout.js' | relative_url }}" defer></script>
   </body>
 </html>
