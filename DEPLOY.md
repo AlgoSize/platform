@@ -625,6 +625,141 @@ opaque — JWT subject — not the email).
 Zero. The transport short-circuits before the DSN parse if the secret
 is missing; only the structured-JSON console line is emitted.
 
+### 3.6 Transactional email via Google Workspace (Task #56)
+
+The Worker sends a welcome email after every successful free-tier
+signup, and exposes a single `sendTransactional({to, subject, text,
+html})` helper any future handler (low-quota warning, magic-link, etc.)
+can call. Failures NEVER block the user response — the send rides on
+`ctx.waitUntil` and any error is captured to Sentry via the §3.5 pipe.
+
+#### Why Gmail API and not SMTP relay?
+
+Cloudflare Workers can only do HTTP/HTTPS — there's no raw TCP socket,
+so `smtp-relay.gmail.com:587` is **not** reachable from the Worker
+runtime. The Gmail API over HTTPS is the only Google Workspace
+transport that works from a Worker. We pay for that with a one-time
+service-account + domain-wide-delegation setup; in exchange there is
+no SMTP password to rotate, the credential is scoped to a single OAuth
+scope (`gmail.send`), and revocation is one click in the Workspace
+admin console.
+
+#### One-time provisioning
+
+Done once per Workspace tenant. You need **Workspace Super Admin** for
+steps 4–5 and **Google Cloud project Owner** for steps 1–3.
+
+1. **Create / pick a Google Cloud project.** Visit
+   <https://console.cloud.google.com/projectcreate>. Any project on the
+   same Google account as the Workspace tenant works — there's no
+   billing requirement for the Gmail API send quota we use.
+2. **Enable the Gmail API** for that project at
+   <https://console.cloud.google.com/apis/library/gmail.googleapis.com>
+   → click **Enable**.
+3. **Create a service account.**
+   - <https://console.cloud.google.com/iam-admin/serviceaccounts> →
+     **Create service account**.
+   - Name: `algosize-mailer`. No project-level IAM roles needed.
+   - After creation, open the account → **Keys → Add key → Create new
+     key → JSON**. The browser downloads `algosize-mailer-XXXX.json` —
+     this is the secret the Worker needs. **Treat it like a password.**
+   - On the same page, copy the **Unique ID** (a 21-digit number) —
+     you need it in step 4.
+4. **Grant domain-wide delegation** (Workspace admin console).
+   - <https://admin.google.com> → **Security → Access and data control
+     → API controls → Manage Domain-Wide Delegation**.
+   - **Add new** → Client ID = the Unique ID from step 3 → OAuth
+     scopes = `https://www.googleapis.com/auth/gmail.send` (one scope,
+     comma-separated if you ever add more).
+   - Save. Propagation is usually < 5 minutes but can take up to 24h
+     for a brand-new Workspace tenant.
+5. **Create the impersonation mailbox.** This is the actual user
+   inbox the service account speaks AS. The Worker default is
+   `noreply@algosize.com` (production) and `noreply-staging@algosize.com`
+   (staging). Workspace admin → **Users → Add new user** for each.
+   You don't have to log into them — they just need to exist.
+6. **Push the service-account JSON as a Worker secret.** The whole
+   JSON file goes in as one value:
+   ```bash
+   cd worker
+   ./node_modules/.bin/wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON --env production
+   # When prompted, paste the ENTIRE contents of the .json file from
+   # step 3 (including the {…} braces) and press Enter then Ctrl-D.
+   # Wrangler accepts multi-line input here.
+   ```
+   The non-secret companions (`EMAIL_FROM`, `EMAIL_DELEGATED_USER`,
+   optional `EMAIL_REPLY_TO`) are already declared in
+   `worker/wrangler.toml` under `[env.production.vars]`. Edit there
+   if you want a different sender display name or impersonation
+   mailbox.
+7. **Repeat for staging** with `--env staging` and the staging mailbox
+   (`noreply-staging@algosize.com`). The same service-account JSON
+   works for both environments — DWD is per-tenant, not per-env.
+
+#### Verify
+
+```bash
+# After deploying, sign up with a fresh address against the live API:
+curl -i -X POST https://algosize.com/api/signup \
+  -H "content-type: application/json" \
+  -d '{"email":"you+algosize-test@gmail.com"}'
+# expect HTTP/2 201 with the dashboard redirect payload.
+
+# Within ~30s, the welcome email lands in the test inbox. Confirm:
+#   - From: noreply@algosize.com (display: "Algosize")
+#   - Subject contains "Welcome to Algosize"
+#   - Both plain-text and HTML render
+#   - Gmail's "Show original" panel shows
+#       SPF:   PASS  (google.com)
+#       DKIM:  PASS  (algosize.com)
+#       DMARC: PASS
+# If any of those say "neutral" or "fail", check §4.4 below.
+```
+
+If the worker logs show `google_email_not_configured`, the secret
+or one of the vars is missing. If they show
+`google_token_exchange_failed status=401 unauthorized_client`,
+domain-wide delegation didn't take — re-check the Unique ID in
+step 4 and wait 5 more minutes.
+
+#### Rotation
+
+Service-account keys don't expire by default, but rotate at least
+yearly and immediately on staff turnover or any suspected compromise.
+
+```bash
+# 1. In the Cloud Console: Service accounts → algosize-mailer → Keys →
+#    Add key → Create new key → JSON. Download the new file. Do NOT
+#    delete the old key yet.
+# 2. Push the new JSON as the Worker secret (overwrites the old value):
+cd worker
+./node_modules/.bin/wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON --env production
+# 3. Re-deploy so the running Worker picks up the new secret:
+./node_modules/.bin/wrangler deploy --env production
+# 4. Smoke-test: trigger a fresh signup and confirm the welcome
+#    email lands.
+# 5. ONLY THEN delete the old key from the Cloud Console (Keys tab →
+#    trash icon next to the old key id). The Worker's in-memory token
+#    cache is per-isolate and lives ≤ 50 min, so old isolates may use
+#    the previous key briefly — leaving the old key valid for a few
+#    minutes after step 3 prevents a window of failed sends during
+#    the rollover.
+```
+
+To revoke entirely (e.g. taking the Worker offline): delete the key
+in step 5 *before* deleting the secret, so any still-running isolate
+fails closed (caught by `captureException`) rather than silently
+sending from a stale cache.
+
+#### Local dev
+
+`sendTransactional` treats a missing `GOOGLE_SERVICE_ACCOUNT_JSON`
+or missing `EMAIL_FROM` as `{sent: false, reason: "not_configured"}`
+and emits a single warn-level log line — no Sentry spam. Local
+`wrangler dev` therefore Just Works without Workspace setup. To
+exercise the real send path locally, paste the JSON into
+`worker/.dev.vars` (gitignored — see `.dev.vars.example`).
+
 ---
 
 ## 4. DNS — point `algosize.com/api/*` at the Worker
