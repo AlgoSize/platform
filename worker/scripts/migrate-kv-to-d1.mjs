@@ -13,19 +13,22 @@
 //   #    --runs-namespace-id directly. List ids with:
 //   wrangler kv namespace list
 //
-//   # 2. Generate the SQL bundle (writes to ./migrate-kv-to-d1.sql by default).
+//   # 2. Generate the SQL bundle, apply to D1, and emit a diff report:
 //   node worker/scripts/migrate-kv-to-d1.mjs \
 //        --env production \
 //        --users-namespace-id <USERS-id> \
-//        --runs-namespace-id <RUNS-id>
+//        --runs-namespace-id <RUNS-id> \
+//        --apply algosize
 //
 //   # The --users-namespace-id flag is optional: if omitted, the script
 //   # falls back to `--binding USERS` (which still exists in wrangler.toml
 //   # for the quota counters). --runs-namespace-id is REQUIRED unless you
-//   # temporarily re-add a RUNS binding to wrangler.toml.
-//
-//   # 3. Apply it to the D1 database (production OR a clone for testing).
-//   wrangler d1 execute algosize --file=worker/migrate-kv-to-d1.sql --remote
+//   # temporarily re-add a RUNS binding to wrangler.toml or pass --skip-runs.
+//   #
+//   # --apply runs `wrangler d1 execute <db> --file=… --remote` for you,
+//   # then queries `SELECT COUNT(*)` from users + runs and prints a
+//   # source-vs-target diff (so you can confirm nothing was dropped).
+//   # Omit --apply for a SQL-only dry run; you can apply by hand later.
 //
 // IDEMPOTENCY
 //   All emitted statements use `INSERT OR IGNORE` keyed on the primary key
@@ -42,12 +45,23 @@
 //     we only migrated user records and run history per Task #25).
 
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { writeFileSync, existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join, resolve as resolvePath } from "node:path";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// Resolve wrangler from the worker package's node_modules first (so this
+// script works from any CWD without requiring a global install), then
+// fall back to `npx wrangler`, then a bare `wrangler`. Each candidate
+// is verified before use.
+const WRANGLER = resolveWranglerCmd();
 
 const args = parseArgs(process.argv.slice(2));
 const ENV = args.env || "production";
-const OUTPUT = args.output || "migrate-kv-to-d1.sql";
+const OUTPUT = resolvePath(args.output || "migrate-kv-to-d1.sql");
 const VERBOSE = !!args.verbose;
+const APPLY_DB = args.apply || null;  // e.g. "algosize" — if set, run d1 execute + diff
 // Each KV source is identified either by a binding name (`--binding`-style,
 // reads wrangler.toml) or a raw namespace id (works even when the binding
 // has been removed). USERS still exists as a binding (quota counters);
@@ -135,12 +149,47 @@ sqlChunks.push("COMMIT;", "");
 writeFileSync(OUTPUT, sqlChunks.join("\n"));
 
 console.error(
-  `[migrate] wrote ${OUTPUT}: ${userCount} users, ${runCount} runs, ${skipped} skipped\n` +
-  `[migrate] apply with: wrangler d1 execute algosize --file=${OUTPUT} --remote\n` +
-  `[migrate] after apply, verify: wrangler d1 execute algosize --remote ` +
-  `--command="SELECT COUNT(*) FROM users; SELECT COUNT(*) FROM runs;" — counts ` +
-  `should match the lines above.`,
+  `[migrate] wrote ${OUTPUT}: ${userCount} users, ${runCount} runs, ${skipped} skipped`,
 );
+
+if (APPLY_DB) {
+  console.error(`[migrate] applying ${OUTPUT} to D1 database '${APPLY_DB}' (env=${ENV}) …`);
+  await runWrangler([
+    "d1", "execute", APPLY_DB,
+    "--env", ENV,
+    "--remote",
+    "--file", OUTPUT,
+  ], { inheritStdio: true });
+
+  const dbUsers = await countD1Rows(APPLY_DB, "users");
+  const dbRuns  = await countD1Rows(APPLY_DB, "runs");
+
+  // Diff report: source counts (this run) vs target counts (D1 right now,
+  // post-apply). The target can legitimately be HIGHER than the source on
+  // re-runs (rows from a previous migration are still there) but NEVER
+  // lower for a fresh apply. Anything else is a red flag.
+  const userDelta = dbUsers - userCount;
+  const runDelta  = dbRuns  - runCount;
+  console.error(
+    "\n[migrate] ===== diff report =====\n" +
+    `[migrate]   users  source=${userCount}  target=${dbUsers}  delta=${signed(userDelta)}\n` +
+    `[migrate]   runs   source=${runCount}   target=${dbRuns}  delta=${signed(runDelta)}\n` +
+    `[migrate]   skipped (bad JSON / missing keys): ${skipped}`,
+  );
+  const drift =
+    (userDelta < 0 ? "users target < source — D1 dropped rows" : null) ||
+    (runDelta  < 0 ? "runs target < source — D1 dropped rows"  : null);
+  if (drift) {
+    console.error(`[migrate] FAIL: ${drift}`);
+    process.exit(2);
+  }
+  console.error("[migrate] OK — no missing rows in D1");
+} else {
+  console.error(
+    `[migrate] apply with: ${WRANGLER.join(" ")} d1 execute <db> --env ${ENV} --file=${OUTPUT} --remote\n` +
+    `[migrate] then re-run with --apply <db> to see the source-vs-target diff report`,
+  );
+}
 
 // ---------------------------------------------------------------------
 function parseArgs(argv) {
@@ -229,16 +278,65 @@ function sourceFlag(source) {
     : ["--binding", source.value];
 }
 
-function runWrangler(args) {
+function runWrangler(extraArgs, { inheritStdio = false } = {}) {
+  const [cmd, ...prefixArgs] = WRANGLER;
+  const fullArgs = [...prefixArgs, ...extraArgs];
   return new Promise((resolve, reject) => {
-    const child = spawn("wrangler", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(cmd, fullArgs, {
+      stdio: inheritStdio ? "inherit" : ["ignore", "pipe", "pipe"],
+    });
     let stdout = "", stderr = "";
-    child.stdout.on("data", (b) => (stdout += b.toString()));
-    child.stderr.on("data", (b) => (stderr += b.toString()));
+    if (!inheritStdio) {
+      child.stdout.on("data", (b) => (stdout += b.toString()));
+      child.stderr.on("data", (b) => (stderr += b.toString()));
+    }
     child.on("error", reject);
     child.on("close", (code) => {
       if (code === 0) resolve(stdout);
-      else reject(new Error(`wrangler ${args.join(" ")} exited ${code}\n${stderr}`));
+      else reject(new Error(`${cmd} ${fullArgs.join(" ")} exited ${code}\n${stderr}`));
     });
   });
+}
+
+// Resolve a runnable wrangler invocation: prefer the local install in
+// worker/node_modules/.bin so the script works without a global wrangler.
+function resolveWranglerCmd() {
+  // Walk up looking for node_modules/.bin/wrangler.
+  let dir = __dirname;
+  for (let i = 0; i < 6; i++) {
+    const candidate = join(dir, "node_modules", ".bin", "wrangler");
+    if (existsSync(candidate)) return [candidate];
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  // Fall back to `npx --no-install wrangler` (uses any wrangler reachable
+  // from the project's package tree without re-fetching).
+  return ["npx", "--no-install", "wrangler"];
+}
+
+// Run a `SELECT COUNT(*)` against the D1 database and parse the JSON
+// wrangler emits with --json.
+async function countD1Rows(db, table) {
+  const out = await runWrangler([
+    "d1", "execute", db,
+    "--env", ENV,
+    "--remote",
+    "--json",
+    "--command", `SELECT COUNT(*) AS n FROM ${table};`,
+  ]);
+  // wrangler 3.x prints either an array of result groups or { results: [...] }.
+  let parsed;
+  try { parsed = JSON.parse(out); }
+  catch { return -1; }
+  const groups = Array.isArray(parsed) ? parsed : [parsed];
+  for (const g of groups) {
+    const rows = g.results || g.result || [];
+    if (rows.length && typeof rows[0].n === "number") return rows[0].n;
+  }
+  return -1;
+}
+
+function signed(n) {
+  return n > 0 ? `+${n}` : `${n}`;
 }

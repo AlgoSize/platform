@@ -291,26 +291,40 @@ cd worker
 # `algosize-RUNS-production`. Copy each `id`.
 ```
 
-Then dump the records to a SQL file and apply:
+Then dump the records, apply them to D1, and emit a diff report in one
+shot via `--apply`:
 
 ```bash
 node scripts/migrate-kv-to-d1.mjs \
   --env production \
   --users-namespace-id <USERS-id from above> \
-  --runs-namespace-id  <RUNS-id from above>
+  --runs-namespace-id  <RUNS-id from above> \
+  --apply algosize
 # wrote migrate-kv-to-d1.sql: N users, M runs
-
-./node_modules/.bin/wrangler d1 execute algosize \
-  --file=migrate-kv-to-d1.sql --env production --remote
+# applying migrate-kv-to-d1.sql to D1 database 'algosize' (env=production) …
+# ===== diff report =====
+#   users  source=N  target=N  delta=+0
+#   runs   source=M  target=M  delta=+0
+#   skipped (bad JSON / missing keys): 0
+# OK — no missing rows in D1
 ```
+
+Exit code 2 means D1 has FEWER rows than the source dump — investigate
+before retrying. Re-runs of `--apply` are safe (the script uses
+`INSERT OR IGNORE` keyed on the primary key); the diff report will
+just show `target ≥ source` because previously-applied rows are still
+there.
 
 If you never deployed Task #17 (no RUNS data exists), pass
 `--skip-runs` instead of `--runs-namespace-id`.
 
-The script uses `INSERT OR IGNORE` keyed on the primary key, so re-
-running is safe — duplicates become no-ops. The KV `email:`/`cust:`
-index keys and the per-user `runs:<userId>` index are intentionally NOT
-copied (D1's UNIQUE constraints + `idx_runs_user_created` replace them).
+If you'd rather inspect the SQL before applying, omit `--apply` —
+the script writes `migrate-kv-to-d1.sql` and prints the manual
+`wrangler d1 execute` command to run.
+
+The KV `email:`/`cust:` index keys and the per-user `runs:<userId>`
+index are intentionally NOT copied (D1's UNIQUE constraints +
+`idx_runs_user_created` replace them).
 
 #### 2.5.5 Verify
 
