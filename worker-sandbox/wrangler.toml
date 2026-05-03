@@ -1,0 +1,32 @@
+name = "algosize-sandbox"
+main = "src/index.js"
+compatibility_date = "2024-09-23"
+
+# The sandbox Worker has no KV bindings, no secrets, and no outbound network
+# access it actually uses. Its sole job is to run a user-supplied function in
+# its own isolate so a runaway loop can't take down the main API Worker.
+#
+# The main Worker references it via a `[[services]]` binding (see
+# `worker/wrangler.toml`).
+
+[vars]
+SANDBOX_VERSION = "1"
+
+[env.production]
+name = "algosize-sandbox"
+
+[env.production.vars]
+SANDBOX_VERSION = "1"
+
+# Staging sibling for the staging main Worker (Task #23). Same code, separate
+# isolate pool so a bad sandbox deploy can be tested end-to-end via
+# staging.algosize.com without affecting prod.
+[env.staging]
+name = "algosize-sandbox-staging"
+
+[env.staging.vars]
+SANDBOX_VERSION = "1"
+
+[dev]
+port = 8788
+ip   = "127.0.0.1"

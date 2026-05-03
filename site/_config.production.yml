@@ -1,0 +1,13 @@
+# Production overrides for the Jekyll build.
+#
+# Used in CI by the GitHub Actions workflow:
+#   bundle exec jekyll build --config _config.yml,_config.production.yml
+#
+# Local dev (`bundle exec jekyll serve`) ignores this file and keeps the
+# defaults from _config.yml (api_base pointing at wrangler dev on 127.0.0.1).
+
+# Empty string → relative URL → same-origin requests. In production the
+# Cloudflare Worker is mapped to algosize.com/api/*, so the browser hits the
+# same domain that served the page (no CORS preflight, no cross-origin cookie
+# headache).
+api_base: ""

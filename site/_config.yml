@@ -6,11 +6,9 @@ url: "https://algosize.com"
 baseurl: ""
 
 # Base URL of the Algosize Worker API.
-# Empty string  → same origin (production: Worker is mapped to algosize.com/api/*).
-# Local dev     → set to "http://127.0.0.1:8787" so the JS checkout interceptor
-#                 can reach `wrangler dev`. Override per-environment via
-#                 `JEKYLL_ENV=development bundle exec jekyll serve --config …`
-#                 or just edit this value when developing locally.
+# This value is the LOCAL DEV default. The CI build for GitHub Pages overrides
+# it via `_config.production.yml` (api_base: "") so production renders use
+# same-origin URLs (the Worker is mapped to algosize.com/api/*).
 api_base: "http://127.0.0.1:8787"
 
 permalink: /:path/
@@ -24,3 +22,4 @@ exclude:
   - vendor
   - node_modules
   - README.md
+  - _config.production.yml

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dashboard — Algosize</title>
+    <meta name="description" content="Your Algosize workspace." />
+    <link rel="stylesheet" href="/assets/css/main.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230a0d14'/%3E%3Cpath d='M14 46 L26 18 L38 46 M18 38 L34 38' stroke='%235eead4' stroke-width='5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <main>
+  <section class="section">
+    <div class="container" style="max-width: 720px;">
+      <span class="eyebrow">Welcome</span>
+      <h1>You're in.</h1>
+      <p class="lede">
+        Your subscription is active. The full dashboard — cost, vulnerability,
+        and algorithm analyzers — is being wired up right now. You'll see the
+        three workspaces here in the next release.
+      </p>
+
+      <p style="margin-top: 2rem;">
+        <a href="/" class="btn btn-ghost">← Back to home</a>
+      </p>
+    </div>
+  </section>
+</main>
+
+    <script>
+      // API base for the Worker. Empty in production (same origin via
+      // Cloudflare route algosize.com/api/*); set to the wrangler dev URL
+      // in local development. See site/_config.yml.
+      window.ALGOSIZE_API_BASE = "";
+    </script>
+    <script src="/assets/js/checkout.js" defer></script>
+  </body>
+</html>

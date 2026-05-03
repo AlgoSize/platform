@@ -1,4 +1,4 @@
-modules = ["ruby-3.2", "nodejs-20"]
+modules = ["ruby-3.2", "nodejs-20", "python-3.11"]
 [agent]
 expertMode = true
 stack = "BEST_EFFORT_FALLBACK"
@@ -38,3 +38,7 @@ externalPort = 80
 deploymentTarget = "static"
 build = ["bash", "-c", "cd site && bundle install && bundle exec jekyll build"]
 publicDir = "site/_site"
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 120000

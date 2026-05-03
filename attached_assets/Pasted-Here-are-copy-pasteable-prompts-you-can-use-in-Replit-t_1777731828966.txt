@@ -1,0 +1,125 @@
+Here are copy‑pasteable prompts you can use in Replit to rebuild the new gefi.io while preserving all essential info.
+
+GeFi is a platform for AI financial models and portfolio/risk optimization, so the new site should keep critical contact, legal, and trust info highly visible.[1]
+
+***
+
+## Prompt 1 – Audit the current site
+
+> You are a senior product marketing and UX copywriter.  
+> Visit `https://gefi.io` and analyze the entire site structure and content.  
+> 1) List all pages/sections you can detect (hero, features, pricing, FAQs, legal pages, leadership, partnerships, etc.).  
+> 2) For each page/section, briefly describe its purpose and the key information it contains.  
+> 3) Identify which sections are essential for a new B2B AI-finance product site and mark them as “MUST KEEP”, “GOOD TO HAVE”, or “CAN REMOVE”.
+
+***
+
+## Prompt 2 – Extract all contact details
+
+> Visit `https://gefi.io` and all its subpages (including privacy, cookie policy, DPA, leadership, partnerships, etc.).  
+> Extract and list all contact information in a structured table with columns: `type`, `purpose`, `value`, `source URL`.  
+> Include:  
+> - All email addresses (e.g., legal, privacy, support, sales, partnerships).  
+> - Any physical or mailing addresses.  
+> - Any phone numbers or alternative contact channels.  
+> For each, infer its likely use (e.g., “legal(a)gefi.io → legal and compliance inquiries”) and keep all values exact.
+
+***
+
+## Prompt 3 – Extract social + community links
+
+> Visit `https://gefi.io` and identify all social media or community links.  
+> Output a table with columns: `platform`, `handle/name`, `URL`, `where it appears`, `likely purpose`.  
+> Include, if present:  
+> - X/Twitter  
+> - LinkedIn  
+> - GitHub  
+> - Discord  
+> - Telegram  
+> - Medium/blog  
+> - Any other community or announcement channels.  
+> If a platform is not present, explicitly state “Not found on site” so I know it is missing.
+
+***
+
+## Prompt 4 – Extract legal, compliance, and trust elements
+
+> Visit `https://gefi.io` and all legal-related pages (Privacy Policy, Cookie Policy, DPA, Terms, etc.).  
+> 1) List all legal/trust pages by name and URL.  
+> 2) For each, summarize in 2–3 bullet points what trust signals they contain (e.g., data protection stance, security posture, jurisdiction, contact emails like `legal(a)gefi.io` and `privacy(a)gefi.io`, governing law).  
+> 3) Suggest where in a new site these links **must** appear (e.g., footer, pricing page, onboarding, sign‑up flow) to maintain user trust and compliance.
+
+***
+
+## Prompt 5 – Capture product, plans, and FAQs
+
+> You are a SaaS product copy specialist.  
+> Visit `https://gefi.io` and extract:  
+> 1) The core product value proposition (one‑sentence and 3‑bullet version).  
+> 2) The main feature groups (e.g., risk analysis, portfolio optimization, AI models, reporting) with a one‑line explanation each.  
+> 3) Any pricing/plan information, even if informal. Turn this into a clean plans table (plan name, ideal customer, key features, limits, support level).  
+> 4) All existing FAQs and their answers.  
+> Mark which FAQs are essential to copy over verbatim in meaning (even if wording changes) for the new site.
+
+***
+
+## Prompt 6 – Propose a new site map that preserves essentials
+
+> Based on everything you can see at `https://gefi.io`, propose a modern, conversion‑oriented site map for a B2B AI-finance product.  
+> 1) Output a list of top‑level navigation items (e.g., Product, Solutions, Pricing, Resources, Company).  
+> 2) Under each, list sub‑pages/sections.  
+> 3) For each page, specify:  
+>    - Goal of the page.  
+>    - Target audience (hedge funds, VCs, traders, enterprises, etc.).  
+>    - Which **existing** elements from the current site must be preserved (specific contact emails, social links, legal pages, key copy points, metrics).  
+> Make sure all important contact emails, social/community links, and legal pages are clearly mapped into the new structure.
+
+***
+
+## Prompt 7 – Draft “Contact / Get in touch” page content
+
+> Using the data you extracted earlier from `https://gefi.io` (all emails, any addresses, and relevant support info), write complete content for a modern “Contact” page.  
+> Requirements:  
+> - Clear hero title and 1–2 sentence intro explaining how GeFi can be contacted.  
+> - Separate sections for:  
+>   - Sales / partnerships  
+>   - Support / technical issues  
+>   - Legal / compliance (using emails like `legal(a)gefi.io` or `privacy(a)gefi.io` where appropriate)  
+> - A short note on typical response times.  
+> - A short privacy note: how inquiries are used and stored.  
+> Keep the tone professional but friendly, matching an AI‑driven fintech product.
+
+***
+
+## Prompt 8 – Footer design with all essential info
+
+> Design the full footer for the new GeFi website, ensuring **no essential information from `https://gefi.io` is lost**.  
+> Include:  
+> - Product links (core pages).  
+> - Company links (About, Team, Careers if applicable).  
+> - Legal links (Privacy Policy, Cookie Policy, DPA, Terms).  
+> - Contact info (support, legal, privacy, partnerships emails).  
+> - Social/community icons and links.  
+> - A short one‑line description of GeFi and a copyright line.  
+> Output as a structured text layout that a developer can easily translate into components.
+
+***
+
+You can use these as separate Replit prompts (in order) so the agent first audits and extracts, then helps you design and write the new site while preserving all critical contact, social, and legal information from the current gefi.io.
+
+Sources
+[1] GeFi - Federated AI for Smarter Investments https://gefi.io
+[2] Data Processing Agreement - GeFi https://gefi.io/dpa
+[3] GeeFi (@GeeFiOfficial) / Posts / X - Twitter https://x.com/GeeFiOfficial
+[4] Global Ethical Finance Initiative (GEFI) Email Formats - Prospeo https://prospeo.io/c/global-ethical-finance-initiative-gefi-email-format
+[5] GeeFi | Secure, Multichain Non-Custodial Crypto Wallet https://geefi.io
+[6] Contact - Global Ethical Finance Initiative https://www.globalethicalfinance.org/contact/
+[7] GeFi https://gefi.io/loading
+[8] Gephi - The Open Graph Viz Platform https://gephi.org
+[9] Privacy Policy - GeFi https://gefi.io/privacy-policy
+[10] Team - GeFi https://gefi.io/leadership
+[11] Gate (@Gate) / Posts / X - Twitter https://x.com/Gate
+[12] Cookie Policy - GeFi https://gefi.io/cookie-policy
+[13] Partnerships - GeFi https://gefi.io/partnerships
+[14] Goldfinch (@goldfinch_fi) / Posts / X - Twitter https://x.com/goldfinch_fi
+[15] Global Ethical Finance Initiative (GEFI) Information - RocketReach https://rocketreach.co/global-ethical-finance-initiative-gefi-profile_b41a0d20ff66b233

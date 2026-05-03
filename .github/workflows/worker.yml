@@ -1,0 +1,155 @@
+name: Test and deploy Cloudflare Worker
+
+# Runs the worker test suite and deploys to Cloudflare on every push to main
+# (production) or staging (staging environment, Task #23). A failing test
+# blocks the deploy — see job dependency `deploy: needs: test`.
+#
+# This workflow replaces the manual `wrangler deploy --env production` step
+# in DEPLOY.md §2.5 for the happy path; that command remains the documented
+# fallback for first-time-ever deploys (before secrets are wired) and for
+# emergency rollback (see DEPLOY.md Appendix B).
+#
+# Required GitHub repo secrets (Settings → Secrets and variables → Actions):
+#   - CLOUDFLARE_API_TOKEN  scope: Workers Scripts:Edit + Workers KV
+#                          Storage:Edit + Account:Read on the algosize
+#                          account; restricted to the algosize + algosize-
+#                          sandbox + algosize-staging + algosize-sandbox-
+#                          staging workers only. Create at:
+#                          https://dash.cloudflare.com/profile/api-tokens
+#                          → Create Token → Edit Cloudflare Workers
+#                          template → narrow the resource scope.
+#   - CLOUDFLARE_ACCOUNT_ID  visible in the Cloudflare dashboard URL or
+#                          under any Worker's Settings page.
+#
+# Wrangler auto-reads both env vars — no extra config in wrangler.toml.
+
+on:
+  push:
+    branches: [main, staging]
+    paths:
+      - "worker/**"
+      - "worker-sandbox/**"
+      - "shared/**"
+      - ".github/workflows/worker.yml"
+  workflow_dispatch:
+    inputs:
+      target_env:
+        description: "Target environment (production or staging)"
+        required: true
+        default: "production"
+        type: choice
+        options:
+          - production
+          - staging
+
+# One deploy per environment at a time; queue newer pushes behind older
+# in-flight deploys (don't cancel — a half-finished deploy that gets
+# cancelled mid-`wrangler deploy` is worse than waiting).
+concurrency:
+  group: worker-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Run worker test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: worker/package-lock.json
+
+      - name: Install worker dependencies
+        working-directory: worker
+        run: npm ci
+
+      - name: Run worker tests
+        working-directory: worker
+        run: npm test
+
+  deploy:
+    name: Deploy worker to Cloudflare
+    needs: test
+    runs-on: ubuntu-latest
+    # Pick environment based on branch (main → production, staging → staging)
+    # or workflow_dispatch input. Defaults to production.
+    env:
+      TARGET_ENV: ${{ github.event.inputs.target_env || (github.ref == 'refs/heads/staging' && 'staging' || 'production') }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: worker/package-lock.json
+
+      - name: Verify Cloudflare credentials are set
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID must both be set as GitHub repo secrets. See .github/workflows/worker.yml header for instructions."
+            exit 1
+          fi
+          echo "Deploying to env: $TARGET_ENV"
+
+      - name: Install worker dependencies
+        working-directory: worker
+        run: npm ci
+
+      # Deploy the sandbox sibling FIRST. The main Worker has a `[[services]]`
+      # binding to `algosize-sandbox` (or `-staging`); deploying the main
+      # Worker against a non-existent sandbox service fails the bind step.
+      #
+      # `worker-sandbox/` has no package.json of its own with a wrangler
+      # devDependency — wrangler lives only under `worker/node_modules`.
+      # We invoke that binary directly with an absolute path; `npx
+      # --prefix ../worker` does NOT redirect binary lookup, only the npm
+      # prefix, so it would silently fail to find wrangler from inside
+      # the sandbox dir.
+      - name: Deploy worker-sandbox
+        working-directory: worker-sandbox
+        run: ../worker/node_modules/.bin/wrangler deploy --env "$TARGET_ENV"
+
+      - name: Deploy worker (main API)
+        working-directory: worker
+        run: ./node_modules/.bin/wrangler deploy --env "$TARGET_ENV"
+
+      - name: Smoke-test the deployed worker
+        run: |
+          if [ "$TARGET_ENV" = "production" ]; then
+            HOST="https://algosize.com"
+          else
+            HOST="https://staging.algosize.com"
+          fi
+          echo "Smoke-testing $HOST/api/me ..."
+          # /api/me on an unauthenticated request returns 401 (no session
+          # cookie). Anything else (404 from GH Pages = route not bound
+          # or propagation lag, 5xx = worker crash) is a deploy failure.
+          #
+          # Cloudflare Worker route updates usually propagate within a few
+          # seconds but can occasionally take ~30s. Retry up to 5 times
+          # with linear backoff (5s, 10s, 15s, 20s) before declaring the
+          # deploy bad — a couple of transient 404s right after a fresh
+          # deploy is normal and shouldn't fail the run.
+          for attempt in 1 2 3 4 5; do
+            STATUS=$(curl -s -o /tmp/body -w "%{http_code}" "$HOST/api/me" || echo "000")
+            echo "Attempt $attempt: HTTP $STATUS"
+            if [ "$STATUS" = "401" ] || [ "$STATUS" = "200" ]; then
+              echo "Smoke test passed."
+              exit 0
+            fi
+            if [ "$attempt" -lt 5 ]; then
+              sleep $((attempt * 5))
+            fi
+          done
+          echo "::error::Smoke test failed after 5 attempts: $HOST/api/me last returned $STATUS (expected 401 unauthenticated or 200 with cookie). Body:"
+          cat /tmp/body || true
+          exit 1

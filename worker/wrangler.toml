@@ -1,51 +1,162 @@
-name = "algosize-worker"
+name = "algosize"
 main = "src/index.js"
 compatibility_date = "2024-09-23"
 
 # ----------------------------------------------------------------------------
 # KV namespace bindings
 # ----------------------------------------------------------------------------
-# These IDs are placeholders for `wrangler dev` — Miniflare auto-stubs them
-# locally. For production, run:
-#   wrangler kv:namespace create SESSIONS   # then paste the printed id below
-#   wrangler kv:namespace create USERS
-# `preview_id` is used by `wrangler dev --remote`.
+# IDs are real Cloudflare namespace IDs. Locally, Miniflare maps these to
+# in-memory KV (no real Cloudflare reads/writes). In production they bind to
+# the real namespaces created with `wrangler kv namespace create <NAME>`.
 [[kv_namespaces]]
-binding    = "SESSIONS"
-id         = "sessions_local"
-preview_id = "sessions_local"
+binding = "SESSIONS"
+id      = "2a67b8b8fa4444f2b04b4ee7b98407dc"
 
 [[kv_namespaces]]
-binding    = "USERS"
-id         = "users_local"
-preview_id = "users_local"
+binding = "USERS"
+id      = "b321f8eeccf0422694b87f719fa0d70c"
+
+# Run history (Task #17). One JSON blob per analyzer run, plus a small
+# per-user index that lists the recent run ids. 90-day TTL on the blobs.
+# In local dev Miniflare maps this to in-memory KV — no real namespace
+# required until you ship to production.
+[[kv_namespaces]]
+binding = "RUNS"
+id      = "0000000000000000000000000000abcd"
 
 # ----------------------------------------------------------------------------
-# Public env vars (safe to commit — plaintext, surfaced to the worker as
-# env.<NAME>).
+# Service binding — algorithm-optimizer sandbox (Task #16)
+# ----------------------------------------------------------------------------
+# The main Worker calls `env.SANDBOX.fetch(...)` to run user-supplied JS in a
+# sibling Worker's isolate so a runaway loop can't take down the API. The
+# sibling Worker lives in `/worker-sandbox` and must be deployed first:
+#   cd worker-sandbox && wrangler deploy --env production
+# In single-Worker dev mode (no service binding) the main Worker falls back
+# to in-process execution — same code, same sandbox model, just no
+# CPU-budget isolation between Workers.
+[[services]]
+binding = "SANDBOX"
+service = "algosize-sandbox"
+
+# ----------------------------------------------------------------------------
+# Default (local-dev) public env vars. Override per-environment below.
 # ----------------------------------------------------------------------------
 [vars]
-SITE_ORIGIN  = "http://localhost:5000"
-COOKIE_NAME  = "algosize_session"
+SITE_ORIGIN = "http://localhost:5000"
+COOKIE_NAME = "algosize_session"
 
 # ----------------------------------------------------------------------------
-# Required SECRETS (NOT declared here — never commit secret values).
+# Production overrides (used by `wrangler deploy --env production`).
+# Cookie name stays the same; SITE_ORIGIN points to the deployed site/worker.
+# Update SITE_ORIGIN once the marketing site has its own domain so CORS,
+# cookie scope, and Stripe redirects line up with where the user actually
+# loads the site from.
 # ----------------------------------------------------------------------------
-#   JWT_SECRET             32+ random bytes; HMAC-SHA-256 signing key for sessions
+[env.production]
+name = "algosize"
+
+[env.production.vars]
+# Production site origin: must match the hostname users load the site from.
+# Used for CORS allow-list, cookie scope, and Stripe redirect URLs.
+# See DEPLOY.md §2.4. Override here if you ship under www. or a different host.
+SITE_ORIGIN = "https://algosize.com"
+COOKIE_NAME = "algosize_session"
+
+[[env.production.kv_namespaces]]
+binding = "SESSIONS"
+id      = "2a67b8b8fa4444f2b04b4ee7b98407dc"
+
+[[env.production.kv_namespaces]]
+binding = "USERS"
+id      = "b321f8eeccf0422694b87f719fa0d70c"
+
+# Run history (Task #17). Create with `wrangler kv namespace create RUNS
+# --env production` and paste the printed id below. See DEPLOY.md §2.2.
+[[env.production.kv_namespaces]]
+binding = "RUNS"
+id      = "0000000000000000000000000000abcd"
+
+[[env.production.services]]
+binding = "SANDBOX"
+service = "algosize-sandbox"
+
+# ----------------------------------------------------------------------------
+# Staging overrides (used by `wrangler deploy --env staging`). Task #23.
+# Lives at https://staging.algosize.com so risky changes (real analyzer
+# integrations, schema migrations, Stripe webhook event additions) can be
+# exercised end-to-end against Stripe TEST mode before they hit prod.
+# Bound to its own KV namespaces, its own sandbox sibling Worker, its own
+# Stripe test-mode secrets, and its own Sentry project (operationally — the
+# DSN is just a different secret value). See DEPLOY.md §7.
+# ----------------------------------------------------------------------------
+[env.staging]
+name   = "algosize-staging"
+routes = [
+  { pattern = "staging.algosize.com/api/*", zone_name = "algosize.com" },
+]
+
+[env.staging.vars]
+# Staging site origin: matches the hostname users load the staging site from.
+# Drives CORS allow-list, cookie Domain attribute, and Stripe redirect URLs.
+SITE_ORIGIN = "https://staging.algosize.com"
+COOKIE_NAME = "algosize_session"
+
+# KV namespace IDs are placeholders. Create the real ones with:
+#   wrangler kv namespace create SESSIONS --env staging
+#   wrangler kv namespace create USERS    --env staging
+#   wrangler kv namespace create RUNS     --env staging
+# then paste each printed id below. See DEPLOY.md §7.1.
+[[env.staging.kv_namespaces]]
+binding = "SESSIONS"
+id      = "0000000000000000000000000000stg1"
+
+[[env.staging.kv_namespaces]]
+binding = "USERS"
+id      = "0000000000000000000000000000stg2"
+
+[[env.staging.kv_namespaces]]
+binding = "RUNS"
+id      = "0000000000000000000000000000stg3"
+
+# Separate sandbox sibling Worker so a bad sandbox deploy can be tested in
+# staging without touching prod isolates. Defined in
+# `worker-sandbox/wrangler.toml` under its own `[env.staging]` block.
+[[env.staging.services]]
+binding = "SANDBOX"
+service = "algosize-sandbox-staging"
+
+# ----------------------------------------------------------------------------
+# Required SECRETS — never declared in this file.
+# ----------------------------------------------------------------------------
+#   JWT_SECRET             32+ random bytes; HMAC-SHA-256 key for sessions
 #   STRIPE_SECRET_KEY      Stripe API key (sk_test_... / sk_live_...)
 #   STRIPE_WEBHOOK_SECRET  Endpoint secret for /api/stripe/webhook
 #   STRIPE_PRICE_ID        Price ID for the monthly subscription plan
+#   OPENAI_API_KEY         OpenAI API key for the algorithm optimizer's LLM
+#                          refactor suggestions (Task #16). When unset the
+#                          analyzer still returns timing + Big-O — the
+#                          suggestion section just shows a "set OPENAI_API_KEY
+#                          to enable AI suggestions" notice.
 #
 # Local dev: put these in `worker/.dev.vars` (gitignored). See
 # `worker/.dev.vars.example` for the template.
 #
 # Production: set them with:
-#   cd worker && wrangler secret put JWT_SECRET
-#   cd worker && wrangler secret put STRIPE_SECRET_KEY
-#   cd worker && wrangler secret put STRIPE_WEBHOOK_SECRET
-#   cd worker && wrangler secret put STRIPE_PRICE_ID
+#   cd worker && wrangler secret put JWT_SECRET             --env production
+#   cd worker && wrangler secret put STRIPE_SECRET_KEY      --env production
+#   cd worker && wrangler secret put STRIPE_WEBHOOK_SECRET  --env production
+#   cd worker && wrangler secret put STRIPE_PRICE_ID        --env production
+#   cd worker && wrangler secret put OPENAI_API_KEY         --env production
 #
-# The worker will fail fast at the first request if JWT_SECRET is missing.
+# Staging: same names, different values (Stripe TEST mode keys, separate
+# Sentry project DSN, etc.). Set them with `--env staging`:
+#   cd worker && wrangler secret put JWT_SECRET             --env staging
+#   cd worker && wrangler secret put STRIPE_SECRET_KEY      --env staging   # sk_test_…
+#   cd worker && wrangler secret put STRIPE_WEBHOOK_SECRET  --env staging   # whsec_… from staging endpoint
+#   cd worker && wrangler secret put STRIPE_PRICE_ID        --env staging   # price_… from test mode
+#   cd worker && wrangler secret put OPENAI_API_KEY         --env staging   # optional
+#   cd worker && wrangler secret put SENTRY_DSN             --env staging   # optional, separate project
+#   cd worker && wrangler secret put RELEASE_TAG            --env staging
 
 [dev]
 port = 8787
