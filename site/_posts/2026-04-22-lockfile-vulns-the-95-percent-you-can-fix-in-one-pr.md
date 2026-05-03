@@ -4,7 +4,7 @@ date: 2026-04-22 08:30:00 -0400
 description: "Most CVEs in your npm or pnpm audit are patch-version bumps with no breaking changes. Here's how to clear the backlog in a single, safe pull request — and why the remaining 5% deserves a different process entirely."
 author: Algosize Engineering
 tags: [security, vuln-scanning, ci]
-image: /assets/img/blog/lockfile-vulns.svg
+image: /assets/img/blog/lockfile-vulns.png
 primary_keyword: "lockfile vulnerabilities"
 ---
 

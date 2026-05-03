@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "sfasbXe4jM6gThog4Gh6j"
+uri = "file://site/assets/img/blog/aws-savings-plan-gaps.png"
+type = "image"
+title = "Rasterized OG card preview"

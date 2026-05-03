@@ -4,7 +4,7 @@ date: 2026-05-01 09:00:00 -0400
 description: "Most slow code in production isn't slow because the algorithm is wrong. It's slow because every iteration is allocating, and the allocator (and the GC behind it) is doing the work nobody profiled. Here's how to spot the cliff."
 author: Algosize Engineering
 tags: [performance, profiling, gc]
-image: /assets/img/blog/big-o-allocation.svg
+image: /assets/img/blog/big-o-allocation.png
 primary_keyword: "memory allocation performance"
 ---
 

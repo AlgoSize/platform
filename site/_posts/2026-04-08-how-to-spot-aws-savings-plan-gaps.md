@@ -4,7 +4,7 @@ date: 2026-04-08 09:00:00 -0400
 description: "AWS Savings Plans look great in the dashboard until you read them line by line. Here's the four-gap checklist we run on every Cost &amp; Usage Report — and how to fix each one before next month's invoice."
 author: Algosize Engineering
 tags: [cloud-cost, aws, finops]
-image: /assets/img/blog/aws-savings-plan-gaps.svg
+image: /assets/img/blog/aws-savings-plan-gaps.png
 primary_keyword: "AWS Savings Plan coverage"
 ---
 
