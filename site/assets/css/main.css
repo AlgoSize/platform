@@ -1348,6 +1348,9 @@ code, .mono {
   flex-wrap: wrap;
   gap: var(--s-2);
 }
+/* Belt-and-braces: a stale base `ul li { list-style: disc }` from any
+   future framework / reset can't bullet our share row. */
+.post-share-list > li { list-style: none; margin: 0; padding: 0; }
 .post-share-link {
   display: inline-flex;
   align-items: center;
@@ -1362,6 +1365,10 @@ code, .mono {
   line-height: 1.2;
   text-decoration: none;
   cursor: pointer;
+  /* Strip native button chrome on the Copy-link button so it visually
+     matches the three <a> share pills next to it. */
+  -webkit-appearance: none;
+  appearance: none;
   transition: color .12s ease, border-color .12s ease, background .12s ease, box-shadow .12s ease;
 }
 .post-share-link:hover,
