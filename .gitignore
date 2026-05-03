@@ -1,5 +1,6 @@
 # Jekyll
 site/_site/
+site/_site_*/
 site/.jekyll-cache/
 site/.jekyll-metadata
 site/vendor/
