@@ -279,14 +279,33 @@ runs are safe — every statement uses `IF NOT EXISTS`.
 If this is a brand-new deploy with zero users yet, **skip this step**.
 Otherwise, dump the old KV records to a SQL file and apply it:
 
+First, find the namespace IDs for the OLD `USERS` and `RUNS` KV
+namespaces — the migration script reads from KV directly, and Task #25
+already removed the `RUNS` binding from `wrangler.toml`, so we hand it
+the raw namespace id instead:
+
 ```bash
 cd worker
-node scripts/migrate-kv-to-d1.mjs --env production
+./node_modules/.bin/wrangler kv namespace list
+# Find the rows whose `title` contains `algosize-USERS-production` and
+# `algosize-RUNS-production`. Copy each `id`.
+```
+
+Then dump the records to a SQL file and apply:
+
+```bash
+node scripts/migrate-kv-to-d1.mjs \
+  --env production \
+  --users-namespace-id <USERS-id from above> \
+  --runs-namespace-id  <RUNS-id from above>
 # wrote migrate-kv-to-d1.sql: N users, M runs
 
 ./node_modules/.bin/wrangler d1 execute algosize \
   --file=migrate-kv-to-d1.sql --env production --remote
 ```
+
+If you never deployed Task #17 (no RUNS data exists), pass
+`--skip-runs` instead of `--runs-namespace-id`.
 
 The script uses `INSERT OR IGNORE` keyed on the primary key, so re-
 running is safe — duplicates become no-ops. The KV `email:`/`cust:`

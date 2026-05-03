@@ -21,7 +21,7 @@ import { issueJWT } from "../src/auth.js";
 const FAKE_AWS_KEY     = "AKIA" + "IOSFODNN7" + "EXAMPLE";
 const FAKE_GH_PAT      = "ghp_" + "abcdefghijklmnopqrstuvwxyz" + "0123456789";
 const FAKE_STRIPE_KEY  = "sk_" + "live_" + "abcdef0123456789ABCDEFGH";
-const FAKE_SLACK_TOKEN = "process.env.SLACK_TOKEN" + "1234567890-1234567890-" + "abcdef1234567890ABCDEFGH";
+const FAKE_SLACK_TOKEN = "xo" + "xb-" + "1234567890-1234567890-" + "abcdef1234567890ABCDEFGH";
 
 import { makeD1 } from "./_d1-stub.mjs";
 
