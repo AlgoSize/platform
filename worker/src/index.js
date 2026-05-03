@@ -21,6 +21,7 @@ import { meHandler } from "./handlers/me.js";
 import { listRunsHandler, getRunHandler } from "./handlers/runs.js";
 import { billingPortalHandler } from "./handlers/billing.js";
 import { signupHandler } from "./handlers/signup.js";
+import { pageviewPixelHandler } from "./handlers/pageview.js";
 import { enforceQuota } from "./quota.js";
 import { makeRateLimit } from "./middleware/rate-limit.js";
 import { captureException } from "./observability.js";
@@ -81,6 +82,13 @@ router.get( "/api/runs/:id",        requireAuth, getRunHandler);
 
 // ---- Stripe Customer Portal (Task #18) — manage card / cancel / invoices --
 router.post("/api/billing/portal",  requireAuth, billingPortalHandler);
+
+// ---- Analytics noscript pixel (Task #26) ----------------------------------
+// Forwards a GET <img> request to Plausible's POST events API so visitors
+// with JavaScript disabled still get a pageview count. No auth, no cookies,
+// fire-and-forget. Rate-limited per IP so it can't be abused as a relay.
+const pageviewRateLimit = makeRateLimit({ keyName: "pageview", limit: 60, windowSec: 60 });
+router.get( "/api/pageview",        pageviewRateLimit, pageviewPixelHandler);
 
 // ---- 404 fallthrough -------------------------------------------------------
 router.all("*", (request) => {

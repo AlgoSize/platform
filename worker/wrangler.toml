@@ -52,6 +52,12 @@ service = "algosize-sandbox"
 [vars]
 SITE_ORIGIN = "http://localhost:5000"
 COOKIE_NAME = "algosize_session"
+# Analytics noscript-pixel forwarder (Task #26). The Worker accepts a GET
+# at /api/pageview from <noscript><img> and POSTs server-side to Plausible.
+# Override PLAUSIBLE_ENDPOINT for self-hosted; ANALYTICS_DOMAIN must match
+# the site's _config.production.yml `analytics.domain`.
+ANALYTICS_DOMAIN  = "algosize.com"
+PLAUSIBLE_ENDPOINT = "https://plausible.io"
 
 # ----------------------------------------------------------------------------
 # Production overrides (used by `wrangler deploy --env production`).
@@ -69,6 +75,8 @@ name = "algosize"
 # See DEPLOY.md §2.4. Override here if you ship under www. or a different host.
 SITE_ORIGIN = "https://algosize.com"
 COOKIE_NAME = "algosize_session"
+ANALYTICS_DOMAIN  = "algosize.com"
+PLAUSIBLE_ENDPOINT = "https://plausible.io"
 
 [[env.production.kv_namespaces]]
 binding = "SESSIONS"
@@ -110,6 +118,8 @@ routes = [
 # Drives CORS allow-list, cookie Domain attribute, and Stripe redirect URLs.
 SITE_ORIGIN = "https://staging.algosize.com"
 COOKIE_NAME = "algosize_session"
+ANALYTICS_DOMAIN  = "staging.algosize.com"
+PLAUSIBLE_ENDPOINT = "https://plausible.io"
 
 # KV namespace IDs are placeholders. Create the real ones with:
 #   wrangler kv namespace create SESSIONS --env staging

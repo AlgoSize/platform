@@ -64,14 +64,15 @@
 
     {%- if site.analytics.enabled -%}
     {%- comment -%}
-    JS-disabled fallback. Plausible's hosted API is POST-only so this
-    pixel is best-effort: if Plausible never adds a GET endpoint the
-    request 404s harmlessly. Including it costs us nothing and lets
-    a self-hosted Plausible (or a future hosted feature) get a free
-    pageview from no-JS visitors.
+    JS-disabled fallback. Plausible's events API is POST-only, so a
+    direct <img src="…plausible.io…"> would 404. Instead the pixel
+    points at our own Worker route /api/pageview, which forwards
+    server-side to Plausible (see worker/src/handlers/pageview.js).
+    Same-origin, GET-friendly, blocker-friendly, and JS-disabled
+    visitors are actually counted.
     {%- endcomment -%}
     <noscript>
-      <img src="https://plausible.io/api/event/pixel?n=pageview&d={{ site.analytics.domain | uri_escape }}&u={{ page.url | absolute_url | uri_escape }}"
+      <img src="/api/pageview?d={{ site.analytics.domain | uri_escape }}&u={{ page.url | absolute_url | uri_escape }}"
            alt="" width="1" height="1" style="position:absolute;left:-9999px" />
     </noscript>
     {%- endif -%}
