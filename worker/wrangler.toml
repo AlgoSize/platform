@@ -93,13 +93,13 @@ id      = "2a67b8b8fa4444f2b04b4ee7b98407dc"
 binding = "USERS"
 id      = "b321f8eeccf0422694b87f719fa0d70c"
 
-# D1 database for user records + run history (Task #25). Create with
-#   wrangler d1 create algosize
-# and paste the printed UUID below. See DEPLOY.md §2.5.
+# D1 database for user records + run history (Task #25). Created via
+# the Cloudflare D1 API on 2026-05-03; schema applied from
+# migrations/0001_init.sql against the same uuid. See DEPLOY.md §2.5.
 [[env.production.d1_databases]]
 binding       = "DB"
 database_name = "algosize"
-database_id   = "00000000-0000-0000-0000-000000000000"
+database_id   = "cfe388b1-8423-48ec-b1ec-358e3a8127d8"
 
 [[env.production.services]]
 binding = "SANDBOX"
