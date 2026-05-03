@@ -31,9 +31,8 @@ Conventions read from front matter:
     <header class="post-head">
       {%- if page.tags and page.tags.size > 0 -%}
       <div class="post-tags" aria-label="Post tags">
-        {%- for tag in page.tags -%}
-          <span class="post-tag mono">#{{ tag }}</span>
-        {%- endfor -%}
+        {% for tag in page.tags %}<span class="post-tag mono">#{{ tag }}</span>
+        {% endfor %}
       </div>
       {%- endif -%}
 
