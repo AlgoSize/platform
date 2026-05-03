@@ -1323,3 +1323,60 @@ code, .mono {
 .post-cta-title { font-size: var(--fs-xl); margin-bottom: var(--s-3); }
 .post-cta-body { color: var(--text-muted); margin-bottom: var(--s-5); max-width: 56ch; margin-left: auto; margin-right: auto; }
 .post-cta-actions { display: flex; flex-wrap: wrap; gap: var(--s-3); justify-content: center; }
+
+/* Share row (Task #52). Sits above .post-cta, matches the same brand
+   tokens (border, accent ring on focus/hover) so it reads as part of
+   the same end-of-post block without competing with the primary CTA. */
+.post-share {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-3);
+  margin-bottom: var(--s-5);
+}
+.post-share-label {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.post-share-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+.post-share-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 6px 12px;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--fs-sm);
+  line-height: 1.2;
+  text-decoration: none;
+  cursor: pointer;
+  transition: color .12s ease, border-color .12s ease, background .12s ease, box-shadow .12s ease;
+}
+.post-share-link:hover,
+.post-share-link:focus-visible {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-card));
+  outline: none;
+}
+.post-share-link:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.post-share-link svg { flex: 0 0 auto; }
+.post-share-copy.is-done {
+  color: var(--accent-2);
+  border-color: color-mix(in srgb, var(--accent-2) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent-2) 10%, var(--bg-card));
+}

@@ -112,6 +112,102 @@ Conventions read from front matter:
 
     <hr class="post-divider" />
 
+    {%- comment -%}
+    Share row (Task #52). Server-rendered links to LinkedIn, X, and
+    Hacker News + a copy-to-clipboard button. URLs are built from the
+    canonical post URL and title at build time so the share targets
+    work even if JavaScript fails. The single inline script only
+    powers the copy-link button (everything else is a plain <a>).
+    {%- endcomment -%}
+    {%- assign share_url = page.url | absolute_url -%}
+    {%- assign share_url_e = share_url | url_encode -%}
+    {%- assign share_title_e = page.title | url_encode -%}
+    <aside class="post-share" aria-label="Share this post">
+      <span class="post-share-label mono">Share</span>
+      <ul class="post-share-list">
+        <li>
+          <a class="post-share-link" target="_blank" rel="noopener noreferrer"
+             href="https://www.linkedin.com/sharing/share-offsite/?url={{ share_url_e }}"
+             data-share="linkedin">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+              <path fill="currentColor" d="M4.98 3.5a2.5 2.5 0 1 1 0 5.001 2.5 2.5 0 0 1 0-5.001zM3 9.75h4v11H3v-11zM10 9.75h3.84v1.5h.05c.54-.95 1.86-1.95 3.83-1.95 4.1 0 4.86 2.7 4.86 6.21v5.24h-4v-4.65c0-1.11-.02-2.54-1.55-2.54-1.55 0-1.79 1.21-1.79 2.46v4.73h-4v-11z"/>
+            </svg>
+            <span>LinkedIn</span>
+          </a>
+        </li>
+        <li>
+          <a class="post-share-link" target="_blank" rel="noopener noreferrer"
+             href="https://twitter.com/intent/tweet?text={{ share_title_e }}&amp;url={{ share_url_e }}"
+             data-share="x">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+              <path fill="currentColor" d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231 5.45-6.231Zm-1.161 17.52h1.833L7.084 4.126H5.117L17.083 19.77Z"/>
+            </svg>
+            <span>X</span>
+          </a>
+        </li>
+        <li>
+          <a class="post-share-link" target="_blank" rel="noopener noreferrer"
+             href="https://news.ycombinator.com/submitlink?u={{ share_url_e }}&amp;t={{ share_title_e }}"
+             data-share="hn">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+              <path fill="currentColor" d="M3 3h18v18H3V3Zm6.4 4 2.6 4.6L14.6 7H17l-4 7v3h-2v-3L7 7h2.4Z"/>
+            </svg>
+            <span>Hacker News</span>
+          </a>
+        </li>
+        <li>
+          <button type="button" class="post-share-link post-share-copy"
+                  data-share="copy" data-share-url="{{ share_url }}"
+                  aria-label="Copy link to this post">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+              <path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+                    d="M9 13a4.5 4.5 0 0 0 6.36 0l3-3a4.5 4.5 0 0 0-6.36-6.36l-1.5 1.5M15 11a4.5 4.5 0 0 0-6.36 0l-3 3a4.5 4.5 0 0 0 6.36 6.36l1.5-1.5"/>
+            </svg>
+            <span class="post-share-copy-default">Copy link</span>
+            <span class="post-share-copy-done" hidden>Copied</span>
+          </button>
+        </li>
+      </ul>
+    </aside>
+    <script>
+      (function () {
+        var btn = document.querySelector(".post-share-copy");
+        if (!btn) return;
+        btn.addEventListener("click", function () {
+          var url = btn.getAttribute("data-share-url") || location.href;
+          var done = btn.querySelector(".post-share-copy-done");
+          var def  = btn.querySelector(".post-share-copy-default");
+          var flash = function () {
+            if (!done || !def) return;
+            def.hidden = true;
+            done.hidden = false;
+            btn.classList.add("is-done");
+            setTimeout(function () {
+              def.hidden = false;
+              done.hidden = true;
+              btn.classList.remove("is-done");
+            }, 1600);
+          };
+          if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(url).then(flash, function () { fallback(url, flash); });
+          } else {
+            fallback(url, flash);
+          }
+        });
+        function fallback(text, cb) {
+          var ta = document.createElement("textarea");
+          ta.value = text;
+          ta.setAttribute("readonly", "");
+          ta.style.position = "absolute";
+          ta.style.left = "-9999px";
+          document.body.appendChild(ta);
+          ta.select();
+          try { document.execCommand("copy"); cb(); } catch (e) {}
+          document.body.removeChild(ta);
+        }
+      })();
+    </script>
+
     <aside class="post-cta" aria-label="Try Algosize">
       <h2 class="post-cta-title">Stop reading. Start optimizing.</h2>
       <p class="post-cta-body">
