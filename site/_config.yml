@@ -16,6 +16,28 @@ permalink: /:path/
 plugins:
   - jekyll-feed
 
+# Blog defaults (Task #27). Posts under site/_posts/*.md inherit the
+# post layout and live at /blog/<slug>/. The post layout reads
+# `author` and `tags` from each post's front matter; the defaults
+# below let posts omit them when they want the house defaults.
+defaults:
+  - scope:
+      path: ""
+      type: posts
+    values:
+      layout: post
+      permalink: /blog/:slug/
+
+# jekyll-feed customisation: feed lives at /feed.xml (default), title is
+# overridden so RSS readers show "Algosize — Engineering blog" instead
+# of just the site title.
+feed:
+  path: feed.xml
+
+author:
+  name: Algosize Engineering
+  email: hello@algosize.com
+
 exclude:
   - Gemfile
   - Gemfile.lock

@@ -8,10 +8,21 @@
     {%- if page.title -%}{%- assign full_title = page_title | append: " — " | append: site.title -%}{%- endif -%}
     {%- assign page_description = page.description | default: site.description -%}
     {%- assign page_url = page.url | default: "/" | absolute_url -%}
-    {%- assign og_image = "/og-image.png" | absolute_url -%}
+    {%- comment -%}
+    Per-page OG image override (Task #27): a post can set `image:` in
+    front matter to give its OG/Twitter card a custom hero. Falls back
+    to the site-wide /og-image.png so non-post pages keep the brand card.
+    {%- endcomment -%}
+    {%- if page.image -%}
+      {%- assign og_image = page.image | absolute_url -%}
+    {%- else -%}
+      {%- assign og_image = "/og-image.png" | absolute_url -%}
+    {%- endif -%}
     <title>{{ full_title }}</title>
     <meta name="description" content="{{ page_description }}" />
+    <link rel="canonical" href="{{ page_url }}" />
     <link rel="stylesheet" href="{{ '/assets/css/main.css' | relative_url }}" />
+    <link rel="alternate" type="application/rss+xml" title="{{ site.title }} — Engineering blog" href="{{ '/feed.xml' | absolute_url }}" />
 
     <!-- Favicons / app icons. Sourced from /assets/img/brand-mark.svg ([as] mark). -->
     <link rel="icon" type="image/svg+xml" href="{{ '/favicon.svg' | relative_url }}" />

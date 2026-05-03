@@ -1,0 +1,20 @@
+{%- comment -%}
+Shared marketing-site nav. Used by index.html, blog.html, and the
+post layout. The dashboard ships its own nav (dash-nav) because it
+has signed-in-only widgets (quota pill, billing button) that don't
+belong on the public pages.
+{%- endcomment -%}
+<header class="nav">
+  <div class="nav-inner">
+    <a href="/" class="brand">
+      <span class="brand-mark" aria-hidden="true">[as]</span>
+      <span class="brand-word">Algosize</span>
+    </a>
+    <nav class="nav-links" aria-label="Primary">
+      <a href="/#features">Features</a>
+      <a href="/#pricing">Pricing</a>
+      <a href="/blog/">Blog</a>
+      <a href="/dashboard/">Dashboard</a>
+    </nav>
+  </div>
+</header>

@@ -1,0 +1,161 @@
+---
+layout: default
+---
+{%- comment -%}
+Long-form blog post layout (Task #27). Inherits OG/Twitter meta from
+default.html (which honours `image:` in post front matter).
+
+Conventions read from front matter:
+  title:       (required)        H1 + <title>
+  description: (required for SEO) used as <meta description> + RSS excerpt
+  date:        (required)        ISO date; rendered as "May 03, 2026"
+  author:      string             defaults to site.author.name
+  tags:        list[string]
+  image:       /assets/img/blog/<file>.svg  hero + OG card
+  primary_keyword: optional       single-line phrase the post is targeting
+  reading_time: number (minutes)  shown in the byline; auto-estimated if omitted
+{%- endcomment -%}
+
+{%- assign byline_author = page.author | default: site.author.name -%}
+{%- assign reading_time = page.reading_time -%}
+{%- if reading_time == nil -%}
+  {%- assign word_count = content | strip_html | number_of_words -%}
+  {%- assign reading_time = word_count | divided_by: 220 | plus: 1 -%}
+{%- endif -%}
+
+{% include nav.html %}
+
+<article class="post">
+  <div class="container container-narrow">
+
+    <header class="post-head">
+      {%- if page.tags and page.tags.size > 0 -%}
+      <div class="post-tags" aria-label="Post tags">
+        {%- for tag in page.tags -%}
+          <span class="post-tag mono">#{{ tag }}</span>
+        {%- endfor -%}
+      </div>
+      {%- endif -%}
+
+      <h1 class="post-title">{{ page.title }}</h1>
+
+      {%- if page.description -%}
+        <p class="post-lede">{{ page.description }}</p>
+      {%- endif -%}
+
+      <div class="post-byline">
+        <span class="post-byline-author">{{ byline_author }}</span>
+        <span class="post-byline-sep" aria-hidden="true">·</span>
+        <time datetime="{{ page.date | date_to_xmlschema }}">{{ page.date | date: "%B %-d, %Y" }}</time>
+        <span class="post-byline-sep" aria-hidden="true">·</span>
+        <span class="post-byline-time">{{ reading_time }} min read</span>
+      </div>
+    </header>
+
+    {%- if page.image -%}
+    <figure class="post-hero" aria-hidden="true">
+      <img src="{{ page.image | relative_url }}"
+           alt=""
+           width="1200" height="630"
+           loading="eager" decoding="async" />
+    </figure>
+    {%- endif -%}
+
+    {%- comment -%}
+    Table of contents (Task #27). Rendered client-side from the H2s
+    and H3s inside .post-prose so we don't need the jekyll-toc plugin
+    on top of jekyll-feed. Kramdown's `auto_ids` (default ON) gives
+    every heading a stable id; the script below reads those ids and
+    builds the list. The card is hidden by default and only shown
+    once we have at least three entries, so short posts don't get an
+    awkward sparse TOC.
+    {%- endcomment -%}
+    <aside class="post-toc" id="post-toc" aria-label="Table of contents" hidden>
+      <h2 class="post-toc-title">In this post</h2>
+      <ul id="post-toc-list"></ul>
+    </aside>
+
+    <div class="post-prose" id="post-prose">
+      {{ content }}
+    </div>
+
+    <script>
+      (function () {
+        var prose = document.getElementById("post-prose");
+        var toc   = document.getElementById("post-toc");
+        var list  = document.getElementById("post-toc-list");
+        if (!prose || !toc || !list) return;
+        var headings = prose.querySelectorAll("h2[id], h3[id]");
+        if (headings.length < 3) return;
+        var sub = null;
+        headings.forEach(function (h) {
+          var li = document.createElement("li");
+          var a  = document.createElement("a");
+          a.href = "#" + h.id;
+          a.textContent = h.textContent;
+          li.appendChild(a);
+          if (h.tagName === "H2") {
+            list.appendChild(li);
+            sub = null;
+          } else {
+            if (!sub) {
+              var lastTop = list.lastElementChild;
+              if (!lastTop) { list.appendChild(li); return; }
+              sub = document.createElement("ul");
+              lastTop.appendChild(sub);
+            }
+            sub.appendChild(li);
+          }
+        });
+        toc.hidden = false;
+      })();
+    </script>
+
+    <hr class="post-divider" />
+
+    <aside class="post-cta" aria-label="Try Algosize">
+      <h2 class="post-cta-title">Stop reading. Start optimizing.</h2>
+      <p class="post-cta-body">
+        Algosize is one tool for the three bills engineering teams keep paying:
+        wasted cloud, undiscovered vulnerabilities, and slow code that ships
+        anyway. Five free runs a month, no credit card to browse.
+      </p>
+      <p class="post-cta-actions">
+        <a href="/#pricing" class="btn btn-primary" data-cta="post-footer">
+          See pricing →
+        </a>
+        <a href="/dashboard/" class="btn btn-ghost">Open the dashboard</a>
+      </p>
+    </aside>
+
+  </div>
+</article>
+
+{%- comment -%}
+JSON-LD BlogPosting markup (Task #27). Helps Google understand the
+post is an article, who wrote it, and when it was published, which
+is the difference between a generic web result and a "rich result"
+in search. Stays in the post layout (not default.html) so non-post
+pages don't accidentally claim to be articles.
+{%- endcomment -%}
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "mainEntityOfPage": { "@type": "WebPage", "@id": "{{ page.url | absolute_url }}" },
+  "headline": {{ page.title | jsonify }},
+  "description": {{ page.description | default: site.description | jsonify }},
+  "datePublished": "{{ page.date | date_to_xmlschema }}",
+  "dateModified": "{{ page.last_modified_at | default: page.date | date_to_xmlschema }}",
+  "author":    { "@type": "Organization", "name": {{ byline_author | jsonify }} },
+  "publisher": {
+    "@type": "Organization",
+    "name": {{ site.title | jsonify }},
+    "logo": { "@type": "ImageObject", "url": "{{ '/apple-touch-icon.png' | absolute_url }}" }
+  }{%- if page.image -%},
+  "image": "{{ page.image | absolute_url }}"
+  {%- endif -%}
+}
+</script>
+
+{% include footer.html %}
