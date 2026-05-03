@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Algosize typographic brand mark: [as]
+  Square (64×64) format used as the master source for:
+   - /favicon.svg
+   - /apple-touch-icon.png (180×180)
+   - /og-image.png (1200×630, composed with the wordmark + tagline)
+  Colors mirror the site's design tokens (see assets/css/main.css):
+   --bg #0a0d14, --text #f1f3f6, --accent #5eead4
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Algosize">
+  <title>Algosize</title>
+  <rect width="64" height="64" rx="12" ry="12" fill="#0a0d14"/>
+  <g font-family="ui-monospace, 'JetBrains Mono', 'DejaVu Sans Mono', Menlo, Consolas, monospace"
+     font-weight="800"
+     font-size="26"
+     text-anchor="middle"
+     dominant-baseline="central">
+    <!-- Brackets in accent teal, letters in light text — echoes the typographic mark in the nav. -->
+    <text x="14" y="34" fill="#5eead4">[</text>
+    <text x="32" y="34" fill="#f1f3f6">as</text>
+    <text x="50" y="34" fill="#5eead4">]</text>
+  </g>
+</svg>

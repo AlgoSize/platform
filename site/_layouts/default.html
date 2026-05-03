@@ -34,9 +34,48 @@
     <meta name="twitter:description" content="{{ page_description }}" />
     <meta name="twitter:image" content="{{ og_image }}" />
     <meta name="twitter:image:alt" content="Algosize — [as] brand mark with the tagline ‘Cut cloud waste. Catch vulnerabilities early. Optimize your algorithms.’" />
+
+    {%- comment -%}
+    Privacy-respecting analytics (Task #26). Plausible is cookieless,
+    GDPR-friendly, and needs no consent banner. Loaded ONLY in
+    production (the prod build merges _config.production.yml which
+    flips analytics.enabled to true) so local development and CI
+    previews don't pollute the funnel.
+
+    The `tagged-events` build extends the standard tracker so any
+    element with class `plausible-event-name=…` auto-fires a custom
+    event on click — see assets/js/analytics.js for our wrapper.
+    {%- endcomment -%}
+    {%- if site.analytics.enabled -%}
+    <script defer
+            data-domain="{{ site.analytics.domain }}"
+            src="{{ site.analytics.src }}"></script>
+    <script>
+      // Queue stub so events fired before the async Plausible script
+      // loads aren't dropped — Plausible's recommended pattern.
+      window.plausible = window.plausible || function () {
+        (window.plausible.q = window.plausible.q || []).push(arguments);
+      };
+    </script>
+    {%- endif -%}
   </head>
   <body>
     {{ content }}
+
+    {%- if site.analytics.enabled -%}
+    {%- comment -%}
+    JS-disabled fallback. Plausible's hosted API is POST-only so this
+    pixel is best-effort: if Plausible never adds a GET endpoint the
+    request 404s harmlessly. Including it costs us nothing and lets
+    a self-hosted Plausible (or a future hosted feature) get a free
+    pageview from no-JS visitors.
+    {%- endcomment -%}
+    <noscript>
+      <img src="https://plausible.io/api/event/pixel?n=pageview&d={{ site.analytics.domain | uri_escape }}&u={{ page.url | absolute_url | uri_escape }}"
+           alt="" width="1" height="1" style="position:absolute;left:-9999px" />
+    </noscript>
+    {%- endif -%}
+
     <script>
       // API base for the Worker. Empty in production (same origin via
       // Cloudflare route algosize.com/api/*); set to the wrangler dev URL
@@ -44,5 +83,6 @@
       window.ALGOSIZE_API_BASE = {{ site.api_base | default: "" | jsonify }};
     </script>
     <script src="{{ '/assets/js/checkout.js' | relative_url }}" defer></script>
+    <script src="{{ '/assets/js/analytics.js' | relative_url }}" defer></script>
   </body>
 </html>

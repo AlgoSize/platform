@@ -11,3 +11,18 @@
 # same domain that served the page (no CORS preflight, no cross-origin cookie
 # headache).
 api_base: ""
+
+# Privacy-respecting analytics (Task #26). Plausible is cookieless and GDPR-
+# compliant, so no cookie banner is needed. The `domain` MUST match the value
+# configured on the Plausible side (plausible.io/sites or self-hosted) — the
+# script ignores events from any other domain. Local dev (`jekyll serve`)
+# does NOT load this file, so analytics stays off in development.
+#
+# To switch off analytics (e.g. during an incident) without redeploying:
+#   leave `enabled: false` here and re-merge.
+analytics:
+  enabled: true
+  provider: plausible
+  domain: algosize.com
+  # Plausible's hosted endpoint. Override to a self-hosted host if needed.
+  src: "https://plausible.io/js/script.tagged-events.js"
