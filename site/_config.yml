@@ -9,7 +9,7 @@ baseurl: ""
 # This value is the LOCAL DEV default. The CI build for GitHub Pages overrides
 # it via `_config.production.yml` (api_base: "") so production renders use
 # same-origin URLs (the Worker is mapped to algosize.com/api/*).
-api_base: "http://127.0.0.1:8787"
+api_base: ""
 
 permalink: /:path/
 
