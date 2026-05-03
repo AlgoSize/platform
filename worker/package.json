@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "test": "node scripts/test-auth.mjs && node scripts/test-stripe.mjs && node scripts/test-cost.mjs && node scripts/test-vuln.mjs && node scripts/test-algo.mjs && node scripts/test-logout.mjs && node scripts/test-me.mjs && node scripts/test-history.mjs && node scripts/test-billing-portal.mjs && node scripts/test-quota.mjs && node scripts/test-webhook-idempotency.mjs && node scripts/test-rate-limit.mjs && node scripts/test-observability.mjs && node scripts/test-observability-handlers.mjs && node scripts/test-pageview.mjs && node scripts/test-email.mjs"
+    "test": "node scripts/test-auth.mjs && node scripts/test-stripe.mjs && node scripts/test-cost.mjs && node scripts/test-vuln.mjs && node scripts/test-algo.mjs && node scripts/test-logout.mjs && node scripts/test-me.mjs && node scripts/test-history.mjs && node scripts/test-billing-portal.mjs && node scripts/test-quota.mjs && node scripts/test-quota-email.mjs && node scripts/test-webhook-idempotency.mjs && node scripts/test-rate-limit.mjs && node scripts/test-observability.mjs && node scripts/test-observability-handlers.mjs && node scripts/test-pageview.mjs && node scripts/test-email.mjs"
   },
   "dependencies": {
     "acorn": "^8.14.0",

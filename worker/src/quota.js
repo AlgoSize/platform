@@ -20,7 +20,15 @@
 const FREE_MONTHLY_LIMIT = 5;
 const QUOTA_TTL_SECONDS  = 60 * 60 * 24 * 35;  // 35 days — see comment above
 
+// Send the "1 free run left" warning email exactly once per user per month
+// when their counter crosses to (limit - 1) — i.e. they have 1 run remaining.
+// Threshold is expressed as a count, not a percentage, so the email copy in
+// templates.js ("you have 1 run left") stays accurate as the limit changes.
+const QUOTA_WARN_AT_RUNS = FREE_MONTHLY_LIMIT - 1;
+
 import { getUserById } from "./handlers/_users.js";
+import { sendTransactional as defaultSendTransactional } from "./email/transactional.js";
+import { quotaWarning } from "./email/templates.js";
 
 // ---------------------------------------------------------------------------
 // Pure helpers — no KV access. Exported for tests.
@@ -37,7 +45,25 @@ export function quotaKey(userId, now = new Date()) {
   return `quota:${userId}:${currentMonthKey(now)}`;
 }
 
-export { FREE_MONTHLY_LIMIT, QUOTA_TTL_SECONDS };
+export { FREE_MONTHLY_LIMIT, QUOTA_TTL_SECONDS, QUOTA_WARN_AT_RUNS };
+
+/** KV key marking that a user has been warned for the current month. */
+export function quotaWarnedKey(userId, now = new Date()) {
+  return `${quotaKey(userId, now)}:warned`;
+}
+
+/**
+ * Format the first-of-next-month in human-readable UTC ("June 1, 2026") for
+ * the `resetsOn` line in the warning email. Pure: no Intl side-effects.
+ */
+function nextMonthFirstHuman(now) {
+  const y = now.getUTCFullYear();
+  const m = now.getUTCMonth();
+  const next = new Date(Date.UTC(m === 11 ? y + 1 : y, (m + 1) % 12, 1));
+  return next.toLocaleDateString("en-US", {
+    month: "long", day: "numeric", year: "numeric", timeZone: "UTC",
+  });
+}
 
 // ---------------------------------------------------------------------------
 // KV read/write
@@ -66,6 +92,60 @@ export async function incrementMonthlyUsage(env, userId, now = new Date()) {
   const next = (await getMonthlyUsage(env, userId, now)) + 1;
   await env.USERS.put(key, String(next), { expirationTtl: QUOTA_TTL_SECONDS });
   return next;
+}
+
+// ---------------------------------------------------------------------------
+// "1 run left" warning email (Task #57).
+// ---------------------------------------------------------------------------
+
+/**
+ * Send the quotaWarning email exactly once per user per month, idempotently.
+ *
+ * Trigger: caller invokes this AFTER the post-increment count is known. We
+ * fire iff `runsUsed === QUOTA_WARN_AT_RUNS` (4 of 5 used, 1 left), the user
+ * has an email, and the per-month sentinel KV key is not yet present.
+ *
+ * Idempotency strategy: claim the sentinel BEFORE attempting the send. KV
+ * has no atomic SETNX, but the worst race here is two requests landing in
+ * the same millisecond and both passing the `if (already)` check — the
+ * second one's `put` is a no-op rewrite. We accept that one losing-race
+ * caller might still try to send (ctx.waitUntil is parallel), so we
+ * intentionally accept "at most one duplicate email per month per user
+ * under contention" rather than "the email might never be retried" if the
+ * provider transiently fails. The increment-to-4 boundary is hit exactly
+ * once in normal use, so the sentinel-then-send order is the safer trade.
+ *
+ * `sendFn` is overridable for tests (default: real Workspace sender).
+ *
+ * Never throws — all failures are funnelled through `sendTransactional`'s
+ * own captureException pipeline. Returns the same shape sendTransactional
+ * returns, plus our own gating reasons (`not_threshold`, `already_warned`,
+ * `no_user`) so callers/tests can assert without inspecting log output.
+ */
+export async function maybeSendQuotaWarning(env, ctx, user, runsUsed, now = new Date(), sendFn) {
+  if (!user || !user.email)              return { sent: false, reason: "no_user" };
+  if (runsUsed !== QUOTA_WARN_AT_RUNS)   return { sent: false, reason: "not_threshold" };
+
+  const sentinel = quotaWarnedKey(user.userId, now);
+  const already  = await env.USERS.get(sentinel);
+  if (already) return { sent: false, reason: "already_warned" };
+
+  // Claim the sentinel first so a second concurrent crossing in the same
+  // millisecond reads `already=1` and bails. 35d TTL auto-expires the
+  // claim before the next month so the trigger re-arms naturally — no
+  // cron sweep, no manual reset.
+  await env.USERS.put(sentinel, "1", { expirationTtl: QUOTA_TTL_SECONDS });
+
+  const send = sendFn || defaultSendTransactional;
+  return send(env, ctx, {
+    to: user.email,
+    ...quotaWarning({
+      email:     user.email,
+      runsUsed,
+      runsLimit: FREE_MONTHLY_LIMIT,
+      resetsOn:  nextMonthFirstHuman(now),
+    }),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -101,7 +181,7 @@ function jsonResponse(body, status = 200) {
  * `now` is injectable for tests that need to assert month-boundary
  * behavior without time-travelling the system clock.
  */
-export function enforceQuota(handler, { now } = {}) {
+export function enforceQuota(handler, { now, sendTransactional: sendTxOverride } = {}) {
   return async function quotaWrappedHandler(request, env, ctx) {
     const sessionUser = request.user || {};
     if (!sessionUser.userId) {
@@ -137,11 +217,19 @@ export function enforceQuota(handler, { now } = {}) {
 
     const response = await handler(request, env, ctx);
     if (response && response.status === 200) {
-      // Fire-and-forget increment. ctx.waitUntil keeps the worker alive
-      // until the KV write completes even though we've already returned
-      // the response. In single-Worker dev mode (no ctx) we still await
-      // so the test suite sees the new count.
-      const work = incrementMonthlyUsage(env, sessionUser.userId, ts);
+      // Fire-and-forget increment + (at the boundary) the warning email.
+      // Both must run AFTER the response flushes, but the email send must
+      // see the *post-increment* count, so they're chained inside one
+      // ctx.waitUntil promise. In single-Worker dev mode (no ctx) we
+      // still await so the test suite sees the new count and the spy.
+      const work = (async () => {
+        const next = await incrementMonthlyUsage(env, sessionUser.userId, ts);
+        // Skipped early when `next !== QUOTA_WARN_AT_RUNS`, so the typical
+        // run path costs zero extra KV ops.
+        if (next === QUOTA_WARN_AT_RUNS) {
+          await maybeSendQuotaWarning(env, ctx, user, next, ts, sendTxOverride);
+        }
+      })();
       if (ctx && typeof ctx.waitUntil === "function") {
         ctx.waitUntil(work);
       } else {
