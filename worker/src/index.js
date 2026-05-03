@@ -22,6 +22,7 @@ import { listRunsHandler, getRunHandler } from "./handlers/runs.js";
 import { billingPortalHandler } from "./handlers/billing.js";
 import { signupHandler } from "./handlers/signup.js";
 import { pageviewPixelHandler } from "./handlers/pageview.js";
+import { seedHandler } from "./handlers/_seed.js";
 import { enforceQuota } from "./quota.js";
 import { makeRateLimit } from "./middleware/rate-limit.js";
 import { captureException } from "./observability.js";
@@ -89,6 +90,13 @@ router.post("/api/billing/portal",  requireAuth, billingPortalHandler);
 // fire-and-forget. Rate-limited per IP so it can't be abused as a relay.
 const pageviewRateLimit = makeRateLimit({ keyName: "pageview", limit: 60, windowSec: 60 });
 router.get( "/api/pageview",        pageviewRateLimit, pageviewPixelHandler);
+
+// ---- Test-only seed endpoint (Task #13) -----------------------------------
+// Lets the Playwright e2e suite write a synthetic SESSIONS + USERS row pair
+// without going through Stripe. Gated by env.E2E_TEST_SECRET — when unset
+// (i.e. in production) the handler returns 404, making the route invisible
+// to anyone but the local test runner. See tests/e2e/global-setup.mjs.
+router.post("/api/_test/seed",      seedHandler);
 
 // ---- 404 fallthrough -------------------------------------------------------
 router.all("*", (request) => {

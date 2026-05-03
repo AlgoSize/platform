@@ -39,6 +39,24 @@ npx wrangler dev    # http://localhost:8787
 Copy `.env.example` to `.env` (for local notes — Cloudflare secrets are set
 via `wrangler secret put`, not env files).
 
+## Testing
+
+- **Manual smoke test** — `TESTING.md` is the human-driven happy-path
+  walkthrough (landing → checkout → dashboard → analyzers → logout).
+- **Automated end-to-end** — `tests/e2e/` is a Playwright suite that runs
+  the same happy path headlessly against `bundle exec jekyll serve` and
+  `wrangler dev` (both spawned by the test runner). Run it locally with:
+
+  ```bash
+  cd tests/e2e
+  npm install
+  npx playwright install --with-deps chromium   # first run only
+  npx playwright test
+  ```
+
+  The suite also runs in CI on every push / PR that touches `site/**`,
+  `worker/**`, or `tests/e2e/**` — see `.github/workflows/e2e.yml`.
+
 ## Deployment
 
 See `DEPLOY.md` (added by Task #10) for the production checklist.

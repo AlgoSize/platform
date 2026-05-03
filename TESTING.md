@@ -260,8 +260,33 @@ purpose. Recreate it from this file if you need it.)
 
 ## What this file deliberately doesn't cover
 
-- **Automated browser tests** (Playwright/Cypress) — explicitly out of
-  scope per Task #9.
 - **Load / performance** — out of scope.
 - **Production walk-through** — covered by `DEPLOY.md` (Task #10).
 - **Stripe webhook signature edge cases** — covered by `worker/scripts/test-stripe.mjs`.
+
+## Automated end-to-end suite
+
+The same happy path is exercised headlessly by the Playwright suite under
+`tests/e2e/` (added by Task #13). The suite spawns its own Jekyll
+(port **5001**, not 5000, to avoid colliding with the long-running
+`Start application` Replit workflow) and `wrangler dev` (port 8787) via
+Playwright's `webServer` config, mints a synthetic JWT, seeds the Worker
+KV via the test-only `POST /api/_test/seed` endpoint (gated on
+`E2E_TEST_SECRET`, returns 404 in production), then drives the browser
+through landing → checkout-stub → dashboard → all three analyzers → logout
+→ blocked-redirect.
+
+Run it locally:
+
+```bash
+cd tests/e2e
+npm install
+npx playwright install --with-deps chromium   # first run only
+npx playwright test
+```
+
+It also runs in CI on every push / PR that touches `site/**`, `worker/**`,
+or `tests/e2e/**` — see `.github/workflows/e2e.yml`. Treat the manual
+walkthrough above as the source of truth for *what* the happy path means;
+the automated suite is the regression net that runs that definition on
+every change.

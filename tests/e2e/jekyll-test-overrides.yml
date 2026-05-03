@@ -1,0 +1,13 @@
+# Jekyll config override applied during the Playwright e2e suite.
+#
+# The default site/_config.yml points api_base at http://127.0.0.1:8787 so the
+# manual dev flow in TESTING.md works against `wrangler dev` on its default
+# IP. For the e2e suite we want the BROWSER to address the Worker via the
+# same hostname as the marketing site (`localhost`) so the SameSite=Lax
+# session cookie travels with cross-port fetches — `localhost:5001` and
+# `localhost:8787` are same-site, but `localhost:5001` and `127.0.0.1:8787`
+# are not. Wrangler still binds to 127.0.0.1; `localhost` resolves to it.
+#
+# Note also: the test server runs on port 5001 (not 5000) so it can coexist
+# with the long-running "Start application" Replit workflow that owns 5000.
+api_base: "http://localhost:8787"

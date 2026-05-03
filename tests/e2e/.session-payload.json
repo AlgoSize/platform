@@ -1,0 +1,17 @@
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3Nzc4MTM0NDUsImV4cCI6MTc3NzgxNzA0NSwic3ViIjoidXNyX2UyZXRlc3QwMDAwMDAwMDAwMSIsImVtYWlsIjoiZTJlQGFsZ29zaXplLnRlc3QiLCJzdWJTdGF0dXMiOiJhY3RpdmUifQ.296_wg96wPr-njU4-GAx27cTz2JtSnNVBuBOwGV3eCs",
+  "session": {
+    "userId": "usr_e2etest00000000001",
+    "email": "e2e@algosize.test",
+    "subStatus": "active",
+    "iat": 1777813445
+  },
+  "user": {
+    "userId": "usr_e2etest00000000001",
+    "email": "e2e@algosize.test",
+    "stripeCustomerId": "cus_e2etest_synthetic",
+    "subStatus": "active",
+    "createdAt": 1777813445,
+    "updatedAt": 1777813445
+  }
+}
