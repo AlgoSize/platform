@@ -67,7 +67,14 @@ PLAUSIBLE_ENDPOINT = "https://plausible.io"
 # loads the site from.
 # ----------------------------------------------------------------------------
 [env.production]
-name = "algosize"
+name   = "algosize"
+# Same-origin API binding so the browser can POST to https://algosize.com/api/*
+# without CORS preflights and so session cookies are first-party. The marketing
+# site is served by GitHub Pages on the apex; this route hands /api/* to the
+# Worker. Mirrors the staging block below. See DEPLOY.md §4.2.
+routes = [
+  { pattern = "algosize.com/api/*", zone_name = "algosize.com" },
+]
 
 [env.production.vars]
 # Production site origin: must match the hostname users load the site from.
