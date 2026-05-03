@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" /><title>Big-O isn't the bottleneck. It's allocation. — Algosize</title>
+    <meta name="description" content="Most slow code in production isn't slow because the algorithm is wrong. It's slow because every iteration is allocating, and the allocator (and the GC behind it) is doing the work nobody profiled. Here's how to spot the cliff." />
+    <link rel="canonical" href="https://algosize.com/blog/big-o-isnt-the-bottleneck-its-allocation/" />
+    <link rel="stylesheet" href="/assets/css/main.css" />
+    <link rel="alternate" type="application/rss+xml" title="Algosize — Engineering blog" href="https://algosize.com/feed.xml" />
+
+    <!-- Favicons / app icons. Sourced from /assets/img/brand-mark.svg ([as] mark). -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Algosize" />
+    <meta property="og:title" content="Big-O isn't the bottleneck. It's allocation. — Algosize" />
+    <meta property="og:description" content="Most slow code in production isn't slow because the algorithm is wrong. It's slow because every iteration is allocating, and the allocator (and the GC behind it) is doing the work nobody profiled. Here's how to spot the cliff." />
+    <meta property="og:url" content="https://algosize.com/blog/big-o-isnt-the-bottleneck-its-allocation/" />
+    <meta property="og:image" content="https://algosize.com/assets/img/blog/big-o-allocation.svg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Algosize — [as] brand mark with the tagline ‘Cut cloud waste. Catch vulnerabilities early. Optimize your algorithms.’" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Big-O isn't the bottleneck. It's allocation. — Algosize" />
+    <meta name="twitter:description" content="Most slow code in production isn't slow because the algorithm is wrong. It's slow because every iteration is allocating, and the allocator (and the GC behind it) is doing the work nobody profiled. Here's how to spot the cliff." />
+    <meta name="twitter:image" content="https://algosize.com/assets/img/blog/big-o-allocation.svg" />
+    <meta name="twitter:image:alt" content="Algosize — [as] brand mark with the tagline ‘Cut cloud waste. Catch vulnerabilities early. Optimize your algorithms.’" /><script defer
+            data-domain="algosize.com"
+            src="https://plausible.io/js/script.tagged-events.js"></script>
+    <script>
+      // Queue stub so events fired before the async Plausible script
+      // loads aren't dropped — Plausible's recommended pattern.
+      window.plausible = window.plausible || function () {
+        (window.plausible.q = window.plausible.q || []).push(arguments);
+      };
+    </script></head>
+  <body>
+    <header class="nav">
+  <div class="nav-inner">
+    <a href="/" class="brand">
+      <span class="brand-mark" aria-hidden="true">[as]</span>
+      <span class="brand-word">Algosize</span>
+    </a>
+    <nav class="nav-links" aria-label="Primary">
+      <a href="/#features">Features</a>
+      <a href="/#pricing">Pricing</a>
+      <a href="/blog/">Blog</a>
+      <a href="/dashboard/">Dashboard</a>
+    </nav>
+  </div>
+</header>
+
+
+<article class="post">
+  <div class="container container-narrow">
+
+    <header class="post-head"><div class="post-tags" aria-label="Post tags">
+        <span class="post-tag mono">#performance</span>
+        <span class="post-tag mono">#profiling</span>
+        <span class="post-tag mono">#gc</span>
+        
+      </div><h1 class="post-title">Big-O isn't the bottleneck. It's allocation.</h1><p class="post-lede">Most slow code in production isn't slow because the algorithm is wrong. It's slow because every iteration is allocating, and the allocator (and the GC behind it) is doing the work nobody profiled. Here's how to spot the cliff.</p><div class="post-byline">
+        <span class="post-byline-author">Algosize Engineering</span>
+        <span class="post-byline-sep" aria-hidden="true">·</span>
+        <time datetime="2026-05-01T13:00:00+00:00">May 1, 2026</time>
+        <span class="post-byline-sep" aria-hidden="true">·</span>
+        <span class="post-byline-time">9 min read</span>
+      </div>
+    </header><figure class="post-hero" aria-hidden="true">
+      <img src="/assets/img/blog/big-o-allocation.svg"
+           alt=""
+           width="1200" height="630"
+           loading="eager" decoding="async" />
+    </figure><aside class="post-toc" id="post-toc" aria-label="Table of contents" hidden>
+      <h2 class="post-toc-title">In this post</h2>
+      <ul id="post-toc-list"></ul>
+    </aside>
+
+    <div class="post-prose" id="post-prose">
+      <p>The first instinct of every engineer who reads a hot-path is to check the algorithm. <em>Is this nested loop O(n²) when it could be O(n log n)?</em> It almost never is. The function has been there for two years, the team has reviewed it twice, and Big-O is the kind of correctness problem that gets caught on the second pass, not the hundredth.</p>
+
+<p>The thing that <em>does</em> get worse over time, silently, in code reviews nobody flags, is <strong>allocation per iteration</strong>. A <code class="language-plaintext highlighter-rouge">.map().filter().slice()</code> chain that allocates four arrays where the original code allocated one. A closure pulled out into a “cleaner” inner function that captures a reference and prevents an escape analysis. A logger that builds a structured object on every call site, even on the call sites where the log line is below the active level.</p>
+
+<p>Each one is invisible in a CPU profile until the day the GC pause hits 200ms and your p99 goes vertical. Then a postmortem discovers the cliff, and someone writes a Slack message that begins “actually it’s not the algorithm, it’s…”</p>
+
+<p>This post is the field guide we use when we get a “this loop got slow” ticket. It does not assume you’ve ever read a flame graph. It assumes you’ve shipped working code and now the working code is slow.</p>
+
+<h2 id="the-shape-of-the-cliff">The shape of the cliff</h2>
+
+<p>Plot p50 latency against <code class="language-plaintext highlighter-rouge">n</code> for a hot path that allocates per iteration. Up until you hit some threshold, the line is roughly linear in <code class="language-plaintext highlighter-rouge">n</code> and roughly flat per-call — you’re spending CPU on actual work, the allocator is fast, GC is happening between calls, all is well.</p>
+
+<p>Cross the threshold — your nursery (young-generation heap) fills mid-call, GC fires, and the call has to wait for the collection to finish. Now your line jumps from “linear in <code class="language-plaintext highlighter-rouge">n</code>” to “linear in <code class="language-plaintext highlighter-rouge">n</code> with periodic 50–200ms cliffs” and your p99 looks like a barbed-wire fence.</p>
+
+<p>The shape matters because it is <em>not</em> what you’d expect from an algorithmic problem. Algorithmic problems give you a smooth curve — <code class="language-plaintext highlighter-rouge">n²</code> looks parabolic, <code class="language-plaintext highlighter-rouge">n log n</code> looks like <code class="language-plaintext highlighter-rouge">n</code> with a gentle warp. Allocation cliffs give you a flat-then-spike profile, where p50 is fine and p99 is a disaster.</p>
+
+<p>If you take one thing away from this post: <strong>a flat p50 and a spiky p99 is almost always allocation, not algorithm</strong>.</p>
+
+<h2 id="where-the-allocations-hide">Where the allocations hide</h2>
+
+<p>Every language has its own allocator quirks, but the categories of “allocation that gets written without anyone noticing” are remarkably stable across languages. Here’s what we look for, in roughly the order they bite.</p>
+
+<h3 id="1-method-chain-landmines">1. Method-chain landmines</h3>
+
+<p>The same data transformation, written two ways:</p>
+
+<div class="language-js highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1">// Allocates: 1 array.</span>
+<span class="kd">const</span> <span class="nx">out</span> <span class="o">=</span> <span class="p">[];</span>
+<span class="k">for </span><span class="p">(</span><span class="kd">const</span> <span class="nx">item</span> <span class="k">of</span> <span class="nx">items</span><span class="p">)</span> <span class="p">{</span>
+  <span class="k">if </span><span class="p">(</span><span class="o">!</span><span class="nx">item</span><span class="p">.</span><span class="nx">active</span><span class="p">)</span> <span class="k">continue</span><span class="p">;</span>
+  <span class="nx">out</span><span class="p">.</span><span class="nf">push</span><span class="p">(</span><span class="nx">item</span><span class="p">.</span><span class="nx">value</span> <span class="o">*</span> <span class="mi">2</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="c1">// Allocates: 2 arrays. (filter result, then map result.)</span>
+<span class="kd">const</span> <span class="nx">out</span> <span class="o">=</span> <span class="nx">items</span>
+  <span class="p">.</span><span class="nf">filter</span><span class="p">(</span><span class="nx">item</span> <span class="o">=&gt;</span> <span class="nx">item</span><span class="p">.</span><span class="nx">active</span><span class="p">)</span>
+  <span class="p">.</span><span class="nf">map</span><span class="p">(</span><span class="nx">item</span> <span class="o">=&gt;</span> <span class="nx">item</span><span class="p">.</span><span class="nx">value</span> <span class="o">*</span> <span class="mi">2</span><span class="p">);</span>
+</code></pre></div></div>
+
+<p>For <code class="language-plaintext highlighter-rouge">n=10</code>, who cares. For <code class="language-plaintext highlighter-rouge">n=100,000</code> called inside an event handler that fires fifty times a second, the second version makes 100 intermediate arrays a second the GC has to walk and collect. Same Big-O. Different performance.</p>
+
+<p>The fix isn’t “stop using <code class="language-plaintext highlighter-rouge">.map().filter()</code>” — it’s to know which paths are hot. You can leave the chain in a request handler that runs once per request. You should rewrite it in the inner loop of a parser or a render pipeline.</p>
+
+<h3 id="2-closures-that-capture-too-much">2. Closures that capture too much</h3>
+
+<div class="language-js highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kd">function</span> <span class="nf">processBatch</span><span class="p">(</span><span class="nx">records</span><span class="p">,</span> <span class="nx">ctx</span><span class="p">)</span> <span class="p">{</span>
+  <span class="k">return</span> <span class="nx">records</span><span class="p">.</span><span class="nf">map</span><span class="p">(</span><span class="nx">record</span> <span class="o">=&gt;</span> <span class="nf">transform</span><span class="p">(</span><span class="nx">record</span><span class="p">,</span> <span class="nx">ctx</span><span class="p">));</span>   <span class="c1">// closure allocated per call</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>In V8 specifically, the inner arrow function above will often be re-created on every call to <code class="language-plaintext highlighter-rouge">processBatch</code>, <em>and</em> prevented from being inlined because it captures <code class="language-plaintext highlighter-rouge">ctx</code>. If <code class="language-plaintext highlighter-rouge">processBatch</code> is on the hot path, the inner closure is now an allocation per call multiplied by the call frequency.</p>
+
+<p>Lifting the inner function out:</p>
+
+<div class="language-js highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kd">const</span> <span class="nx">transformOne</span> <span class="o">=</span> <span class="p">(</span><span class="nx">record</span><span class="p">,</span> <span class="nx">ctx</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="nf">transform</span><span class="p">(</span><span class="nx">record</span><span class="p">,</span> <span class="nx">ctx</span><span class="p">);</span>
+
+<span class="kd">function</span> <span class="nf">processBatch</span><span class="p">(</span><span class="nx">records</span><span class="p">,</span> <span class="nx">ctx</span><span class="p">)</span> <span class="p">{</span>
+  <span class="k">return</span> <span class="nx">records</span><span class="p">.</span><span class="nf">map</span><span class="p">(</span><span class="nx">record</span> <span class="o">=&gt;</span> <span class="nf">transformOne</span><span class="p">(</span><span class="nx">record</span><span class="p">,</span> <span class="nx">ctx</span><span class="p">));</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>…doesn’t help — you’ve just moved the problem. The real fix is to drop <code class="language-plaintext highlighter-rouge">.map()</code> for a manual loop in this hot path and let the optimiser inline <code class="language-plaintext highlighter-rouge">transform</code> directly. Five lines longer, zero allocations per record.</p>
+
+<h3 id="3-string-concatenation-in-logs">3. String concatenation in logs</h3>
+
+<div class="language-js highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nx">logger</span><span class="p">.</span><span class="nf">debug</span><span class="p">(</span><span class="dl">"</span><span class="s2">processed </span><span class="dl">"</span> <span class="o">+</span> <span class="nx">record</span><span class="p">.</span><span class="nx">id</span> <span class="o">+</span> <span class="dl">"</span><span class="s2"> in </span><span class="dl">"</span> <span class="o">+</span> <span class="nx">ms</span> <span class="o">+</span> <span class="dl">"</span><span class="s2">ms with </span><span class="dl">"</span> <span class="o">+</span> <span class="nx">JSON</span><span class="p">.</span><span class="nf">stringify</span><span class="p">(</span><span class="nx">meta</span><span class="p">));</span>
+</code></pre></div></div>
+
+<p>Every call to that line allocates a string, calls <code class="language-plaintext highlighter-rouge">JSON.stringify</code> (which allocates a much larger string), and then <em>throws it all away</em> if the logger’s level is above <code class="language-plaintext highlighter-rouge">debug</code>. On a hot path running ten thousand times per second, that’s ten thousand JSON serializations of <code class="language-plaintext highlighter-rouge">meta</code> per second, none of which were ever written to disk.</p>
+
+<p>The fix is the well-known guard pattern:</p>
+
+<div class="language-js highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">if </span><span class="p">(</span><span class="nx">logger</span><span class="p">.</span><span class="nf">isDebugEnabled</span><span class="p">())</span> <span class="p">{</span>
+  <span class="nx">logger</span><span class="p">.</span><span class="nf">debug</span><span class="p">(</span><span class="dl">"</span><span class="s2">processed </span><span class="dl">"</span> <span class="o">+</span> <span class="nx">record</span><span class="p">.</span><span class="nx">id</span> <span class="o">+</span> <span class="dl">"</span><span class="s2"> in </span><span class="dl">"</span> <span class="o">+</span> <span class="nx">ms</span> <span class="o">+</span> <span class="dl">"</span><span class="s2">ms with </span><span class="dl">"</span> <span class="o">+</span> <span class="nx">JSON</span><span class="p">.</span><span class="nf">stringify</span><span class="p">(</span><span class="nx">meta</span><span class="p">));</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>…or, better, lazy logger APIs that take a function and only call it if the level is active. Most modern logging libraries (<code class="language-plaintext highlighter-rouge">pino</code>, <code class="language-plaintext highlighter-rouge">winston</code>’s structured mode, etc.) handle this for you if you stop concatenating strings and start passing structured objects:</p>
+
+<div class="language-js highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nx">logger</span><span class="p">.</span><span class="nf">debug</span><span class="p">({</span> <span class="na">id</span><span class="p">:</span> <span class="nx">record</span><span class="p">.</span><span class="nx">id</span><span class="p">,</span> <span class="nx">ms</span><span class="p">,</span> <span class="nx">meta</span> <span class="p">},</span> <span class="dl">"</span><span class="s2">processed record</span><span class="dl">"</span><span class="p">);</span>
+</code></pre></div></div>
+
+<p>The library short-circuits before allocation if the level is below <code class="language-plaintext highlighter-rouge">debug</code>.</p>
+
+<h3 id="4-buffers-and-slices">4. Buffers and slices</h3>
+
+<p>Once you go past the script-level languages and into Go / Rust / Node-with-typed-arrays, the killer allocation is usually a slice or a buffer that gets created fresh every iteration when it could have been pooled.</p>
+
+<p>In Go:</p>
+
+<div class="language-go highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">record</span> <span class="o">:=</span> <span class="k">range</span> <span class="n">records</span> <span class="p">{</span>
+  <span class="n">buf</span> <span class="o">:=</span> <span class="nb">make</span><span class="p">([]</span><span class="kt">byte</span><span class="p">,</span> <span class="m">0</span><span class="p">,</span> <span class="m">1024</span><span class="p">)</span>         <span class="c">// fresh slice every iteration</span>
+  <span class="n">buf</span> <span class="o">=</span> <span class="n">encode</span><span class="p">(</span><span class="n">buf</span><span class="p">,</span> <span class="n">record</span><span class="p">)</span>
+  <span class="n">out</span> <span class="o">=</span> <span class="nb">append</span><span class="p">(</span><span class="n">out</span><span class="p">,</span> <span class="n">buf</span><span class="o">...</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>The <code class="language-plaintext highlighter-rouge">make</code> inside the loop allocates 1KB on every iteration. For a million records that’s 1GB of garbage the GC has to walk. Lift the buffer out and reset it:</p>
+
+<div class="language-go highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">buf</span> <span class="o">:=</span> <span class="nb">make</span><span class="p">([]</span><span class="kt">byte</span><span class="p">,</span> <span class="m">0</span><span class="p">,</span> <span class="m">1024</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">record</span> <span class="o">:=</span> <span class="k">range</span> <span class="n">records</span> <span class="p">{</span>
+  <span class="n">buf</span> <span class="o">=</span> <span class="n">buf</span><span class="p">[</span><span class="o">:</span><span class="m">0</span><span class="p">]</span>
+  <span class="n">buf</span> <span class="o">=</span> <span class="n">encode</span><span class="p">(</span><span class="n">buf</span><span class="p">,</span> <span class="n">record</span><span class="p">)</span>
+  <span class="n">out</span> <span class="o">=</span> <span class="nb">append</span><span class="p">(</span><span class="n">out</span><span class="p">,</span> <span class="n">buf</span><span class="o">...</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>Same Big-O. One allocation instead of a million.</p>
+
+<p>The Node equivalent uses <code class="language-plaintext highlighter-rouge">Buffer.allocUnsafe</code> plus a reusable scratch buffer; the Rust equivalent uses <code class="language-plaintext highlighter-rouge">Vec::with_capacity</code> once and <code class="language-plaintext highlighter-rouge">clear()</code> per iteration.</p>
+
+<h3 id="5-iterator-protocol-overhead">5. Iterator-protocol overhead</h3>
+
+<p>JavaScript’s iterator protocol (<code class="language-plaintext highlighter-rouge">for...of</code>, generator functions, <code class="language-plaintext highlighter-rouge">[Symbol.iterator]</code>) is <em>not</em> free. Every iteration allocates an <code class="language-plaintext highlighter-rouge">IteratorResult</code> object — <code class="language-plaintext highlighter-rouge">{ value: T, done: boolean }</code> — that the GC then has to clean up.</p>
+
+<p>For the vast majority of code this is irrelevant. For the inner loop of a streaming JSON parser running a hundred million times per process lifetime, it adds up to a measurable chunk of GC pressure. The fix in the hottest paths is to abandon the iterator protocol and use index-based iteration over a typed array. Less elegant. Significantly faster.</p>
+
+<p>The point is not “don’t use iterators”. The point is “iterators have a cost, and the cost is almost always invisible until you measure it.”</p>
+
+<h2 id="how-to-actually-measure">How to actually measure</h2>
+
+<p>Profilers love showing you CPU. Profilers do not, by default, show you allocation rate. So we want a different lens.</p>
+
+<p>In Node, the simplest one-line measurement is <code class="language-plaintext highlighter-rouge">--trace-gc</code>:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>$ node --trace-gc app.js
+[12345:0x1] 12 ms: Scavenge 24.5 (28.0) -&gt; 4.3 (28.5) MB, 2.4 ms ...
+</code></pre></div></div>
+
+<p>The frequency of those lines is what you care about. If you see a <code class="language-plaintext highlighter-rouge">Scavenge</code> every 50ms, you’re allocating roughly 24MB every 50ms — half a gigabyte per second. That’s a <em>lot</em> of garbage, and even though scavenges are fast, the cumulative pause time will move p99.</p>
+
+<p>In Go, run with <code class="language-plaintext highlighter-rouge">GODEBUG=gctrace=1</code> for the same effect. In the JVM, <code class="language-plaintext highlighter-rouge">-Xlog:gc*</code>. In Rust, you have to opt into instrumentation explicitly because the default doesn’t have a GC, but <code class="language-plaintext highlighter-rouge">dhat</code> will tell you allocation counts and sizes.</p>
+
+<p>Once you know you have an allocation problem, get a heap profile. <code class="language-plaintext highlighter-rouge">node --inspect</code>, then “Memory” panel in Chrome DevTools, “Allocation sampling”. Run your hot path. The flame graph will rank functions by <em>bytes allocated</em>, not CPU spent. The function that’s allocating the most is almost never the function that’s slowest in a CPU profile, because the allocator itself is fast — it’s the GC pauses <em>between</em> calls that hurt.</p>
+
+<h2 id="a-worked-example">A worked example</h2>
+
+<p>A customer last year had a JSON-over-HTTP service whose p50 was 8ms and whose p99 was 320ms. The team had spent a week on the algorithm — was the JSON parser quadratic? Were they accidentally <code class="language-plaintext highlighter-rouge">JSON.parse</code>-ing twice? — and found nothing.</p>
+
+<p><code class="language-plaintext highlighter-rouge">--trace-gc</code> showed a major GC every 1.2s, lasting 90–110ms each. Heap profile showed 78% of the bytes allocated were going to a single function: a request-shape validator that took the inbound payload, ran a recursive <code class="language-plaintext highlighter-rouge">Object.entries().map(…)</code> on it, then <code class="language-plaintext highlighter-rouge">JSON.stringify</code>‘d the result for an audit log nobody read.</p>
+
+<p>The fix was three lines: cache the validator’s known-good schema once, replace the recursive <code class="language-plaintext highlighter-rouge">.map()</code> with a manual loop that wrote into a pre-allocated array, and remove the <code class="language-plaintext highlighter-rouge">JSON.stringify</code> for the audit log (which was a debug feature from 2018 that nobody had remembered to delete).</p>
+
+<p>The algorithm was identical before and after. p99 dropped from 320ms to 14ms.</p>
+
+<p>That’s the shape of every allocation-bound performance bug we’ve ever seen. The Big-O is fine. The diff is “fewer intermediate objects”. The result is dramatic.</p>
+
+<h2 id="when-the-algorithm-is-the-bottleneck">When the algorithm <em>is</em> the bottleneck</h2>
+
+<p>To be clear: algorithmic problems exist. We’ve seen <code class="language-plaintext highlighter-rouge">O(n²)</code> written into a billing-line aggregator, an <code class="language-plaintext highlighter-rouge">O(2ⁿ)</code> regex used as a cache key, and a fascinating hash-table implementation that rehashed on every insert. Big-O matters.</p>
+
+<p>But — and this is the point — if you have not yet <em>measured</em> whether you’re CPU-bound or allocation-bound, <strong>start with measurement, not algorithm</strong>. The reason “rewrite the algorithm” feels productive is that it’s tractable engineering work. The reason it usually doesn’t help is that the actual cost lives somewhere the engineer didn’t look.</p>
+
+<p>The decision tree we use:</p>
+
+<ol>
+  <li>Profile p50 vs p99. <strong>Smooth-and-rising</strong> → likely algorithm. <strong>Flat-then-spiky</strong> → likely allocation.</li>
+  <li>If algorithm: read the inner loop, count the comparisons, check the data structure, optimise.</li>
+  <li>If allocation: enable GC tracing, identify the call site, eliminate or pool the allocation, re-measure.</li>
+  <li>If both: fix allocation first. It’s almost always cheaper, and the algorithm work goes faster on a quiet GC.</li>
+</ol>
+
+<blockquote>
+  <p>Spend the hour reading a flame graph before you spend the week rewriting the algorithm.</p>
+</blockquote>
+
+<p>The bias toward “improve Big-O” is the bias toward the kind of work that sounds smart in a performance review. The bias toward “eliminate allocation” is the bias toward the work that ships a faster service. Most of the time you want the second one.</p>
+
+<p>If you want a tool that already runs the allocation profile against a function and reports a refactor that drops the allocation count, that’s the algorithm optimizer Algosize ships. But honestly, <code class="language-plaintext highlighter-rouge">--trace-gc</code> and ten minutes of squinting at the heap profile will get you 80% of the way there. Start there. The cliff is real, and once you see it, you can’t unsee it.</p>
+
+    </div>
+
+    <script>
+      (function () {
+        var prose = document.getElementById("post-prose");
+        var toc   = document.getElementById("post-toc");
+        var list  = document.getElementById("post-toc-list");
+        if (!prose || !toc || !list) return;
+        var headings = prose.querySelectorAll("h2[id], h3[id]");
+        if (headings.length < 3) return;
+        var sub = null;
+        headings.forEach(function (h) {
+          var li = document.createElement("li");
+          var a  = document.createElement("a");
+          a.href = "#" + h.id;
+          a.textContent = h.textContent;
+          li.appendChild(a);
+          if (h.tagName === "H2") {
+            list.appendChild(li);
+            sub = null;
+          } else {
+            if (!sub) {
+              var lastTop = list.lastElementChild;
+              if (!lastTop) { list.appendChild(li); return; }
+              sub = document.createElement("ul");
+              lastTop.appendChild(sub);
+            }
+            sub.appendChild(li);
+          }
+        });
+        toc.hidden = false;
+      })();
+    </script>
+
+    <hr class="post-divider" />
+
+    <aside class="post-cta" aria-label="Try Algosize">
+      <h2 class="post-cta-title">Stop reading. Start optimizing.</h2>
+      <p class="post-cta-body">
+        Algosize is one tool for the three bills engineering teams keep paying:
+        wasted cloud, undiscovered vulnerabilities, and slow code that ships
+        anyway. Five free runs a month, no credit card to browse.
+      </p>
+      <p class="post-cta-actions">
+        <a href="/#pricing" class="btn btn-primary" data-cta="post-footer">
+          See pricing →
+        </a>
+        <a href="/dashboard/" class="btn btn-ghost">Open the dashboard</a>
+      </p>
+    </aside>
+
+  </div>
+</article><script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "mainEntityOfPage": { "@type": "WebPage", "@id": "https://algosize.com/blog/big-o-isnt-the-bottleneck-its-allocation/" },
+  "headline": "Big-O isn't the bottleneck. It's allocation.",
+  "description": "Most slow code in production isn't slow because the algorithm is wrong. It's slow because every iteration is allocating, and the allocator (and the GC behind it) is doing the work nobody profiled. Here's how to spot the cliff.",
+  "datePublished": "2026-05-01T13:00:00+00:00",
+  "dateModified": "2026-05-01T13:00:00+00:00",
+  "author":    { "@type": "Organization", "name": "Algosize Engineering" },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Algosize",
+    "logo": { "@type": "ImageObject", "url": "https://algosize.com/apple-touch-icon.png" }
+  },
+  "image": "https://algosize.com/assets/img/blog/big-o-allocation.svg"}
+</script>
+
+<footer class="footer">
+  <div class="container">
+    <div class="footer-inner">
+      <a href="/" class="brand">
+        <span class="brand-mark" aria-hidden="true">[as]</span>
+        <span class="brand-word">Algosize</span>
+      </a>
+      <nav class="footer-links" aria-label="Footer">
+        <a href="/#features">Features</a>
+        <a href="/#pricing">Pricing</a>
+        <a href="/blog/">Blog</a>
+        <a href="/dashboard/">Dashboard</a>
+      </nav>
+      <span class="footer-copy">© 2026 Algosize</span>
+    </div>
+  </div>
+</footer>
+
+<noscript>
+      <img src="/api/pageview?d=algosize.com&u=https://algosize.com/blog/big-o-isnt-the-bottleneck-its-allocation/"
+           alt="" width="1" height="1" style="position:absolute;left:-9999px" />
+    </noscript><script>
+      // API base for the Worker. Empty in production (same origin via
+      // Cloudflare route algosize.com/api/*); set to the wrangler dev URL
+      // in local development. See site/_config.yml.
+      window.ALGOSIZE_API_BASE = "";
+    </script>
+    <script src="/assets/js/checkout.js" defer></script>
+    <script src="/assets/js/analytics.js" defer></script>
+  </body>
+</html>

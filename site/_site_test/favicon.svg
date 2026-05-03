@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Algosize browser favicon — mirror of /assets/img/brand-mark.svg so the [as]
+  mark in the nav and the icon in the browser tab stay in lockstep.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Algosize">
+  <title>Algosize</title>
+  <rect width="64" height="64" rx="12" ry="12" fill="#0a0d14"/>
+  <g font-family="ui-monospace, 'JetBrains Mono', 'DejaVu Sans Mono', Menlo, Consolas, monospace"
+     font-weight="800"
+     font-size="26"
+     text-anchor="middle"
+     dominant-baseline="central">
+    <text x="14" y="34" fill="#5eead4">[</text>
+    <text x="32" y="34" fill="#f1f3f6">as</text>
+    <text x="50" y="34" fill="#5eead4">]</text>
+  </g>
+</svg>

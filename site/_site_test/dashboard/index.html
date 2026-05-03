@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" /><title>Dashboard — Algosize</title>
+    <meta name="description" content="Your Algosize workspace." />
+    <link rel="canonical" href="https://algosize.com/dashboard/" />
+    <link rel="stylesheet" href="/assets/css/main.css" />
+    <link rel="alternate" type="application/rss+xml" title="Algosize — Engineering blog" href="https://algosize.com/feed.xml" />
+
+    <!-- Favicons / app icons. Sourced from /assets/img/brand-mark.svg ([as] mark). -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Algosize" />
+    <meta property="og:title" content="Dashboard — Algosize" />
+    <meta property="og:description" content="Your Algosize workspace." />
+    <meta property="og:url" content="https://algosize.com/dashboard/" />
+    <meta property="og:image" content="https://algosize.com/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Algosize — [as] brand mark with the tagline ‘Cut cloud waste. Catch vulnerabilities early. Optimize your algorithms.’" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Dashboard — Algosize" />
+    <meta name="twitter:description" content="Your Algosize workspace." />
+    <meta name="twitter:image" content="https://algosize.com/og-image.png" />
+    <meta name="twitter:image:alt" content="Algosize — [as] brand mark with the tagline ‘Cut cloud waste. Catch vulnerabilities early. Optimize your algorithms.’" /><script defer
+            data-domain="algosize.com"
+            src="https://plausible.io/js/script.tagged-events.js"></script>
+    <script>
+      // Queue stub so events fired before the async Plausible script
+      // loads aren't dropped — Plausible's recommended pattern.
+      window.plausible = window.plausible || function () {
+        (window.plausible.q = window.plausible.q || []).push(arguments);
+      };
+    </script></head>
+  <body>
+    <header class="nav dash-nav">
+  <div class="nav-inner">
+    <a href="/" class="brand">
+      <span class="brand-mark" aria-hidden="true">[as]</span>
+      <span class="brand-word">Algosize</span>
+    </a>
+    <div class="dash-nav-actions">
+      <span class="dash-user-email mono" id="dash-user-email" hidden></span>
+      <!-- Quota pill (Task #19): "X / 5 used" for free users, "Unlimited"
+           for paid. Hydrated from /api/me on load. Hidden until we know
+           which plan the user is on so we never flash "X / 5" at a paid
+           customer. -->
+      <span class="dash-quota mono" id="dash-quota" hidden>
+        <span class="dash-quota-label">Runs</span>
+        <span class="dash-quota-value" id="dash-quota-value">— / 5</span>
+      </span>
+      <span class="dash-status" id="dash-status" hidden>
+        <span class="dash-status-dot" aria-hidden="true"></span>
+        <span id="dash-status-text">Subscription active</span>
+      </span>
+      <button id="billing-portal-btn" type="button" class="btn btn-ghost btn-sm" hidden>Manage billing</button>
+      <button id="logout-btn" type="button" class="btn btn-ghost btn-sm">Sign out</button>
+    </div>
+  </div>
+</header>
+
+<main class="dashboard">
+  <div class="container">
+
+    <div class="dash-head">
+      <span class="eyebrow">Workspace</span>
+      <h1>Three analyzers, one workspace.</h1>
+      <p class="lede">
+        Paste your input, run the analyzer, get findings back from the Worker.
+        Your last 90 days of runs are kept under your account so you can re-run
+        or export them at any time.
+      </p>
+    </div>
+
+    <!-- Inline upgrade banner (Task #19) — revealed by dashboard.js when
+         any analyzer call returns 402 quota_exceeded. Sits above all
+         analyzer panels so the message can't be missed. -->
+    <div id="quota-upgrade-banner" class="quota-banner" hidden>
+      <div class="quota-banner-text">
+        <strong id="quota-banner-title">You've used all 5 free analyses this month.</strong>
+        <p id="quota-banner-msg">Upgrade to Pro for unlimited cost, vulnerability, and algorithm runs.</p>
+      </div>
+      <div class="quota-banner-actions">
+        <button id="quota-upgrade-btn" type="button" class="btn btn-primary btn-sm">Upgrade to Pro →</button>
+      </div>
+    </div>
+
+    <!-- ============= RECENT RUNS (Task #17) ============= -->
+    <section class="panel" id="panel-runs">
+      <header class="panel-head">
+        <div class="panel-heading">
+          <span class="panel-tag">History</span>
+          <h2>Recent runs</h2>
+          <p class="panel-desc">Your last 20 analyzer runs across all three tools. Re-run with the same input or download the structured result as CSV. Runs older than 90 days are pruned automatically.</p>
+        </div>
+        <div class="panel-actions">
+          <button type="button" class="btn btn-ghost btn-sm" id="runs-refresh-btn">Refresh</button>
+        </div>
+      </header>
+      <div class="panel-body">
+        <div id="runs-list" class="runs-list">
+          <div class="panel-empty">Loading recent runs…</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============= COST ANALYZER ============= -->
+    <section class="panel" id="panel-cost">
+      <header class="panel-head">
+        <div class="panel-heading">
+          <span class="panel-tag">Cost</span>
+          <h2>Cloud cost analyzer</h2>
+          <p class="panel-desc">Upload your AWS Cost &amp; Usage Report (CSV). We surface the top spenders and three biggest savings wins.</p>
+        </div>
+        <div class="panel-actions">
+          <button type="button" class="btn btn-ghost btn-sm" data-action="sample" data-target="cost">Load sample</button>
+          <button type="button" class="btn btn-primary btn-sm" data-action="run" data-target="cost">Run analysis →</button>
+        </div>
+      </header>
+      <div class="panel-body">
+        <!--
+          File-picker-only by design (Task #14): the original spec called for
+          replacing the JSON textarea with a file picker. Power users who
+          want to POST `application/json` services arrays can still hit
+          /api/analyze/cost directly — that path is preserved on the server
+          and covered by the existing 22 JSON tests in worker/scripts/test-cost.mjs.
+        -->
+        <label class="panel-input-label" for="input-cost-file">Input · AWS Cost &amp; Usage Report (CSV)</label>
+        <div class="file-picker">
+          <input type="file" id="input-cost-file" accept=".csv,text/csv" hidden>
+          <button type="button" class="btn btn-ghost" id="input-cost-btn">Choose CUR file…</button>
+          <span class="file-picker-name mono" id="input-cost-name">No file selected.</span>
+        </div>
+        <p class="panel-input-help">
+          Don't have one yet? Export from the AWS Billing console (Reports → Cost &amp; usage reports).
+          <a href="https://docs.aws.amazon.com/cur/latest/userguide/cur-create.html" target="_blank" rel="noopener">How →</a>
+        </p>
+
+        <label class="panel-input-label" for="output-cost">Results</label>
+        <div id="output-cost" class="panel-output">
+          <div class="panel-empty">Choose a CUR file (or click <em>Load sample</em>) and run an analysis.</div>
+        </div>
+
+        <div id="chart-cost-wrap" class="panel-chart-wrap" hidden>
+          <h3 class="panel-chart-title">Top suggested savings (USD / mo)</h3>
+          <div class="panel-chart-canvas">
+            <canvas id="chart-cost"></canvas>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============= VULNERABILITY SCANNER ============= -->
+    <section class="panel" id="panel-vuln">
+      <header class="panel-head">
+        <div class="panel-heading">
+          <span class="panel-tag">Vuln</span>
+          <h2>Vulnerability scanner</h2>
+          <p class="panel-desc">Paste a public GitHub repo URL. We pull its lockfiles and look up known CVEs against OSV.dev.</p>
+        </div>
+        <div class="panel-actions">
+          <button type="button" class="btn btn-ghost btn-sm" data-action="sample" data-target="vuln">Load sample</button>
+          <button type="button" class="btn btn-primary btn-sm" data-action="run" data-target="vuln">Run scan →</button>
+        </div>
+      </header>
+      <div class="panel-body">
+        <!--
+          Public-repos-only by design (Task #15): the lockfile fetcher pulls
+          from raw.githubusercontent.com, which only serves public repos.
+          Private-repo support requires a per-user GitHub OAuth flow with
+          token storage in KV — meaningful enough to be its own follow-up
+          (#30) rather than crammed in here. The legacy heuristic source
+          scanner ({ code: "..." } or { files: [...] }) is preserved at the
+          API layer for any external consumer that depended on it.
+        -->
+        <label class="panel-input-label" for="input-vuln">Input · public GitHub repo URL</label>
+        <input
+          id="input-vuln"
+          class="panel-input mono"
+          type="url"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="https://github.com/owner/repo">
+        <p class="panel-input-help">
+          We fetch lockfiles from the default branch (main → master) and query
+          <a href="https://osv.dev/" target="_blank" rel="noopener">OSV.dev</a>
+          for known advisories. Public repos only — no auth required.
+        </p>
+
+        <label class="panel-input-label" for="output-vuln">Findings</label>
+        <div id="output-vuln" class="panel-output">
+          <div class="panel-empty">Paste a repo URL and click <em>Run scan</em>.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============= ALGORITHM OPTIMIZER ============= -->
+    <section class="panel" id="panel-algo">
+      <header class="panel-head">
+        <div class="panel-heading">
+          <span class="panel-tag">Algo</span>
+          <h2>Algorithm optimizer</h2>
+          <p class="panel-desc">Paste a JS function plus a sample input. We run it in an isolated sandbox, infer the Big-O at three input sizes, and ask GPT for a refactor.</p>
+        </div>
+        <div class="panel-actions">
+          <button type="button" class="btn btn-ghost btn-sm" data-action="sample" data-target="algo">Load sample</button>
+          <button type="button" class="btn btn-primary btn-sm" data-action="run" data-target="algo">Optimize →</button>
+        </div>
+      </header>
+      <div class="panel-body">
+        <label class="panel-input-label" for="input-algo">Function · JavaScript</label>
+        <textarea
+          id="input-algo"
+          class="panel-input mono"
+          rows="12"
+          spellcheck="false"
+          autocomplete="off"
+          placeholder="function search(arr, x) { /* … */ }"></textarea>
+
+        <label class="panel-input-label" for="input-algo-sample">Sample input · JSON</label>
+        <textarea
+          id="input-algo-sample"
+          class="panel-input mono"
+          rows="3"
+          spellcheck="false"
+          autocomplete="off"
+          placeholder="[1, 2, 3, 1]"></textarea>
+
+        <label class="panel-input-label" for="output-algo">Result</label>
+        <div id="output-algo" class="panel-output">
+          <div class="panel-empty">Run the optimizer to measure the function and get a refactor.</div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<footer class="footer">
+  <div class="container">
+    <div class="footer-inner">
+      <a href="/" class="brand">
+        <span class="brand-mark" aria-hidden="true">[as]</span>
+        <span class="brand-word">Algosize</span>
+      </a>
+      <span class="footer-copy mono">workspace · session is private</span>
+    </div>
+  </div>
+</footer>
+
+<!-- Chart.js (CDN) — only used by the cost panel.
+     Pinned to 4.4.4 with SRI sha384 so a CDN compromise can't inject code. -->
+<script
+  src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"
+  integrity="sha384-NrKB+u6Ts6AtkIhwPixiKTzgSKNblyhlk0Sohlgar9UHUBzai/sgnNNWWd291xqt"
+  crossorigin="anonymous"
+  referrerpolicy="no-referrer"
+  defer></script>
+<script src="/assets/js/dashboard.js" defer></script>
+<noscript>
+      <img src="/api/pageview?d=algosize.com&u=https://algosize.com/dashboard/"
+           alt="" width="1" height="1" style="position:absolute;left:-9999px" />
+    </noscript><script>
+      // API base for the Worker. Empty in production (same origin via
+      // Cloudflare route algosize.com/api/*); set to the wrangler dev URL
+      // in local development. See site/_config.yml.
+      window.ALGOSIZE_API_BASE = "";
+    </script>
+    <script src="/assets/js/checkout.js" defer></script>
+    <script src="/assets/js/analytics.js" defer></script>
+  </body>
+</html>

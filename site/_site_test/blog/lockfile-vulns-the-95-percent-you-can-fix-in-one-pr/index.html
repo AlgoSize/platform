@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" /><title>Lockfile vulns: the 95% you can fix in one PR — Algosize</title>
+    <meta name="description" content="Most CVEs in your npm or pnpm audit are patch-version bumps with no breaking changes. Here's how to clear the backlog in a single, safe pull request — and why the remaining 5% deserves a different process entirely." />
+    <link rel="canonical" href="https://algosize.com/blog/lockfile-vulns-the-95-percent-you-can-fix-in-one-pr/" />
+    <link rel="stylesheet" href="/assets/css/main.css" />
+    <link rel="alternate" type="application/rss+xml" title="Algosize — Engineering blog" href="https://algosize.com/feed.xml" />
+
+    <!-- Favicons / app icons. Sourced from /assets/img/brand-mark.svg ([as] mark). -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Algosize" />
+    <meta property="og:title" content="Lockfile vulns: the 95% you can fix in one PR — Algosize" />
+    <meta property="og:description" content="Most CVEs in your npm or pnpm audit are patch-version bumps with no breaking changes. Here's how to clear the backlog in a single, safe pull request — and why the remaining 5% deserves a different process entirely." />
+    <meta property="og:url" content="https://algosize.com/blog/lockfile-vulns-the-95-percent-you-can-fix-in-one-pr/" />
+    <meta property="og:image" content="https://algosize.com/assets/img/blog/lockfile-vulns.svg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Algosize — [as] brand mark with the tagline ‘Cut cloud waste. Catch vulnerabilities early. Optimize your algorithms.’" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Lockfile vulns: the 95% you can fix in one PR — Algosize" />
+    <meta name="twitter:description" content="Most CVEs in your npm or pnpm audit are patch-version bumps with no breaking changes. Here's how to clear the backlog in a single, safe pull request — and why the remaining 5% deserves a different process entirely." />
+    <meta name="twitter:image" content="https://algosize.com/assets/img/blog/lockfile-vulns.svg" />
+    <meta name="twitter:image:alt" content="Algosize — [as] brand mark with the tagline ‘Cut cloud waste. Catch vulnerabilities early. Optimize your algorithms.’" /><script defer
+            data-domain="algosize.com"
+            src="https://plausible.io/js/script.tagged-events.js"></script>
+    <script>
+      // Queue stub so events fired before the async Plausible script
+      // loads aren't dropped — Plausible's recommended pattern.
+      window.plausible = window.plausible || function () {
+        (window.plausible.q = window.plausible.q || []).push(arguments);
+      };
+    </script></head>
+  <body>
+    <header class="nav">
+  <div class="nav-inner">
+    <a href="/" class="brand">
+      <span class="brand-mark" aria-hidden="true">[as]</span>
+      <span class="brand-word">Algosize</span>
+    </a>
+    <nav class="nav-links" aria-label="Primary">
+      <a href="/#features">Features</a>
+      <a href="/#pricing">Pricing</a>
+      <a href="/blog/">Blog</a>
+      <a href="/dashboard/">Dashboard</a>
+    </nav>
+  </div>
+</header>
+
+
+<article class="post">
+  <div class="container container-narrow">
+
+    <header class="post-head"><div class="post-tags" aria-label="Post tags">
+        <span class="post-tag mono">#security</span>
+        <span class="post-tag mono">#vuln-scanning</span>
+        <span class="post-tag mono">#ci</span>
+        
+      </div><h1 class="post-title">Lockfile vulns: the 95% you can fix in one PR</h1><p class="post-lede">Most CVEs in your npm or pnpm audit are patch-version bumps with no breaking changes. Here's how to clear the backlog in a single, safe pull request — and why the remaining 5% deserves a different process entirely.</p><div class="post-byline">
+        <span class="post-byline-author">Algosize Engineering</span>
+        <span class="post-byline-sep" aria-hidden="true">·</span>
+        <time datetime="2026-04-22T12:30:00+00:00">April 22, 2026</time>
+        <span class="post-byline-sep" aria-hidden="true">·</span>
+        <span class="post-byline-time">8 min read</span>
+      </div>
+    </header><figure class="post-hero" aria-hidden="true">
+      <img src="/assets/img/blog/lockfile-vulns.svg"
+           alt=""
+           width="1200" height="630"
+           loading="eager" decoding="async" />
+    </figure><aside class="post-toc" id="post-toc" aria-label="Table of contents" hidden>
+      <h2 class="post-toc-title">In this post</h2>
+      <ul id="post-toc-list"></ul>
+    </aside>
+
+    <div class="post-prose" id="post-prose">
+      <p>Open <code class="language-plaintext highlighter-rouge">npm audit</code> on any non-trivial Node project and you will see a wall of red. Forty-six high-severity, twelve critical, three hundred moderate. The nightly CI job flags them. The security dashboard at your shop counts them. Three sprints later the count has gone up, not down, because the team that’s “supposed to” fix them is the same team trying to ship features.</p>
+
+<p>Here’s the thing nobody says out loud: <strong>the overwhelming majority of those CVEs are patch-version bumps with no breaking changes</strong>. The reason your audit count is still climbing isn’t that the fixes are hard. It’s that the workflow for applying them is. People pattern-match on “security work = scary, careful, slow” and so each individual bump becomes a careful, slow, scary three-day investigation.</p>
+
+<p>We’ve watched dozens of teams clear their lockfile vulnerability backlog in a single afternoon. The trick is to stop doing it one CVE at a time, and to be honest about which fixes deserve scrutiny and which deserve a rubber stamp.</p>
+
+<h2 id="the-9541-split">The 95/4/1 split</h2>
+
+<p>Run <code class="language-plaintext highlighter-rouge">npm audit --json</code> (or the pnpm/yarn equivalent) on any production codebase that’s been around for more than a year. Pipe the output through <code class="language-plaintext highlighter-rouge">jq</code> and group findings by the <em>type</em> of fix the audit recommends. Almost every codebase we’ve checked lands in the same shape:</p>
+
+<ul>
+  <li><strong>~95% are patch bumps.</strong> Same major, same minor, fixed patch. <code class="language-plaintext highlighter-rouge">4.17.15</code> → <code class="language-plaintext highlighter-rouge">4.17.21</code>. No API changes by definition (under semver), and the fix is usually a one-line escape, parser tightening, or DoS guard.</li>
+  <li><strong>~4% are minor bumps.</strong> New API surface available, old API still works, behaviour preserved. Slightly more risk because library authors occasionally interpret “minor” loosely.</li>
+  <li><strong>~1% are major bumps.</strong> Breaking API changes, possibly deprecations, possibly a rewrite. These are real engineering work.</li>
+</ul>
+
+<p>The reason the audit feels endless is that teams treat all three buckets identically — every CVE gets the same triage meeting, the same hand-wringing, the same Slack thread. The 1% that needs the meeting is buried under the 95% that doesn’t, and so the meeting never gets the depth it actually deserves.</p>
+
+<p>The fix is to <em>separate</em> the buckets, then apply different processes to each.</p>
+
+<h2 id="the-bump-everything-pr">The bump-everything PR</h2>
+
+<p>The 95% bucket — patch-only, in-range, semver-safe — gets one PR, every two weeks, that bumps every patch. You do not read the changelog of every library. You do not write a test plan for each CVE. You read the diff <em>of the fix’s commit list</em>, run the existing test suite, and merge.</p>
+
+<p>The mechanics in npm:</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>git checkout <span class="nt">-b</span> chore/lockfile-bumps-<span class="si">$(</span><span class="nb">date</span> +%Y-%m-%d<span class="si">)</span>
+npm update           <span class="c"># applies patch+minor bumps respecting your semver ranges</span>
+npm audit fix         <span class="c"># adds explicit overrides for transitive CVEs</span>
+npm <span class="nb">test
+</span>git add package.json package-lock.json
+git commit <span class="nt">-m</span> <span class="s2">"chore(deps): scheduled patch bumps + audit fixes"</span>
+</code></pre></div></div>
+
+<p>That’s the whole PR. It will move dozens to hundreds of versions in a single sweep. The tests either pass or they don’t. If they pass, you ship it.</p>
+
+<p>The objection at this point is always the same: <em>“What if a patch bump silently breaks something the tests don’t catch?”</em> And yes, occasionally a library author misunderstands semver and ships a behavioural change in a patch release. We have seen it. It happens roughly once every two-to-three years per codebase. The risk is real but it is <em>small</em>, and it is dramatically smaller than the risk of running known-vulnerable versions in production for nine more months because the team is paralysed by the size of the audit list.</p>
+
+<p>You also recover from the bad-patch case in fifteen minutes — <code class="language-plaintext highlighter-rouge">npm install lodash@4.17.20</code> (the previous version), commit, deploy, file an issue with the upstream. Compare to the cost of every team running CVE bingo for the next quarter and the trade is obvious.</p>
+
+<h2 id="the-fixturesnapshot-trap">The fixture/snapshot trap</h2>
+
+<p>There’s exactly one common failure mode for the bump-everything PR, and it’s worth calling out so you can pre-empt it: <strong>fixture and snapshot tests built against pinned upstream behaviour</strong>.</p>
+
+<p>Examples:</p>
+
+<ul>
+  <li>A snapshot of an HTTP request body, where the underlying library bumped its default <code class="language-plaintext highlighter-rouge">User-Agent</code> between patch versions and now the snapshot diff is one line of metadata.</li>
+  <li>A test that asserts an exact stack trace string and the library’s error formatter changed.</li>
+  <li>A regex against an exported JSON config that gained a new optional field.</li>
+</ul>
+
+<p>These show up as test failures in your bump PR. They are <em>not</em> real regressions. They’re test-suite tech debt the bump merely surfaced. Resist the urge to revert the bump; instead, loosen the assertion to focus on the behaviour that actually matters and re-record the snapshot. (If you do need to assert exact bytes — for, say, a deterministic build artifact — pin the specific dependency in <code class="language-plaintext highlighter-rouge">package.json</code> with <code class="language-plaintext highlighter-rouge">"library": "1.2.3"</code> and add a comment explaining why.)</p>
+
+<h2 id="ci-lockfile-drift-not-just-audit">CI: lockfile drift, not just audit</h2>
+
+<p>The bump-PR workflow only works if your CI catches <em>new</em> vulnerabilities the next time the schedule runs. The way most teams set this up is <code class="language-plaintext highlighter-rouge">npm audit --audit-level=high</code> in CI, which fails the build the moment a new high-severity CVE drops.</p>
+
+<p>This sounds great until you realise that <em>new high-severity CVEs drop on dependencies you don’t directly control all the time</em>. A perfectly stable PR can suddenly fail CI because a transitive dependency four levels down published a patch with a CVE the day before. Now your “always-green main” branch goes red until somebody runs the bump PR.</p>
+
+<p>Better: split the check into two jobs.</p>
+
+<ol>
+  <li><strong>Block-on-new</strong> — fail the PR build only if <em>this PR</em> introduces a new vulnerability versus <code class="language-plaintext highlighter-rouge">main</code>. This catches developers adding a new dep with a known issue.</li>
+  <li><strong>Notify-on-existing</strong> — run nightly against <code class="language-plaintext highlighter-rouge">main</code>, post the diff to a Slack channel the security team owns. New CVEs get triaged, not enforced — they go onto the backlog the next bump PR will sweep.</li>
+</ol>
+
+<p>This separates “this PR is making things worse” (a hard block, deserves attention) from “the world changed under us” (a notification, batched for the next sweep).</p>
+
+<p>In practice it means the developer who’s trying to ship a feature stops getting paged for vulnerabilities they didn’t introduce, and the security backlog stops being shaped by whoever happened to push commits last Tuesday.</p>
+
+<h2 id="the-4-bucket-minor-bumps">The 4% bucket: minor bumps</h2>
+
+<p>Minor bumps go into a separate PR per library, queued and reviewed sequentially. Same scheduled cadence (every two weeks works well), same person doing the queuing, but each one gets its own PR so the changelog can be read and the smoke-test plan can be written. We have a Slack template:</p>
+
+<blockquote>
+  <p><strong>Minor bump:</strong> <code class="language-plaintext highlighter-rouge">axios 0.21.0 → 0.27.2</code>
+<strong>Changelog:</strong> [link]
+<strong>Surface area used in this codebase:</strong> 4 files, all in <code class="language-plaintext highlighter-rouge">src/api/</code>. Calls <code class="language-plaintext highlighter-rouge">axios.get</code>, <code class="language-plaintext highlighter-rouge">axios.post</code>, <code class="language-plaintext highlighter-rouge">axios.create</code>, <code class="language-plaintext highlighter-rouge">axios.defaults</code>.
+<strong>Verified against:</strong> unit tests, integration smoke (<code class="language-plaintext highlighter-rouge">scripts/smoke-axios.mjs</code>), staging soak (24h).
+<strong>Rollback plan:</strong> revert PR, redeploy. Lockfile is the only artifact.</p>
+</blockquote>
+
+<p>That’s still a small amount of work — maybe 30 minutes per library — but it’s <em>manageable</em> work, and it doesn’t fight for time with the 95% bucket.</p>
+
+<h2 id="the-1-bucket-major-bumps">The 1% bucket: major bumps</h2>
+
+<p>Major bumps are real engineering. They go on the roadmap. They get a story, an estimate, a code-search of every consumer, and a feature flag if the library spans a system boundary. They do not get done in the audit-clearing sweep, and they don’t get done by whoever happens to draw the short straw at security stand-up.</p>
+
+<p>Counter-intuitively, <em>separating</em> the major bumps from the patch bumps means the major bumps actually get done. When everything is on the same backlog, “the audit list” never goes down, the team gives up, and the major bumps pile up forever. When the audit list is a sweep that completes every two weeks, the major bumps stand out, get prioritised, and ship.</p>
+
+<h2 id="worked-example-a-240-cve-backlog">Worked example: a 240-CVE backlog</h2>
+
+<p>A customer came to us last quarter with <code class="language-plaintext highlighter-rouge">npm audit</code> showing 241 vulnerabilities (24 critical, 89 high, 128 moderate). Their security team had been chipping at it for six months and the count had gone <em>up</em> by 14 in that time.</p>
+
+<p>We pulled their lockfile and ran the 95/4/1 split. The actual numbers:</p>
+
+<ul>
+  <li><strong>228</strong> were patch bumps inside their existing semver ranges. <code class="language-plaintext highlighter-rouge">npm audit fix</code> resolved all 228 in one command.</li>
+  <li><strong>9</strong> were minor bumps. Two were Express middleware (read changelog, no surface change), four were utility libraries with deprecation warnings, three were dev-only build tooling.</li>
+  <li><strong>4</strong> were major bumps: a new major of <code class="language-plaintext highlighter-rouge">node-fetch</code>, a major of <code class="language-plaintext highlighter-rouge">react-router</code>, and two ORM majors. None had usable patches available within the existing major.</li>
+</ul>
+
+<p>Total time spent: one engineer-day for the bump-everything PR (most of it waiting for CI), four engineer-days spread across the next sprint for the minors, and the four majors went onto the roadmap. The audit dropped from 241 to 4 in eleven days.</p>
+
+<p>The four remaining issues weren’t a problem to be solved. They were a list of clearly-scoped engineering tasks. That’s the whole point.</p>
+
+<h2 id="a-workflow-you-can-paste-into-a-runbook">A workflow you can paste into a runbook</h2>
+
+<p>Here is the workflow we hand to teams. Copy-paste it.</p>
+
+<ol>
+  <li><strong>Every other Monday:</strong> open the bump-everything PR. Run <code class="language-plaintext highlighter-rouge">npm update &amp;&amp; npm audit fix</code>, run tests, push. If green in 24h, merge. No standalone review meeting required for in-range bumps.</li>
+  <li><strong>Same day:</strong> triage anything <code class="language-plaintext highlighter-rouge">npm audit fix</code> couldn’t resolve into the 4% (minor) or 1% (major) bucket.</li>
+  <li><strong>Within the sprint:</strong> ship the minor-bump PRs, one per library, with the Slack template above.</li>
+  <li><strong>At sprint planning:</strong> any major-version bump becomes a story with an estimate. It is real work; treat it as real work.</li>
+  <li><strong>In CI:</strong> block-on-new on PRs, notify-on-existing on <code class="language-plaintext highlighter-rouge">main</code> nightly.</li>
+</ol>
+
+<p>That’s it. The 95% gets cleared on a schedule, the 4% gets careful per-library attention, and the 1% gets real engineering. The audit count goes down monotonically and stays down.</p>
+
+<blockquote>
+  <p>Most security work isn’t risky. Most security work is just unscheduled.</p>
+</blockquote>
+
+<p>When you stop treating “security” as a special category that demands special process for every line item, and start treating it like any other recurring chore — payroll, dependency updates, secret rotation — the backlog becomes a workflow instead of a wall. And the few items that genuinely deserve scrutiny actually get it.</p>
+
+<p>If you want a scanner that already groups your CVEs into the 95/4/1 buckets and shows you which lockfile lines move where, <a href="/#features">Algosize’s vulnerability scanner</a> does it from a repo URL or a pasted lockfile. But the workflow above will work with <code class="language-plaintext highlighter-rouge">npm audit</code> and a calendar invite.</p>
+
+    </div>
+
+    <script>
+      (function () {
+        var prose = document.getElementById("post-prose");
+        var toc   = document.getElementById("post-toc");
+        var list  = document.getElementById("post-toc-list");
+        if (!prose || !toc || !list) return;
+        var headings = prose.querySelectorAll("h2[id], h3[id]");
+        if (headings.length < 3) return;
+        var sub = null;
+        headings.forEach(function (h) {
+          var li = document.createElement("li");
+          var a  = document.createElement("a");
+          a.href = "#" + h.id;
+          a.textContent = h.textContent;
+          li.appendChild(a);
+          if (h.tagName === "H2") {
+            list.appendChild(li);
+            sub = null;
+          } else {
+            if (!sub) {
+              var lastTop = list.lastElementChild;
+              if (!lastTop) { list.appendChild(li); return; }
+              sub = document.createElement("ul");
+              lastTop.appendChild(sub);
+            }
+            sub.appendChild(li);
+          }
+        });
+        toc.hidden = false;
+      })();
+    </script>
+
+    <hr class="post-divider" />
+
+    <aside class="post-cta" aria-label="Try Algosize">
+      <h2 class="post-cta-title">Stop reading. Start optimizing.</h2>
+      <p class="post-cta-body">
+        Algosize is one tool for the three bills engineering teams keep paying:
+        wasted cloud, undiscovered vulnerabilities, and slow code that ships
+        anyway. Five free runs a month, no credit card to browse.
+      </p>
+      <p class="post-cta-actions">
+        <a href="/#pricing" class="btn btn-primary" data-cta="post-footer">
+          See pricing →
+        </a>
+        <a href="/dashboard/" class="btn btn-ghost">Open the dashboard</a>
+      </p>
+    </aside>
+
+  </div>
+</article><script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "mainEntityOfPage": { "@type": "WebPage", "@id": "https://algosize.com/blog/lockfile-vulns-the-95-percent-you-can-fix-in-one-pr/" },
+  "headline": "Lockfile vulns: the 95% you can fix in one PR",
+  "description": "Most CVEs in your npm or pnpm audit are patch-version bumps with no breaking changes. Here's how to clear the backlog in a single, safe pull request — and why the remaining 5% deserves a different process entirely.",
+  "datePublished": "2026-04-22T12:30:00+00:00",
+  "dateModified": "2026-04-22T12:30:00+00:00",
+  "author":    { "@type": "Organization", "name": "Algosize Engineering" },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Algosize",
+    "logo": { "@type": "ImageObject", "url": "https://algosize.com/apple-touch-icon.png" }
+  },
+  "image": "https://algosize.com/assets/img/blog/lockfile-vulns.svg"}
+</script>
+
+<footer class="footer">
+  <div class="container">
+    <div class="footer-inner">
+      <a href="/" class="brand">
+        <span class="brand-mark" aria-hidden="true">[as]</span>
+        <span class="brand-word">Algosize</span>
+      </a>
+      <nav class="footer-links" aria-label="Footer">
+        <a href="/#features">Features</a>
+        <a href="/#pricing">Pricing</a>
+        <a href="/blog/">Blog</a>
+        <a href="/dashboard/">Dashboard</a>
+      </nav>
+      <span class="footer-copy">© 2026 Algosize</span>
+    </div>
+  </div>
+</footer>
+
+<noscript>
+      <img src="/api/pageview?d=algosize.com&u=https://algosize.com/blog/lockfile-vulns-the-95-percent-you-can-fix-in-one-pr/"
+           alt="" width="1" height="1" style="position:absolute;left:-9999px" />
+    </noscript><script>
+      // API base for the Worker. Empty in production (same origin via
+      // Cloudflare route algosize.com/api/*); set to the wrangler dev URL
+      // in local development. See site/_config.yml.
+      window.ALGOSIZE_API_BASE = "";
+    </script>
+    <script src="/assets/js/checkout.js" defer></script>
+    <script src="/assets/js/analytics.js" defer></script>
+  </body>
+</html>
