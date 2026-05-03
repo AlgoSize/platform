@@ -42,7 +42,7 @@ export async function sendTransactional(env, ctx, msg) {
   if (!msg || typeof msg.to !== "string" || !msg.to.includes("@")) {
     await captureException(env, ctx, new Error("sendTransactional: invalid recipient"), {
       tags: { source: "email_transactional", reason: "invalid_recipient" },
-      extra: { to: msg && msg.to },
+      extra: { to: redact(msg && msg.to) },
     });
     return { sent: false, reason: "invalid_recipient" };
   }

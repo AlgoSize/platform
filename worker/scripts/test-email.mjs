@@ -148,6 +148,25 @@ console.log("\nemail/google — buildRfc822Message\n");
 
   const utf8 = buildRfc822Message({ from: "a@b", to: "c@d", subject: "Café — 5/月", text: "x" });
   expect(/Subject: =\?UTF-8\?B\?/.test(utf8), "non-ASCII subject is RFC 2047 encoded");
+
+  // Content-Transfer-Encoding must match the body. ASCII-only → 7bit;
+  // anything outside the 0–127 range MUST be 8bit (or QP/base64) per
+  // RFC 5322 / 6532. The welcome template uses em-dashes and arrows,
+  // so the bug-of-record looked like 7bit declared with non-ASCII bytes.
+  const asciiOnly = buildRfc822Message({ from: "a@b", to: "c@d", subject: "x", text: "plain ascii body" });
+  expect(/Content-Transfer-Encoding: 7bit/.test(asciiOnly), "ASCII-only body declares 7bit");
+  const utf8Body = buildRfc822Message({ from: "a@b", to: "c@d", subject: "x", text: "Hello — café ☕" });
+  expect(/Content-Transfer-Encoding: 8bit/.test(utf8Body), "non-ASCII body declares 8bit");
+  expect(!/Content-Transfer-Encoding: 7bit/.test(utf8Body), "non-ASCII body never declares 7bit");
+  // Multipart: each part picks its own CTE independently.
+  const mixed = buildRfc822Message({
+    from: "a@b", to: "c@d", subject: "x",
+    text: "plain ascii",
+    html: "<p>fancy — body</p>",
+  });
+  // Should contain BOTH a 7bit (text) and an 8bit (html) declaration.
+  expect((mixed.match(/Content-Transfer-Encoding: 7bit/g) || []).length === 1, "multipart text/plain part is 7bit");
+  expect((mixed.match(/Content-Transfer-Encoding: 8bit/g) || []).length === 1, "multipart text/html part is 8bit");
 }
 
 // ---------------------------------------------------------------------------

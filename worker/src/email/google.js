@@ -170,6 +170,30 @@ function encodeHeader(value) {
   return `=?UTF-8?B?${btoa(unescape(encodeURIComponent(s)))}?=`;
 }
 
+// Pick the correct Content-Transfer-Encoding for a body. Anything in
+// the printable-ASCII range can ride as 7bit; once a single em-dash,
+// arrow, or accented character appears (and our welcome template has
+// several) the part MUST be declared 8bit (or quoted-printable / base64).
+// We pick 8bit because:
+//   - The Gmail API accepts the raw 8-bit message verbatim — no
+//     7-bit-only SMTP relay sits between us and the recipient.
+//   - Receiving MTAs negotiate 8BITMIME on the inbound hop; modern
+//     servers (Gmail, iCloud, Outlook) all advertise it.
+//   - It keeps the body human-readable in `Show Original`, which
+//     would be much harder with quoted-printable or base64.
+function pickCte(body) {
+  return /^[\x00-\x7f]*$/.test(body) ? "7bit" : "8bit";
+}
+
+function bodyPart(contentType, body) {
+  return [
+    `Content-Type: ${contentType}; charset=UTF-8`,
+    `Content-Transfer-Encoding: ${pickCte(body)}`,
+    "",
+    body,
+  ];
+}
+
 export function buildRfc822Message({ from, to, subject, text, html, replyTo }) {
   const boundary = `algosize_${crypto.randomUUID().replace(/-/g, "")}`;
   const lines = [
@@ -182,14 +206,14 @@ export function buildRfc822Message({ from, to, subject, text, html, replyTo }) {
   if (html && text) {
     lines.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
     lines.push("", `--${boundary}`);
-    lines.push("Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: 7bit", "", text);
+    lines.push(...bodyPart("text/plain", text));
     lines.push(`--${boundary}`);
-    lines.push("Content-Type: text/html; charset=UTF-8",  "Content-Transfer-Encoding: 7bit", "", html);
+    lines.push(...bodyPart("text/html", html));
     lines.push(`--${boundary}--`);
   } else if (html) {
-    lines.push("Content-Type: text/html; charset=UTF-8",  "Content-Transfer-Encoding: 7bit", "", html);
+    lines.push(...bodyPart("text/html", html));
   } else {
-    lines.push("Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: 7bit", "", text || "");
+    lines.push(...bodyPart("text/plain", text || ""));
   }
   return lines.join("\r\n");
 }

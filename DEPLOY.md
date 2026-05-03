@@ -21,6 +21,8 @@ and lists every value you'll need to substitute (`<like-this>`).
 | KV namespace `USERS` (quota only)  | Cloudflare KV                       | `wrangler kv namespace create` |
 | D1 database `algosize`             | Cloudflare D1                       | `wrangler d1 create` (§2.5) |
 | 4 Worker secrets                   | Cloudflare (per-env)                | `wrangler secret put` (§3)  |
+| Google Workspace service account   | Google Cloud + Workspace admin      | manual (§3.6) — DWD on `gmail.send` |
+| SPF / DKIM / DMARC TXT records     | Your DNS registrar                  | manual (§4.4) — needed for inbox delivery |
 | Stripe product + recurring price   | Stripe dashboard                    | manual (§5–§6)              |
 | Stripe webhook → Worker            | Stripe dashboard                    | manual (§5)                 |
 
@@ -850,6 +852,99 @@ You'll then need to:
 The default route-on-apex path (§4.2) is simpler — use it unless you have
 a reason to split the API onto its own subdomain.
 
+### 4.4 DNS — SPF, DKIM, DMARC for Workspace mail (Task #56)
+
+The Worker sends transactional mail through Google Workspace (§3.6).
+Without the three records below, Gmail/Apple/Outlook will mark the
+welcome email as **"unverified sender"** and route a large fraction
+of it to spam. Add them at your DNS registrar (NOT at Cloudflare —
+the apex is on GitHub Pages and you don't need Cloudflare DNS for
+Workspace mail; see §4.1 if you've already migrated).
+
+#### SPF — authorize Google to send as algosize.com
+
+Add a TXT record at the apex:
+
+```
+@   TXT   "v=spf1 include:_spf.google.com ~all"
+```
+
+If you already have an SPF record (e.g. from a previous mail provider
+or marketing tool), **merge** rather than add a second — only one SPF
+record per domain is allowed by RFC 7208. The `include:` mechanism
+chains, e.g.:
+
+```
+@   TXT   "v=spf1 include:_spf.google.com include:mail.zendesk.com ~all"
+```
+
+`~all` (soft-fail) is what Workspace's own setup wizard recommends
+during rollout — flip to `-all` (hard-fail) once you've verified
+no other system sends as `@algosize.com`.
+
+#### DKIM — sign outbound mail with a Workspace key
+
+Workspace generates the DKIM key for you, but you must publish the
+public half at the registrar. In Workspace admin:
+
+1. <https://admin.google.com> → **Apps → Google Workspace → Gmail →
+   Authenticate email**.
+2. Pick the `algosize.com` domain → **Generate new record** → choose
+   **2048-bit** key length and selector prefix `google` (default).
+3. Workspace shows a TXT record. Copy the `Hostname` and `Value`.
+4. At your registrar, publish:
+   ```
+   google._domainkey.algosize.com   TXT   "v=DKIM1; k=rsa; p=<long-public-key-from-Workspace>"
+   ```
+   The value is ~400 chars. Most registrars need it split into
+   255-char strings concatenated, like
+   `"v=DKIM1; k=rsa; p=ABC..." "...XYZ"` — your registrar's UI
+   handles this if you paste the whole value.
+5. Back in Workspace admin, click **Start authentication**. Status
+   flips to **Authenticating email** (~5–60 min) then **Authenticated**.
+
+#### DMARC — tell receivers what to do with unauthenticated mail
+
+Add a TXT record at `_dmarc.algosize.com`:
+
+```
+_dmarc   TXT   "v=DMARC1; p=none; rua=mailto:dmarc@algosize.com; pct=100; adkim=s; aspf=s"
+```
+
+Start with `p=none` for ≥ 7 days so you can collect aggregate reports
+to `dmarc@algosize.com` (create that mailbox in Workspace first) and
+catch any misaligned senders. Once reports show 100% pass, tighten:
+
+```
+# After 7 days of clean reports:
+_dmarc   TXT   "v=DMARC1; p=quarantine; rua=mailto:dmarc@algosize.com; pct=100; adkim=s; aspf=s"
+
+# After another 7 days at quarantine:
+_dmarc   TXT   "v=DMARC1; p=reject; rua=mailto:dmarc@algosize.com; pct=100; adkim=s; aspf=s"
+```
+
+`adkim=s` and `aspf=s` are strict alignment — only exact-domain matches
+pass. Required for the algosize.com brand to actually appear as a
+trusted sender in Gmail's BIMI-style sender preview.
+
+#### Verify
+
+```bash
+dig +short TXT algosize.com | grep spf1
+# expect: "v=spf1 include:_spf.google.com ~all"
+
+dig +short TXT google._domainkey.algosize.com
+# expect: "v=DKIM1; k=rsa; p=..."
+
+dig +short TXT _dmarc.algosize.com
+# expect: "v=DMARC1; p=none; rua=mailto:dmarc@algosize.com; ..."
+```
+
+Belt-and-braces deliverability check: <https://www.mail-tester.com>
+gives a free 10/10 score test — sign up to algosize, forward the
+welcome email to the test address it gives you, click "Then check
+your score". Fix anything < 9/10 before announcing.
+
 ---
 
 ## 5. Stripe webhook → Worker → back to Cloudflare
@@ -1281,8 +1376,12 @@ provision:
 | `STRIPE_SECRET_KEY`     | secret  | `worker/src/stripe.js` — Bearer auth on `api.stripe.com` (used by checkout AND `/api/billing/portal`) |
 | `STRIPE_WEBHOOK_SECRET` | secret  | `worker/src/handlers/webhook.js` — HMAC verify   |
 | `STRIPE_PRICE_ID`       | secret  | `worker/src/stripe.js` — `line_items[0][price]`  |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | secret | `worker/src/email/google.js` — Workspace service-account JSON for Gmail-API send (Task #56). Optional — when unset, sendTransactional no-ops. |
 | `SITE_ORIGIN`           | var     | `worker/src/cors.js`, `handlers/checkout.js` — CORS allow + redirect targets |
 | `COOKIE_NAME`           | var     | `worker/src/auth.js` — session cookie name (`algosize_session`) |
+| `EMAIL_FROM`            | var     | `worker/src/email/transactional.js` — From: header on transactional mail (Task #56) |
+| `EMAIL_DELEGATED_USER`  | var     | `worker/src/email/google.js` — Workspace mailbox the service account impersonates via DWD |
+| `EMAIL_REPLY_TO`        | var     | `worker/src/email/transactional.js` — optional Reply-To override; defaults to EMAIL_FROM |
 | `SESSIONS` (KV)         | binding | `worker/src/auth.js` — JWT TTL store              |
 | `USERS` (KV)            | binding | `worker/src/handlers/_users.js` — subscriber records, free-tier quota counters (`quota:<userId>:<YYYY-MM>`, 35d TTL) |
 
