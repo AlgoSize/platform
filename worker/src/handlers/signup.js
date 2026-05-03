@@ -14,6 +14,8 @@
 
 import { issueJWT, buildSessionCookie } from "../auth.js";
 import { createFreeUser } from "./_users.js";
+import { sendTransactional } from "../email/transactional.js";
+import { welcomeFreeSignup } from "../email/templates.js";
 
 // Pragmatic email regex: requires `@` with non-empty local + domain parts
 // and a TLD. We're not trying to perfectly match RFC 5322 — Stripe (paid
@@ -29,7 +31,7 @@ function jsonResponse(body, status = 200, extraHeaders = {}) {
   });
 }
 
-export async function signupHandler(request, env) {
+export async function signupHandler(request, env, ctx) {
   let body;
   try {
     body = await request.json();
@@ -66,6 +68,23 @@ export async function signupHandler(request, env) {
   const cookie = buildSessionCookie(env, token, {
     secure: !env.SITE_ORIGIN.startsWith("http://localhost"),
   });
+
+  // Fire-and-forget welcome email (Task #56). The HTTP response below
+  // MUST NOT wait on Gmail — a Workspace outage cannot block signups —
+  // so the send rides on ctx.waitUntil and any failure is captured by
+  // sendTransactional itself via the observability pipe.
+  const welcome = welcomeFreeSignup({ email: user.email });
+  const emailPromise = sendTransactional(env, ctx, {
+    to:      user.email,
+    subject: welcome.subject,
+    text:    welcome.text,
+    html:    welcome.html,
+  });
+  if (ctx && typeof ctx.waitUntil === "function") {
+    ctx.waitUntil(emailPromise);
+  } else {
+    void emailPromise;   // dev / test path with no ExecutionContext
+  }
 
   return jsonResponse(
     {

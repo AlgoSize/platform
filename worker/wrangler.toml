@@ -58,6 +58,19 @@ COOKIE_NAME = "algosize_session"
 # the site's _config.production.yml `analytics.domain`.
 ANALYTICS_DOMAIN  = "algosize.com"
 PLAUSIBLE_ENDPOINT = "https://plausible.io"
+# Transactional email (Task #56) — Google Workspace via Gmail API.
+# EMAIL_FROM         displayed From: header (RFC 5322 with optional name).
+# EMAIL_DELEGATED_USER  Workspace mailbox the service account impersonates
+#                    via domain-wide delegation. Must match a real user
+#                    inbox on the Workspace tenant. The Gmail API send
+#                    URL embeds this as the {userId} path segment.
+# EMAIL_REPLY_TO     optional override for the Reply-To: header. If unset,
+#                    replies go back to EMAIL_FROM.
+# Local dev: leave the placeholder values; sendTransactional treats
+# missing GOOGLE_SERVICE_ACCOUNT_JSON as "not configured" and silently
+# no-ops with a single warn-level log line. See DEPLOY.md §3.6.
+EMAIL_FROM           = "Algosize <noreply@algosize.com>"
+EMAIL_DELEGATED_USER = "noreply@algosize.com"
 
 # ----------------------------------------------------------------------------
 # Production overrides (used by `wrangler deploy --env production`).
@@ -84,6 +97,8 @@ SITE_ORIGIN = "https://algosize.com"
 COOKIE_NAME = "algosize_session"
 ANALYTICS_DOMAIN  = "algosize.com"
 PLAUSIBLE_ENDPOINT = "https://plausible.io"
+EMAIL_FROM           = "Algosize <noreply@algosize.com>"
+EMAIL_DELEGATED_USER = "noreply@algosize.com"
 
 [[env.production.kv_namespaces]]
 binding = "SESSIONS"
@@ -127,6 +142,10 @@ SITE_ORIGIN = "https://staging.algosize.com"
 COOKIE_NAME = "algosize_session"
 ANALYTICS_DOMAIN  = "staging.algosize.com"
 PLAUSIBLE_ENDPOINT = "https://plausible.io"
+# Staging uses the same Workspace tenant; use a separate mailbox so test
+# sends don't touch the production noreply@ inbox.
+EMAIL_FROM           = "Algosize Staging <noreply-staging@algosize.com>"
+EMAIL_DELEGATED_USER = "noreply-staging@algosize.com"
 
 # KV namespace IDs are placeholders. Create the real ones with:
 #   wrangler kv namespace create SESSIONS --env staging
@@ -167,6 +186,15 @@ service = "algosize-sandbox-staging"
 #                          analyzer still returns timing + Big-O — the
 #                          suggestion section just shows a "set OPENAI_API_KEY
 #                          to enable AI suggestions" notice.
+#   GOOGLE_SERVICE_ACCOUNT_JSON
+#                          Full JSON key file from Google Cloud Console for
+#                          the service account that has domain-wide
+#                          delegation on the Workspace tenant for the
+#                          gmail.send scope (Task #56). When unset the
+#                          worker still creates accounts — sendTransactional
+#                          just no-ops with a single warn-level log line.
+#                          Provisioning + rotation steps live in DEPLOY.md
+#                          §3.6, DNS records (SPF/DKIM/DMARC) in §4.4.
 #
 # Local dev: put these in `worker/.dev.vars` (gitignored). See
 # `worker/.dev.vars.example` for the template.
@@ -177,6 +205,7 @@ service = "algosize-sandbox-staging"
 #   cd worker && wrangler secret put STRIPE_WEBHOOK_SECRET  --env production
 #   cd worker && wrangler secret put STRIPE_PRICE_ID        --env production
 #   cd worker && wrangler secret put OPENAI_API_KEY         --env production
+#   cd worker && wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON --env production
 #
 # Staging: same names, different values (Stripe TEST mode keys, separate
 # Sentry project DSN, etc.). Set them with `--env staging`:

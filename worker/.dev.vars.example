@@ -13,3 +13,10 @@ JWT_SECRET=replace_with_long_random_string_at_least_32_bytes_please
 STRIPE_SECRET_KEY=sk_test_replace_me
 STRIPE_WEBHOOK_SECRET=whsec_replace_me
 STRIPE_PRICE_ID=price_replace_me
+
+# Google Workspace — transactional email via Gmail API (Task #56).
+# Leave UNSET locally to disable email sends; sendTransactional will
+# no-op with a single warn-level log line. To exercise the real send
+# path, paste the full JSON of a service-account key (one line, with
+# embedded \n inside the private_key string preserved):
+# GOOGLE_SERVICE_ACCOUNT_JSON={"type":"service_account","project_id":"...","private_key":"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n","client_email":"algosize-mailer@<proj>.iam.gserviceaccount.com",...}
