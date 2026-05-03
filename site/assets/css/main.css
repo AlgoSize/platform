@@ -402,7 +402,7 @@ code, .mono {
 
 /* --- Pricing ---
    Layout (Task #55): pitch stacks on top at all widths, two plan cards
-   sit side-by-side below at >=720px so each card gets the full
+   sit side-by-side below at >=760px so each card gets the full
    container width. Previously the two cards were nested inside a 1.1fr
    column of a 2-col page grid, leaving each card ~25% of viewport — the
    email input + CTA were crushed and bullets wrapped to 3 lines. */
@@ -539,14 +539,15 @@ code, .mono {
 
 /* --- Free + Pro plan grid (Task #19, rebalanced in Task #55) — sits
        full-width below the pitch and splits into two equal columns from
-       720px upwards. Free card is intentionally smaller-feeling (no top
-       gradient bloom) so the Pro card stays the visual anchor. --- */
+       760px upwards (chosen over 720px so each card has ≥340px content
+       room before splitting). Free card is intentionally smaller-feeling
+       (no top gradient bloom) so the Pro card stays the visual anchor. --- */
 .plan-grid {
   display: grid;
   gap: var(--s-5);
   grid-template-columns: 1fr;
 }
-@media (min-width: 720px) {
+@media (min-width: 760px) {
   .plan-grid {
     grid-template-columns: 1fr 1fr;
     align-items: stretch;
