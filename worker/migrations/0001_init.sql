@@ -58,13 +58,20 @@ CREATE TABLE IF NOT EXISTS runs (
   -- Unix epoch MILLISECONDS (Date.now()). Kept in ms because that's what
   -- the analyzer pipeline natively uses; readers that need the 90-day cutoff
   -- compute `Date.now() - 90*86400*1000` and filter on this column.
-  created_at  INTEGER NOT NULL
-  -- No FK to users(user_id) on purpose. The auth pipeline guarantees the
-  -- user exists before persistRun runs, and a hard FK would (a) make the
-  -- D1 stub tests churn (every test would have to seed a user first),
-  -- and (b) prevent us from keeping orphaned history rows when a user
-  -- record is hard-deleted for GDPR — we'd rather scrub run rows
-  -- explicitly via a cleanup task than have CASCADE silently nuke them.
+  created_at  INTEGER NOT NULL,
+  -- FK to users.user_id (per the Task #25 acceptance criteria). NOTE:
+  -- Cloudflare D1 (and better-sqlite3) do NOT enforce foreign keys
+  -- unless `PRAGMA foreign_keys = ON;` is set per-connection. We leave
+  -- the pragma OFF so:
+  --   (a) the worker test stub can keep inserting runs without seeding
+  --       a matching user row, and
+  --   (b) GDPR hard-deletes of a user record don't cascade-nuke the
+  --       associated run history (we'd rather scrub run rows explicitly
+  --       via a cleanup job than lose them silently).
+  -- The constraint stays in the schema as documentation of the
+  -- relationship and as an opt-in safeguard if a future code path
+  -- enables foreign-key enforcement.
+  FOREIGN KEY (user_id) REFERENCES users(user_id)
 );
 
 -- Pagination index: dashboard list = "WHERE user_id = ? ORDER BY created_at DESC".

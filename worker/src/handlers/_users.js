@@ -79,50 +79,55 @@ export async function getUserById(env, userId) {
 export async function upsertUserFromCheckout(env, { email, stripeCustomerId, subStatus }) {
   const now = Math.floor(Date.now() / 1000);
   const lowered = email.toLowerCase();
+  const newId = newUserId();
 
-  // Look up by Stripe customer first (most authoritative — a duplicate
-  // signup would still come back to the same Stripe customer object), then
-  // fall back to email so a free signup that later upgrades is found.
-  const existing =
-    (await getUserByCustomerId(env, stripeCustomerId)) ||
-    (await getUserByEmail(env, lowered));
+  // Atomic UPSERT — both the success_url handler and the
+  // checkout.session.completed webhook can land here concurrently for
+  // the same customer. A read-then-insert pattern would race on the
+  // UNIQUE(email) / UNIQUE(stripe_customer_id) constraints and 500.
+  // SQLite/D1 supports a single ON CONFLICT clause, so we resolve in
+  // two passes: ON CONFLICT(stripe_customer_id) covers the common case
+  // (same customer hits us twice); a residual UNIQUE(email) race is
+  // caught and retried as an update keyed on email.
+  const insertSql = `
+    INSERT INTO users
+      (user_id, email, stripe_customer_id, plan, sub_status, created_at, updated_at)
+    VALUES (?, ?, ?, 'paid', ?, ?, ?)
+    ON CONFLICT(stripe_customer_id) DO UPDATE SET
+      email      = excluded.email,
+      plan       = 'paid',
+      sub_status = excluded.sub_status,
+      updated_at = excluded.updated_at
+    RETURNING *`;
 
-  if (existing) {
+  let row;
+  try {
+    row = await env.DB
+      .prepare(insertSql)
+      .bind(newId, lowered, stripeCustomerId, subStatus, now, now)
+      .first();
+  } catch (e) {
+    // The remaining race window: a row already exists with this email
+    // but a NULL stripe_customer_id (free signup just upgrading), so the
+    // ON CONFLICT(stripe_customer_id) branch doesn't fire and we trip
+    // UNIQUE(email) instead. Update keyed on email and re-read.
+    const msg = String(e && e.message || e);
+    if (!/UNIQUE.*users\.email/i.test(msg)) throw e;
     await env.DB.prepare(
       `UPDATE users
-          SET email = ?,
-              stripe_customer_id = ?,
+          SET stripe_customer_id = ?,
               plan = 'paid',
               sub_status = ?,
               updated_at = ?
-        WHERE user_id = ?`,
-    ).bind(lowered, stripeCustomerId, subStatus, now, existing.userId).run();
-
-    return {
-      ...existing,
-      email:            lowered,
-      stripeCustomerId,
-      plan:             "paid",
-      subStatus,
-      updatedAt:        now,
-    };
+        WHERE email = ?`,
+    ).bind(stripeCustomerId, subStatus, now, lowered).run();
+    row = await env.DB
+      .prepare("SELECT * FROM users WHERE email = ?")
+      .bind(lowered)
+      .first();
   }
 
-  const userId = newUserId();
-  await env.DB.prepare(
-    `INSERT INTO users (user_id, email, stripe_customer_id, plan, sub_status, created_at, updated_at)
-     VALUES (?, ?, ?, 'paid', ?, ?, ?)`,
-  ).bind(userId, lowered, stripeCustomerId, subStatus, now, now).run();
-
-  return {
-    userId,
-    email:            lowered,
-    plan:             "paid",
-    stripeCustomerId,
-    subStatus,
-    createdAt:        now,
-    updatedAt:        now,
-  };
+  return rowToUser(row);
 }
 
 /**

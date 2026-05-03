@@ -29,6 +29,12 @@ const SCHEMA_SQL = readFileSync(SCHEMA_PATH, "utf8");
 /** Create an in-memory D1 binding with the schema applied. */
 export function makeD1() {
   const db = new Database(":memory:");
+  // Match Cloudflare D1's default behavior: foreign keys are NOT enforced
+  // unless `PRAGMA foreign_keys = ON;` is issued per-connection. The
+  // schema declares the runs.user_id → users.user_id relationship as
+  // documentation, but tests intentionally insert run rows without
+  // seeding users.
+  db.pragma("foreign_keys = OFF");
   db.exec(SCHEMA_SQL);
   return wrapAsD1(db);
 }
@@ -40,32 +46,39 @@ export function makeD1() {
  */
 export function makeFailingD1({ failOn = 1 } = {}) {
   const db = new Database(":memory:");
+  db.pragma("foreign_keys = OFF");
   db.exec(SCHEMA_SQL);
   const binding = wrapAsD1(db);
   let writes = 0;
+  // Identify SQL that performs a write (and therefore counts toward the
+  // failure budget). Includes INSERT…RETURNING / UPDATE…RETURNING /
+  // DELETE…RETURNING — those land on .first() instead of .run() but are
+  // still writes from D1's point of view.
+  const isWrite = (sql) => /^\s*(?:WITH\s+[\s\S]*?\bAS\s*\(|)\s*(INSERT|UPDATE|DELETE|REPLACE)\b/i.test(sql);
   const realPrepare = binding.prepare;
   binding.prepare = (sql) => {
     const stmt = realPrepare(sql);
-    const realRun = stmt.run.bind(stmt);
-    stmt.run = async (...args) => {
-      writes++;
-      if (writes <= failOn) throw new Error("simulated D1 write failure");
-      return realRun(...args);
-    };
-    // Patch .bind() to also wrap the returned statement's .run().
-    const realBind = stmt.bind.bind(stmt);
-    stmt.bind = (...bargs) => {
-      const bound = realBind(...bargs);
-      const boundRun = bound.run.bind(bound);
-      bound.run = async (...args) => {
+    return wrapStmt(stmt, sql);
+  };
+  function wrapStmt(stmt, sql) {
+    const writePath = isWrite(sql);
+    const wrap = (fn) => async (...args) => {
+      if (writePath) {
         writes++;
         if (writes <= failOn) throw new Error("simulated D1 write failure");
-        return boundRun(...args);
-      };
-      return bound;
+      }
+      return fn(...args);
     };
+    const realRun   = stmt.run.bind(stmt);
+    const realFirst = stmt.first.bind(stmt);
+    const realAll   = stmt.all.bind(stmt);
+    const realBind  = stmt.bind.bind(stmt);
+    stmt.run   = wrap(realRun);
+    stmt.first = wrap(realFirst);
+    stmt.all   = wrap(realAll);
+    stmt.bind  = (...bargs) => wrapStmt(realBind(...bargs), sql);
     return stmt;
-  };
+  }
   return binding;
 }
 
