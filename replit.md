@@ -12,7 +12,7 @@ Algosize helps engineering teams cut cloud spend, find vulnerabilities, and opti
 ## Tech stack
 - **Frontend:** Jekyll ~> 4.3.2 (Ruby 3.2), vanilla HTML/CSS, plain `fetch` for API calls.
 - **Backend:** Cloudflare Worker on Node.js 20 tooling (wrangler), Web Crypto for JWT and Stripe webhook signature verification.
-- **Storage:** Cloudflare KV namespaces — `SESSIONS` (JWT TTL store), `USERS` (subscriber records), `RUNS` (per-user analyzer history with 90-day TTL).
+- **Storage:** Cloudflare D1 (`DB`, db `algosize`) holds the canonical `users` and `runs` rows (per-user analyzer history). Cloudflare KV is used only for `SESSIONS` (rotating JWT store + Stripe-event dedup) and `USERS` (monthly quota counters at `quota:<userId>:<YYYY-MM>` — high write-rate workload). The legacy `RUNS` KV namespace was retired when run history moved to D1 (Task #25).
 - **Payments:** Stripe (Checkout + webhooks), called via `fetch` — no Node SDK.
 
 ## Running locally
@@ -205,3 +205,47 @@ Worker test suites (run with `cd worker && npm test`):
   `test-webhook-idempotency.mjs`, `test-rate-limit.mjs`,
   `test-observability.mjs`, `test-observability-handlers.mjs` — all
   green (628 assertions across 14 files).
+
+## Production live (2026-05-03)
+
+The Worker `algosize` is now live on `algosize.com/api/*` (zone `algosize.com`).
+Resolution chain for the long-standing 404/405 outage:
+
+1. `worker/wrangler.toml` did not have a production route — added
+   `[[env.production.routes]] pattern = "algosize.com/api/*"` (commit
+   `01ce181`, Task #54).
+2. A stale root-level `wrangler.jsonc` from the
+   `cloudflare/workers-autoconfig` autoconfig branch was overriding
+   `worker/wrangler.toml` when `wrangler` ran from `worker/`. Removed it
+   (same commit).
+3. Production D1 had never been created — `database_id` in
+   `wrangler.toml` was the placeholder `00000000-…-000000000000`,
+   so every CI deploy of `algosize` failed with Cloudflare error
+   `10181 D1 binding 'DB' references database … which was not found`,
+   which is why the route never bound. Created the D1 via the CF API
+   (uuid `cfe388b1-8423-48ec-b1ec-358e3a8127d8`), applied
+   `worker/migrations/0001_init.sql` against it (`users`, `runs`,
+   indexes), and patched `wrangler.toml` with the real uuid (commit
+   `6be379b`).
+4. Worker had zero secrets set in production. Generated a 64-char
+   `JWT_SECRET` and uploaded via `wrangler secret put`. The "Secret
+   Change" deploy unbound runtime config briefly; a fresh
+   `wrangler deploy --env production` re-bound everything in one step
+   (D1, KV, SANDBOX service, route).
+
+Verified live (cookie-jar end-to-end):
+- `POST /api/signup` (free) → 201 + session cookie + D1 row
+- `POST /api/signup` (duplicate email) → 409 `email_taken`
+- `GET  /api/me` → 200 with plan/quota
+- `GET  /api/runs` → 200 `{items:[],nextCursor:null}`
+- `POST /api/analyze/vuln` → 200 with findings
+- `POST /api/analyze/cost` / `/algo` → 400 with proper input-validation
+  errors (correct behaviour for malformed input — the gating works)
+
+Still TODO (not blocking the dashboard):
+- `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID` —
+  required only for paid signup + the Stripe webhook.
+- `OPENAI_API_KEY` — analyzers fall back to a stub when missing
+  (per `worker/src/analyzers/llm.js`); set this to enable AI savings
+  suggestions on the cost/vuln/algo pages.
+- `SENTRY_DSN` — observability only; everything works without it.
