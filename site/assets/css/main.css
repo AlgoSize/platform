@@ -400,15 +400,26 @@ code, .mono {
   letter-spacing: 0.1em;
 }
 
-/* --- Pricing --- */
+/* --- Pricing ---
+   Layout (Task #55): pitch stacks on top at all widths, two plan cards
+   sit side-by-side below at >=720px so each card gets the full
+   container width. Previously the two cards were nested inside a 1.1fr
+   column of a 2-col page grid, leaving each card ~25% of viewport — the
+   email input + CTA were crushed and bullets wrapped to 3 lines. */
 .pricing-wrap {
   display: grid;
   gap: var(--s-7);
   grid-template-columns: 1fr;
-  align-items: center;
+  align-items: start;
 }
 @media (min-width: 900px) {
-  .pricing-wrap { grid-template-columns: 1fr 1.1fr; gap: var(--s-8); }
+  .pricing-wrap { gap: var(--s-8); }
+}
+.pricing-pitch {
+  /* Cap the pitch column to a comfortable reading measure now that it
+     spans the full container; otherwise the paragraph runs uncomfortably
+     wide on a 1280px viewport. */
+  max-width: 760px;
 }
 .pricing-pitch h2 {
   font-size: clamp(1.6rem, 3vw + 0.5rem, var(--fs-2xl));
@@ -526,17 +537,21 @@ code, .mono {
   text-align: center;
 }
 
-/* --- Free + Pro plan grid (Task #19) — stacks the two .plan cards
-       inside the right-hand column of .pricing-wrap. Free card is
-       intentionally smaller-feeling (no top gradient bloom) so the Pro
-       card stays the visual anchor. --- */
+/* --- Free + Pro plan grid (Task #19, rebalanced in Task #55) — sits
+       full-width below the pitch and splits into two equal columns from
+       720px upwards. Free card is intentionally smaller-feeling (no top
+       gradient bloom) so the Pro card stays the visual anchor. --- */
 .plan-grid {
   display: grid;
   gap: var(--s-5);
   grid-template-columns: 1fr;
 }
-@media (min-width: 1080px) {
-  .plan-grid { grid-template-columns: 1fr 1fr; align-items: stretch; }
+@media (min-width: 720px) {
+  .plan-grid {
+    grid-template-columns: 1fr 1fr;
+    align-items: stretch;
+    gap: var(--s-6);
+  }
 }
 .plan-free {
   background: var(--bg-card);   /* drop the accent gradient — keeps Pro the hero */
