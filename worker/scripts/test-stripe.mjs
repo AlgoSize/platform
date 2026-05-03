@@ -13,6 +13,7 @@ import {
 } from "../src/stripe.js";
 import { checkoutHandler, checkoutSuccessHandler } from "../src/handlers/checkout.js";
 import { stripeWebhookHandler } from "../src/handlers/webhook.js";
+import { makeD1 } from "./_d1-stub.mjs";
 import { getUserByEmail, getUserByCustomerId } from "../src/handlers/_users.js";
 
 const SECRET     = "whsec_test_secret_for_unit_tests_only_xxxxx";   // 32+ chars
@@ -43,6 +44,7 @@ function makeEnv(overrides = {}) {
     STRIPE_PRICE_ID: "price_test_monthly",
     SESSIONS: makeKV(),
     USERS: makeKV(),
+    DB: makeD1(),
     ...overrides,
   };
 }
@@ -282,9 +284,9 @@ console.log("\nPOST /api/stripe/webhook\n");
     });
     await stripeWebhookHandler(req, env);
   }
-  // Count user:* keys
-  let userCount = 0;
-  for (const key of env.USERS._store.keys()) if (key.startsWith("user:")) userCount++;
+  // Count rows in the D1 users table.
+  const countRow = await env.DB.prepare("SELECT COUNT(*) AS n FROM users").first();
+  const userCount = countRow ? countRow.n : 0;
   if (userCount === 1) ok("webhook is idempotent across replays (one user record)");
   else fail(`expected 1 user, got ${userCount}`);
 }

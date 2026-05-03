@@ -38,6 +38,7 @@ import {
 } from "../src/handlers/_users.js";
 import { issueJWT, requireAuth } from "../src/auth.js";
 import { analyzeAlgoHandler } from "../src/handlers/analyze.js";
+import { makeD1 } from "./_d1-stub.mjs";
 
 const JWT_SECRET = "quota-test-jwt-secret-32-or-more-chars-please";
 
@@ -66,7 +67,7 @@ function makeEnv() {
     COOKIE_NAME:        "algosize_session",
     SESSIONS:           makeKV(),
     USERS:              makeKV(),
-    RUNS:               makeKV(),  // analyze handlers persist on success
+    DB:                 makeD1(),  // user records + run history (Task #25)
   };
 }
 
@@ -321,9 +322,9 @@ console.log("\nsignup — POST /api/signup\n");
   expect(cookie.includes("HttpOnly") && cookie.includes("SameSite=Lax"),
     "Set-Cookie is HttpOnly + SameSite=Lax");
 
-  // The user row exists in USERS KV with plan='free'.
+  // The user row exists in D1 with plan='free'.
   const user = await getUserByEmailHelper(env, "newbie@example.com");
-  expect(user && user.plan === "free", "USERS KV row written with plan='free'");
+  expect(user && user.plan === "free", "D1 users row written with plan='free'");
   expect(user.stripeCustomerId === "", "free user row has empty stripeCustomerId");
 }
 
@@ -424,12 +425,15 @@ console.log("\n/api/me — quota fields exposed for the dashboard\n");
   }
 }
 
-// Helper: get user by email (re-implemented inline to avoid importing the
-// internal helper function name and keep this file self-contained).
+// Helper: get user by email. Post-#25 we just hit D1 directly — the
+// previous KV `email:` index is gone.
 async function getUserByEmailHelper(env, email) {
-  const id = await env.USERS.get(`email:${email.toLowerCase()}`);
-  if (!id) return null;
-  return getUserById(env, id);
+  const row = await env.DB
+    .prepare("SELECT user_id FROM users WHERE email = ?")
+    .bind(email.toLowerCase())
+    .first();
+  if (!row) return null;
+  return getUserById(env, row.user_id);
 }
 
 // ---------- summary ----------

@@ -38,7 +38,7 @@ import { captureException } from "../observability.js";
 async function maybePersist(ctx, env, request, analyzer, input, response) {
   if (!response || response.status !== 200) return;
   const userId = request.user && request.user.userId;
-  if (!userId || !env || !env.RUNS) return;
+  if (!userId || !env || !env.DB) return;
   let result;
   try { result = await response.clone().json(); }
   catch { return; }

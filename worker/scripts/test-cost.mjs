@@ -12,6 +12,8 @@ import { analyzeCostHandler } from "../src/handlers/analyze.js";
 import worker from "../src/index.js";
 import { issueJWT } from "../src/auth.js";
 
+import { makeD1 } from "./_d1-stub.mjs";
+
 let failures = 0;
 const ok   = (msg) => console.log(`  \x1b[32m✓\x1b[0m ${msg}`);
 const fail = (msg) => { console.log(`  \x1b[31m✗\x1b[0m ${msg}`); failures++; };
@@ -33,6 +35,7 @@ function makeEnv(overrides = {}) {
     COOKIE_NAME: "algosize_session",
     SESSIONS: makeKV(),
     USERS: makeKV(),
+    DB: makeD1(),
     ...overrides,
   };
 }

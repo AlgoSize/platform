@@ -18,8 +18,8 @@ and lists every value you'll need to substitute (`<like-this>`).
 | GitHub Pages site                  | `gh-actions → site/_site → Pages`   | Existing workflow (§1)      |
 | Cloudflare Worker `algosize`       | Cloudflare account                  | `wrangler deploy` (§2)      |
 | KV namespace `SESSIONS`            | Cloudflare KV                       | `wrangler kv namespace create` |
-| KV namespace `USERS`               | Cloudflare KV                       | `wrangler kv namespace create` |
-| KV namespace `RUNS`                | Cloudflare KV                       | `wrangler kv namespace create` |
+| KV namespace `USERS` (quota only)  | Cloudflare KV                       | `wrangler kv namespace create` |
+| D1 database `algosize`             | Cloudflare D1                       | `wrangler d1 create` (§2.5) |
 | 4 Worker secrets                   | Cloudflare (per-env)                | `wrangler secret put` (§3)  |
 | Stripe product + recurring price   | Stripe dashboard                    | manual (§5–§6)              |
 | Stripe webhook → Worker            | Stripe dashboard                    | manual (§5)                 |
@@ -161,12 +161,19 @@ export CLOUDFLARE_ACCOUNT_ID=<id from whoami>  # if you need to pin one
 > `./node_modules/.bin/wrangler` (run from `worker/`). Drop the prefix if
 > you installed wrangler globally.
 
-### 2.2 Create the three production KV namespaces
+### 2.2 Create the two production KV namespaces
+
+> Task #25 moved user records and run history from KV into Cloudflare D1.
+> KV now holds only **session JWTs + Stripe-event dedup** (`SESSIONS`) and
+> **per-user monthly quota counters** (`USERS`, key shape
+> `quota:<userId>:<YYYY-MM>`). The D1 database is created in §2.5 below.
+> If you provisioned a `RUNS` namespace from an older revision of this
+> doc, you can leave it in place for now and delete it after §2.5.6
+> succeeds — the Worker no longer reads or writes it.
 
 ```bash
 wrangler kv namespace create SESSIONS --env production
 wrangler kv namespace create USERS    --env production
-wrangler kv namespace create RUNS     --env production
 ```
 
 Each command prints something like:
@@ -183,7 +190,7 @@ id = "abcd1234ef5678..."
 
 ### 2.3 Wire the namespace IDs into `wrangler.toml`
 
-Open `worker/wrangler.toml` and replace the three production-env IDs:
+Open `worker/wrangler.toml` and replace the two production-env IDs:
 
 ```toml
 [[env.production.kv_namespaces]]
@@ -193,16 +200,12 @@ id      = "<paste SESSIONS id from §2.2>"
 [[env.production.kv_namespaces]]
 binding = "USERS"
 id      = "<paste USERS id from §2.2>"
-
-[[env.production.kv_namespaces]]
-binding = "RUNS"
-id      = "<paste RUNS id from §2.2>"
 ```
 
 > The repo currently ships placeholder-looking IDs left over from earlier
-> dev work — overwrite all three. Do **not** reuse the top-level `[[kv_namespaces]]`
+> dev work — overwrite both. Do **not** reuse the top-level `[[kv_namespaces]]`
 > IDs (those are for `wrangler dev`'s remote-mode preview, separate from
-> production).
+> production). The D1 `database_id` is wired up in §2.5 below.
 
 ### 2.4 Set `SITE_ORIGIN` to the production hostname
 
@@ -227,7 +230,112 @@ COOKIE_NAME = "algosize_session"           # leave as-is
 > the dashboard's `fetch` calls will all fail with CORS errors in the
 > browser console.
 
-### 2.5 Deploy
+### 2.5 Create the D1 database, apply schema, migrate KV data
+
+User records and run history live in Cloudflare D1 (Task #25). On a fresh
+account this section is a one-time bootstrap. If you're re-deploying an
+existing account where these were already provisioned, skip to §2.6.
+
+#### 2.5.1 Create the database
+
+```bash
+cd worker
+./node_modules/.bin/wrangler d1 create algosize
+```
+
+This prints something like:
+
+```
+✅ Successfully created DB 'algosize' in region WEUR
+[[d1_databases]]
+binding       = "DB"
+database_name = "algosize"
+database_id   = "1234abcd-…-deadbeef"
+```
+
+**Copy the `database_id`.**
+
+#### 2.5.2 Wire the database id into `wrangler.toml`
+
+Open `worker/wrangler.toml`, find the `[[env.production.d1_databases]]`
+block (`binding = "DB"`, `database_name = "algosize"`), and replace
+`database_id = "00000000-0000-0000-0000-000000000000"` with the real
+UUID from §2.5.1. **Do this BEFORE applying the schema** — `wrangler d1
+execute` reads the binding from `wrangler.toml`.
+
+#### 2.5.3 Apply the schema
+
+```bash
+cd worker
+./node_modules/.bin/wrangler d1 execute algosize \
+  --file=migrations/0001_init.sql --env production --remote
+```
+
+Confirms the `users` and `runs` tables + their indexes were created. Re-
+runs are safe — every statement uses `IF NOT EXISTS`.
+
+#### 2.5.4 (Optional) Migrate existing KV data
+
+If this is a brand-new deploy with zero users yet, **skip this step**.
+Otherwise, dump the old KV records to a SQL file and apply it:
+
+```bash
+cd worker
+node scripts/migrate-kv-to-d1.mjs --env production
+# wrote migrate-kv-to-d1.sql: N users, M runs
+
+./node_modules/.bin/wrangler d1 execute algosize \
+  --file=migrate-kv-to-d1.sql --env production --remote
+```
+
+The script uses `INSERT OR IGNORE` keyed on the primary key, so re-
+running is safe — duplicates become no-ops. The KV `email:`/`cust:`
+index keys and the per-user `runs:<userId>` index are intentionally NOT
+copied (D1's UNIQUE constraints + `idx_runs_user_created` replace them).
+
+#### 2.5.5 Verify
+
+```bash
+./node_modules/.bin/wrangler d1 execute algosize --env production --remote \
+  --command="SELECT COUNT(*) AS users FROM users; SELECT COUNT(*) AS runs FROM runs;"
+```
+
+Numbers should match what `wrangler kv key list --binding USERS --env production`
+showed for `user:*` keys (and `RUNS` for `run:*` keys, if you migrated runs).
+
+#### 2.5.6 Retention follow-up
+
+Pre-#25, run records had a hard 90-day KV TTL — blobs physically vanished
+after 90 days. Post-#25, D1 keeps every row indefinitely; the dashboard
+only HIDES rows older than 90 days via a `created_at >` filter at read
+time. That means D1 storage grows monotonically until a cleanup job is
+added.
+
+Action items for whoever takes this to GA:
+
+1. Schedule a Cloudflare Cron Trigger that runs daily and executes
+   `DELETE FROM runs WHERE created_at < (strftime('%s','now') - 90*86400) * 1000`
+   against the `algosize` D1 binding. Wrangler config: add
+   `[triggers] crons = ["0 3 * * *"]` and a `scheduled` handler in
+   `worker/src/index.js`.
+2. Confirm the privacy policy text matches: "We retain run history for
+   90 days." If you removed the TTL but kept that wording, you're now
+   out of compliance until step 1 ships.
+
+#### 2.5.7 (Optional) Tear down the old `RUNS` KV namespace
+
+Once §2.5.5 looks right and the Worker has been deployed (§2.6), the
+old `RUNS` KV namespace is unreferenced. Delete it from
+`worker/wrangler.toml` if anything references it, then:
+
+```bash
+./node_modules/.bin/wrangler kv namespace delete --binding RUNS --env production
+```
+
+Leave `USERS` KV in place — it still holds the monthly quota counters
+(`quota:<userId>:<YYYY-MM>`).
+
+### 2.6 Deploy
 
 > **CI handles this on every push (Task #24).** Once
 > `.github/workflows/worker.yml` is wired up and the two GitHub repo
@@ -266,7 +374,7 @@ curl -i https://algosize.<your-account>.workers.dev/api/me
 
 ---
 
-### 2.6 Wire CI auto-deploy (Task #24)
+### 2.7 Wire CI auto-deploy (Task #24)
 
 The workflow at `.github/workflows/worker.yml` runs the worker test
 suite (`npm test` in `worker/`) and, if it passes, deploys both Workers
@@ -817,26 +925,36 @@ you have to do operationally is create the resources and wire in the IDs
 > exercise the dashboard against the staging Worker's KV + Stripe test
 > mode while the markup itself is whatever's in production.
 
-### 7.1 Create the three staging KV namespaces
+### 7.1 Create the staging KV namespaces and D1 database
 
 ```bash
 cd worker
 ./node_modules/.bin/wrangler kv namespace create SESSIONS --env staging
 ./node_modules/.bin/wrangler kv namespace create USERS    --env staging
-./node_modules/.bin/wrangler kv namespace create RUNS     --env staging
+./node_modules/.bin/wrangler d1 create algosize-staging
 ```
 
-Each command prints an `id = "…"` line. **These ids are different from
-the production ids** — that's the whole point. Don't reuse prod ids.
+The `kv namespace create` commands each print an `id = "…"` line and
+the `d1 create` command prints a `database_id = "…"` UUID. **These ids
+are different from the production ids** — that's the whole point. Don't
+reuse prod ids.
 
-### 7.2 Wire the namespace IDs into `wrangler.toml`
+### 7.2 Wire the namespace IDs and D1 database id into `wrangler.toml`
 
-Open `worker/wrangler.toml`, find the three `[[env.staging.kv_namespaces]]`
-blocks (the ones with sentinel ids `…stg1` / `…stg2` / `…stg3`), and
-replace each `id = "0000…stgN"` with the real id from §7.1.
+Open `worker/wrangler.toml`, find the two `[[env.staging.kv_namespaces]]`
+blocks (sentinel ids `…stg1` / `…stg2`) and the
+`[[env.staging.d1_databases]]` block (sentinel `…00000000stg1`), and
+replace each placeholder with the real value from §7.1.
+
+Then apply the schema to the staging database:
+
+```bash
+./node_modules/.bin/wrangler d1 execute algosize-staging \
+  --file=migrations/0001_init.sql --env staging --remote
+```
 
 Sanity-check: `wrangler deploy --env staging --dry-run` should report
-three KV bindings and zero placeholder warnings.
+two KV bindings, one D1 binding, and zero placeholder warnings.
 
 ### 7.3 Set the staging Worker secrets
 

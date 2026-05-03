@@ -58,8 +58,13 @@ CREATE TABLE IF NOT EXISTS runs (
   -- Unix epoch MILLISECONDS (Date.now()). Kept in ms because that's what
   -- the analyzer pipeline natively uses; readers that need the 90-day cutoff
   -- compute `Date.now() - 90*86400*1000` and filter on this column.
-  created_at  INTEGER NOT NULL,
-  FOREIGN KEY (user_id) REFERENCES users(user_id)
+  created_at  INTEGER NOT NULL
+  -- No FK to users(user_id) on purpose. The auth pipeline guarantees the
+  -- user exists before persistRun runs, and a hard FK would (a) make the
+  -- D1 stub tests churn (every test would have to seed a user first),
+  -- and (b) prevent us from keeping orphaned history rows when a user
+  -- record is hard-deleted for GDPR — we'd rather scrub run rows
+  -- explicitly via a cleanup task than have CASCADE silently nuke them.
 );
 
 -- Pagination index: dashboard list = "WHERE user_id = ? ORDER BY created_at DESC".

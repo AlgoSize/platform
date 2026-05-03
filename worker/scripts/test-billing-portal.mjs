@@ -14,7 +14,8 @@
 
 import { issueJWT, requireAuth } from "../src/auth.js";
 import { billingPortalHandler } from "../src/handlers/billing.js";
-import { upsertUserFromCheckout } from "../src/handlers/_users.js";
+import { upsertUserFromCheckout, createFreeUser } from "../src/handlers/_users.js";
+import { makeD1 } from "./_d1-stub.mjs";
 
 const JWT_SECRET = "billing-portal-test-secret-32-or-more-chars-ok";
 
@@ -41,6 +42,7 @@ function makeEnv() {
     STRIPE_SECRET_KEY:  "sk_test_FAKE_FOR_PORTAL",
     SESSIONS:           makeKV(),
     USERS:              makeKV(),
+    DB:                 makeD1(),
   };
 }
 
@@ -123,17 +125,9 @@ console.log("\nPOST /api/billing/portal — defensive guards\n");
 // 2. User with NO stripeCustomerId on file → 400, Stripe NOT called.
 {
   const env = makeEnv();
-  // Write a hand-rolled USERS row missing stripeCustomerId — simulates a
-  // legacy/free-tier record that should not be able to open a portal.
-  const orphan = {
-    userId:           "usr_orphan",
-    email:            "free@example.com",
-    stripeCustomerId: "",            // <-- the case we're guarding against
-    subStatus:        "inactive",
-    createdAt:        Math.floor(Date.now() / 1000),
-    updatedAt:        Math.floor(Date.now() / 1000),
-  };
-  await env.USERS.put(`user:${orphan.userId}`, JSON.stringify(orphan));
+  // Free-tier signup creates a user row with NULL stripe_customer_id —
+  // exactly the legacy/orphan case we want to guard against here.
+  const { user: orphan } = await createFreeUser(env, { email: "free@example.com" });
   const token = await issueJWT(env, orphan.userId, orphan.email, orphan.subStatus);
 
   let stripeCalled = false;

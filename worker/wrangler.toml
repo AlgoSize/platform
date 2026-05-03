@@ -16,13 +16,21 @@ id      = "2a67b8b8fa4444f2b04b4ee7b98407dc"
 binding = "USERS"
 id      = "b321f8eeccf0422694b87f719fa0d70c"
 
-# Run history (Task #17). One JSON blob per analyzer run, plus a small
-# per-user index that lists the recent run ids. 90-day TTL on the blobs.
-# In local dev Miniflare maps this to in-memory KV — no real namespace
-# required until you ship to production.
-[[kv_namespaces]]
-binding = "RUNS"
-id      = "0000000000000000000000000000abcd"
+# ----------------------------------------------------------------------------
+# D1 database binding — user records + run history (Task #25).
+# ----------------------------------------------------------------------------
+# Holds the `users` table (replaces the user:/email:/cust: keys previously
+# in USERS KV) and the `runs` table (replaces the run:/runs: keys previously
+# in RUNS KV). SESSIONS KV stays for session JWTs + Stripe-event dedup, and
+# USERS KV stays for monthly quota counters at quota:<userId>:<YYYY-MM>.
+#
+# The placeholder database_id below is for local dev (Miniflare maps it to
+# an in-memory SQLite); production + staging override with the real UUIDs
+# printed by `wrangler d1 create algosize`. See DEPLOY.md §2.5.
+[[d1_databases]]
+binding       = "DB"
+database_name = "algosize"
+database_id   = "00000000-0000-0000-0000-000000000000"
 
 # ----------------------------------------------------------------------------
 # Service binding — algorithm-optimizer sandbox (Task #16)
@@ -70,11 +78,13 @@ id      = "2a67b8b8fa4444f2b04b4ee7b98407dc"
 binding = "USERS"
 id      = "b321f8eeccf0422694b87f719fa0d70c"
 
-# Run history (Task #17). Create with `wrangler kv namespace create RUNS
-# --env production` and paste the printed id below. See DEPLOY.md §2.2.
-[[env.production.kv_namespaces]]
-binding = "RUNS"
-id      = "0000000000000000000000000000abcd"
+# D1 database for user records + run history (Task #25). Create with
+#   wrangler d1 create algosize
+# and paste the printed UUID below. See DEPLOY.md §2.5.
+[[env.production.d1_databases]]
+binding       = "DB"
+database_name = "algosize"
+database_id   = "00000000-0000-0000-0000-000000000000"
 
 [[env.production.services]]
 binding = "SANDBOX"
@@ -104,7 +114,6 @@ COOKIE_NAME = "algosize_session"
 # KV namespace IDs are placeholders. Create the real ones with:
 #   wrangler kv namespace create SESSIONS --env staging
 #   wrangler kv namespace create USERS    --env staging
-#   wrangler kv namespace create RUNS     --env staging
 # then paste each printed id below. See DEPLOY.md §7.1.
 [[env.staging.kv_namespaces]]
 binding = "SESSIONS"
@@ -114,9 +123,13 @@ id      = "0000000000000000000000000000stg1"
 binding = "USERS"
 id      = "0000000000000000000000000000stg2"
 
-[[env.staging.kv_namespaces]]
-binding = "RUNS"
-id      = "0000000000000000000000000000stg3"
+# Separate D1 database for staging (Task #25). Create with
+#   wrangler d1 create algosize-staging
+# and paste the printed UUID below. See DEPLOY.md §7.1.
+[[env.staging.d1_databases]]
+binding       = "DB"
+database_name = "algosize-staging"
+database_id   = "00000000-0000-0000-0000-00000000stg1"
 
 # Separate sandbox sibling Worker so a bad sandbox deploy can be tested in
 # staging without touching prod isolates. Defined in

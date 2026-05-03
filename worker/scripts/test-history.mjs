@@ -1,16 +1,17 @@
-// Tests for the run-history feature (Task #17).
+// Tests for the run-history feature (Task #17 + Task #25 D1 migration).
 //
 // Covers:
-//   1. Persisting a run via the analyze handlers writes to RUNS KV with TTL,
-//      pushes the id onto the per-user index, and is fire-and-forget.
-//   2. GET /api/runs is auth-gated, paginates, hides expired entries, and
-//      strips bulky fields for the list view.
-//   3. GET /api/runs/:id is auth-gated, scoped per user (user A cannot read
-//      user B's run), and returns the full record.
-//   4. The per-user index is capped at MAX_INDEX_ENTRIES.
-//   5. CUR uploads (oversized inputs) are persisted with a `_omitted` marker
-//      so the dashboard can grey out Re-run.
-//   6. summarize() yields a useful one-liner for each analyzer.
+//   1. Persisting a run via persistRun writes a D1 row with the expected
+//      columns, and the analyze handlers do the same fire-and-forget via
+//      ctx.waitUntil.
+//   2. GET /api/runs is auth-gated, paginates with a stable cursor, hides
+//      90-day-expired entries (read-time WHERE), and strips bulky fields
+//      for the list view.
+//   3. GET /api/runs/:id is auth-gated, scoped per user (user A cannot
+//      read user B's run), and returns the full record.
+//   4. CUR uploads (oversized inputs) are persisted with a `_omitted`
+//      marker so the dashboard can grey out Re-run.
+//   5. summarize() yields a useful one-liner for each analyzer.
 //
 // Run with:  node scripts/test-history.mjs
 
@@ -21,6 +22,7 @@ import {
 } from "../src/handlers/runs.js";
 import { analyzeAlgoHandler, analyzeVulnHandler, analyzeCostHandler } from "../src/handlers/analyze.js";
 import { issueJWT, requireAuth } from "../src/auth.js";
+import { makeD1 } from "./_d1-stub.mjs";
 
 const JWT_SECRET = "history-test-jwt-secret-32-or-more-chars-please";
 
@@ -29,18 +31,14 @@ const ok   = (msg) => console.log(`  \x1b[32m✓\x1b[0m ${msg}`);
 const fail = (msg) => { console.log(`  \x1b[31m✗\x1b[0m ${msg}`); failures++; };
 const expect = (cond, label) => cond ? ok(label) : fail(label);
 
-// In-memory KV stub that ALSO records the put options so we can assert
-// the 90-day TTL is being requested. Mirrors the helper used in test-me.mjs
-// but with options capture.
+// In-memory KV stub (still needed for SESSIONS + USERS).
 function makeKV() {
   const store = new Map();
-  const opts  = new Map();
   return {
     async get(key)             { return store.has(key) ? store.get(key) : null; },
-    async put(key, val, o = {}) { store.set(key, val); opts.set(key, o); },
-    async delete(key)          { store.delete(key); opts.delete(key); },
+    async put(key, val, o = {}) { store.set(key, val); },
+    async delete(key)          { store.delete(key); },
     _store: store,
-    _opts:  opts,
   };
 }
 
@@ -51,7 +49,7 @@ function makeEnv(overrides = {}) {
     COOKIE_NAME: "algosize_session",
     SESSIONS: makeKV(),
     USERS:    makeKV(),
-    RUNS:     makeKV(),
+    DB:       makeD1(),
     ...overrides,
   };
 }
@@ -64,6 +62,14 @@ function makeCtx() {
     waitUntil: (p) => pending.push(p),
     drain: () => Promise.all(pending),
   };
+}
+
+// Helper: count the rows for a user in the D1 runs table.
+async function countRunsFor(env, userId) {
+  const row = await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM runs WHERE user_id = ?",
+  ).bind(userId).first();
+  return row ? row.n : 0;
 }
 
 console.log("\nsummarize()\n");
@@ -81,7 +87,7 @@ expect(summarize("algo", { bigO: { label: "O(n²)" }, wallTimeMs: 4.5 }) === "O(
 expect(summarize("algo", {}) === "unknown · — ms", "algo summary tolerates missing fields");
 expect(summarize("nope", {}) === "", "unknown analyzer summarizes to empty string");
 
-console.log("\npersistRun() — write + index + TTL\n");
+console.log("\npersistRun() — writes the row\n");
 
 {
   const env = makeEnv();
@@ -96,19 +102,13 @@ console.log("\npersistRun() — write + index + TTL\n");
   expect(rec.headline === "O(n) · 3.10 ms", "headline is computed from result");
   expect(rec.userId === userId, "record carries userId");
 
-  const stored = await env.RUNS.get(`run:${userId}:${rec.id}`);
-  expect(stored && JSON.parse(stored).id === rec.id, "blob stored under run:<userId>:<id>");
-
-  const opts = env.RUNS._opts.get(`run:${userId}:${rec.id}`);
-  expect(opts && opts.expirationTtl === RUN_TTL_SECONDS, "blob written with 90-day TTL");
-
-  const indexRaw = await env.RUNS.get(`runs:${userId}`);
-  const index = JSON.parse(indexRaw);
-  expect(Array.isArray(index) && index[0] === rec.id, "id pushed onto per-user index");
-
-  const indexOpts = env.RUNS._opts.get(`runs:${userId}`);
-  // Index has NO TTL — items inside it expire individually.
-  expect(!indexOpts || indexOpts.expirationTtl === undefined, "index itself has no TTL");
+  const row = await env.DB.prepare(
+    "SELECT id, user_id, analyzer, input_json, result_json, ms, headline FROM runs WHERE id = ?",
+  ).bind(rec.id).first();
+  expect(row && row.user_id === userId, "row stored with the correct user_id");
+  expect(row.analyzer === "algo", "row stored with analyzer column");
+  expect(JSON.parse(row.input_json).code === "function f(){}", "input_json round-trips");
+  expect(row.headline === "O(n) · 3.10 ms", "headline column matches");
 }
 
 console.log("\npersistRun() — input size cap\n");
@@ -126,47 +126,22 @@ console.log("\npersistRun() — input size cap\n");
   expect(rec.input.reason === "input_too_large_for_history", "marker carries reason");
 }
 
-console.log("\npersistRun() — index capped at MAX_INDEX_ENTRIES\n");
-
-{
-  const env = makeEnv();
-  const userId = "usr_lots";
-  // Persist MAX + 5 runs sequentially. Use minimal payloads to stay fast.
-  for (let i = 0; i < MAX_INDEX_ENTRIES + 5; i++) {
-    await persistRun(env, {
-      userId, analyzer: "vuln",
-      input: { repoUrl: `https://github.com/o/r${i}` },
-      result: { counts: { critical: 0, high: 0, medium: 0, low: i } },
-    });
-  }
-  const index = JSON.parse(await env.RUNS.get(`runs:${userId}`));
-  expect(index.length === MAX_INDEX_ENTRIES, `index trimmed to ${MAX_INDEX_ENTRIES}`);
-  // Newest first: the very last run we wrote should be at index[0].
-  const newest = JSON.parse(await env.RUNS.get(`run:${userId}:${index[0]}`));
-  expect(newest.input.repoUrl.endsWith(`/r${MAX_INDEX_ENTRIES + 4}`),
-         "newest run is at the front of the index");
-}
-
 console.log("\nlistRuns() — pagination + filters expired\n");
 
 {
   const env = makeEnv();
   const userId = "usr_lister";
-  const ids = [];
   for (let i = 0; i < 25; i++) {
-    const r = await persistRun(env, {
+    await persistRun(env, {
       userId, analyzer: "cost",
       input: { services: [{ name: `svc-${i}`, monthlySpend: 1000 }] },
       result: { totalSavingsPct: i, suggestions: [], topItems: [] },
     });
-    ids.push(r.id);
   }
 
   // Default page size is 20.
   const page1 = await listRuns(env, userId, { limit: 20 });
   expect(page1.items.length === 20, "first page returns 20 items");
-  expect(page1.items[0].headline === "0% savings · 0 suggestions" || page1.items[0].headline.endsWith("suggestions"),
-         "list items include headline");
   // List view strips heavy fields — `result` and `input` should NOT be in the
   // per-item shape (only id, analyzer, headline, ms, createdAt, hasInput).
   const sampleKeys = Object.keys(page1.items[0]).sort().join(",");
@@ -178,11 +153,18 @@ console.log("\nlistRuns() — pagination + filters expired\n");
   expect(page2.items.length === 5, "second page returns the remaining 5");
   expect(page2.nextCursor === null, "second page has no nextCursor");
 
-  // Simulate TTL expiry of one run by deleting its blob (index keeps the id).
+  // Simulate 90-day expiry: hand-edit the row's created_at to before the
+  // cutoff. listRuns filters at read time via `created_at > cutoff`, so the
+  // row must silently drop out of the list.
   const victimId = page1.items[3].id;
-  await env.RUNS.delete(`run:${userId}:${victimId}`);
+  const expired = Date.now() - (RUN_TTL_SECONDS + 60) * 1000;
+  await env.DB.prepare("UPDATE runs SET created_at = ? WHERE id = ?")
+    .bind(expired, victimId).run();
+  // Read-time cutoff filter excludes the expired row, so 24 are visible
+  // and the LIMIT-20 page is full again — but the victim id must NOT be
+  // among the items.
   const page1After = await listRuns(env, userId, { limit: 20 });
-  expect(page1After.items.length === 19, "expired run silently dropped from list");
+  expect(page1After.items.length === 20, "expired row excluded; page still fills to limit");
   expect(!page1After.items.some(it => it.id === victimId), "expired run id absent from list");
 }
 
@@ -225,8 +207,6 @@ console.log("\ngetRun() — per-user scoping\n");
 
 console.log("\nrouter integration — /api/runs gating + scoping\n");
 
-// Drive the route through requireAuth → handler the way the router does, so
-// we exercise the full auth chain.
 async function callListRuns(env, token, qs = "") {
   const req = new Request(`http://localhost/api/runs${qs}`, {
     method: "GET",
@@ -241,7 +221,6 @@ async function callGetRun(env, token, id) {
     method: "GET",
     headers: token ? { "Cookie": `algosize_session=${encodeURIComponent(token)}` } : {},
   });
-  // itty-router would set request.params; emulate it for the unit test.
   req.params = { id };
   const guard = await requireAuth(req, env);
   if (guard) return guard;
@@ -259,7 +238,6 @@ async function callGetRun(env, token, id) {
   const aliceToken = await issueJWT(env, "usr_alice", "alice@example.com", "active");
   const bobToken   = await issueJWT(env, "usr_bob",   "bob@example.com",   "active");
 
-  // Persist one run for each user.
   const aliceRun = await persistRun(env, {
     userId: "usr_alice", analyzer: "algo",
     input: { code: "function f(){return 1}", sampleInput: [] },
@@ -271,28 +249,23 @@ async function callGetRun(env, token, id) {
     result: { counts: { critical: 1, high: 0, medium: 0, low: 0 } },
   });
 
-  // Alice's list contains her run, not Bob's.
   const aliceList = await callListRuns(env, aliceToken);
   const aliceBody = await aliceList.json();
   expect(aliceList.status === 200, "alice list → 200");
   expect(aliceBody.items.length === 1 && aliceBody.items[0].analyzer === "algo",
          "alice sees only her own runs");
 
-  // Alice can fetch her own run by id.
   const aliceGet = await callGetRun(env, aliceToken, aliceRun.id);
   const aliceFull = await aliceGet.json();
   expect(aliceGet.status === 200 && aliceFull.input && aliceFull.input.code,
          "GET /api/runs/:id returns the full record (input + result)");
 
-  // Bob trying to fetch Alice's run id → 404 (cross-user isolation).
   const bobGet = await callGetRun(env, bobToken, aliceRun.id);
   expect(bobGet.status === 404, "bob cannot fetch alice's run by id (404)");
 
-  // Limit clamp.
   const clamped = await callListRuns(env, aliceToken, "?limit=9999");
   expect(clamped.status === 200, "list with absurd limit still 200s (clamped server-side)");
 
-  // Missing run id.
   const missing = await callGetRun(env, aliceToken, "no_such_run_xyz");
   expect(missing.status === 404, "GET /api/runs/<unknown> → 404");
 }
@@ -318,13 +291,15 @@ console.log("\nanalyze handlers — persist via ctx.waitUntil on success\n");
 
   await ctx.drain();  // wait for the queued persistence write
 
-  const indexRaw = await env.RUNS.get(`runs:${userId}`);
-  const index = JSON.parse(indexRaw || "[]");
-  expect(index.length === 1, "one run persisted into the user's index");
-  const stored = JSON.parse(await env.RUNS.get(`run:${userId}:${index[0]}`));
+  expect(await countRunsFor(env, userId) === 1, "one run persisted into D1");
+  const stored = await env.DB.prepare(
+    "SELECT analyzer, input_json, result_json, headline FROM runs WHERE user_id = ?",
+  ).bind(userId).first();
   expect(stored.analyzer === "algo", "persisted record analyzer=algo");
-  expect(stored.input && stored.input.code, "persisted record carries the original input");
-  expect(stored.result && typeof stored.result.wallTimeMs === "number",
+  const input  = JSON.parse(stored.input_json);
+  const result = JSON.parse(stored.result_json);
+  expect(input && input.code, "persisted record carries the original input");
+  expect(typeof result.wallTimeMs === "number",
          "persisted record carries the analyzer result");
   expect(stored.headline.startsWith("O("), "persisted record carries a headline metric");
 }
@@ -343,13 +318,11 @@ console.log("\nanalyze handlers — persist via ctx.waitUntil on success\n");
   const res = await analyzeAlgoHandler(req, env, ctx);
   expect(res.status === 400, "malformed body → 400");
   await ctx.drain();
-  const indexRaw = await env.RUNS.get(`runs:${userId}`);
-  expect(indexRaw === null, "no run persisted for a 400 response");
+  expect(await countRunsFor(env, userId) === 0, "no run persisted for a 400 response");
 }
 
 {
   // Unauthenticated handler call (request.user undefined) → no persistence.
-  // Mirrors how existing direct-handler tests in test-algo.mjs invoke things.
   const env = makeEnv();
   const req = new Request("http://localhost/api/analyze/algo", {
     method: "POST",
@@ -361,8 +334,8 @@ console.log("\nanalyze handlers — persist via ctx.waitUntil on success\n");
   const res = await analyzeAlgoHandler(req, env, ctx);
   expect(res.status === 200, "unauth direct handler call still 200");
   await ctx.drain();
-  // Index never written for any user.
-  expect(env.RUNS._store.size === 0, "no persistence when request.user is missing");
+  const total = await env.DB.prepare("SELECT COUNT(*) AS n FROM runs").first();
+  expect(total.n === 0, "no persistence when request.user is missing");
 }
 
 {
@@ -379,9 +352,10 @@ console.log("\nanalyze handlers — persist via ctx.waitUntil on success\n");
   const res = await analyzeVulnHandler(req, env, ctx);
   expect(res.status === 200, "vuln legacy handler returns 200");
   await ctx.drain();
-  const idx = JSON.parse(await env.RUNS.get(`runs:${userId}`) || "[]");
-  expect(idx.length === 1, "vuln legacy run was persisted");
-  const stored = JSON.parse(await env.RUNS.get(`run:${userId}:${idx[0]}`));
+  expect(await countRunsFor(env, userId) === 1, "vuln legacy run was persisted");
+  const stored = await env.DB.prepare(
+    "SELECT analyzer FROM runs WHERE user_id = ?",
+  ).bind(userId).first();
   expect(stored.analyzer === "vuln", "persisted record analyzer=vuln");
 }
 
@@ -404,10 +378,12 @@ console.log("\nanalyze handlers — persist via ctx.waitUntil on success\n");
   const res = await analyzeCostHandler(req, env, ctx);
   expect(res.status === 200, "cost CUR handler returns 200");
   await ctx.drain();
-  const idx = JSON.parse(await env.RUNS.get(`runs:${userId}`) || "[]");
-  expect(idx.length === 1, "CUR run was persisted");
-  const stored = JSON.parse(await env.RUNS.get(`run:${userId}:${idx[0]}`));
-  expect(stored.input && stored.input._omitted === true,
+  expect(await countRunsFor(env, userId) === 1, "CUR run was persisted");
+  const stored = await env.DB.prepare(
+    "SELECT input_json FROM runs WHERE user_id = ?",
+  ).bind(userId).first();
+  const input = JSON.parse(stored.input_json);
+  expect(input && input._omitted === true,
          "CUR persisted with _omitted input marker (re-run gracefully disabled)");
 }
 

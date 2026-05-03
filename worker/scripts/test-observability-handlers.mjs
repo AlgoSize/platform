@@ -364,10 +364,12 @@ console.log("\nhandler observability — webhook handler exception (KV throw)\n"
     },
     USERS: {
       async get() { return null; },
-      // Force the handler exception path.
-      async put() { throw new Error("simulated KV write failure"); },
+      async put() {},
       async list() { return { keys: [] }; },
     },
+    // Post-#25, user records live in D1. Force the handler exception path
+    // by making the first INSERT throw.
+    DB: (await import("./_d1-stub.mjs")).makeFailingD1({ failOn: 1 }),
   };
   const ctx = makeCtx();
 
@@ -396,8 +398,8 @@ console.log("\nhandler observability — webhook handler exception (KV throw)\n"
     "envelope tagged with source + event_type");
   expect(item.tags.stripe_event_id === "evt_kv_throw_observability",
     "envelope includes the Stripe event id for cross-referencing the Stripe dashboard");
-  expect(item.exception && item.exception.values[0].value.includes("simulated KV write failure"),
-    "envelope contains the underlying KV error");
+  expect(item.exception && item.exception.values[0].value.includes("simulated D1 write failure"),
+    "envelope contains the underlying D1 error");
   expect(item.exception.values[0].stacktrace && item.exception.values[0].stacktrace.frames.length > 0,
     "envelope includes parsed stack frames");
   expect(item.request && item.request.url === "https://algosize.com/api/stripe/webhook",

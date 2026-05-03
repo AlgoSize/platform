@@ -15,6 +15,7 @@
 import { issueJWT, requireAuth, revokeJWT } from "../src/auth.js";
 import { meHandler } from "../src/handlers/me.js";
 import { upsertUserFromCheckout } from "../src/handlers/_users.js";
+import { makeD1 } from "./_d1-stub.mjs";
 
 const JWT_SECRET = "me-test-jwt-secret-32-or-more-chars-please";
 
@@ -40,6 +41,7 @@ function makeEnv() {
     COOKIE_NAME: "algosize_session",
     SESSIONS: makeKV(),
     USERS:    makeKV(),
+    DB:       makeD1(),
   };
 }
 

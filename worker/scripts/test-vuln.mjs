@@ -23,6 +23,8 @@ const FAKE_GH_PAT      = "ghp_" + "abcdefghijklmnopqrstuvwxyz" + "0123456789";
 const FAKE_STRIPE_KEY  = "sk_" + "live_" + "abcdef0123456789ABCDEFGH";
 const FAKE_SLACK_TOKEN = "process.env.SLACK_TOKEN" + "1234567890-1234567890-" + "abcdef1234567890ABCDEFGH";
 
+import { makeD1 } from "./_d1-stub.mjs";
+
 let failures = 0;
 const ok   = (msg) => console.log(`  \x1b[32m✓\x1b[0m ${msg}`);
 const fail = (msg) => { console.log(`  \x1b[31m✗\x1b[0m ${msg}`); failures++; };
@@ -43,6 +45,7 @@ function makeEnv(overrides = {}) {
     COOKIE_NAME: "algosize_session",
     SESSIONS: makeKV(),
     USERS: makeKV(),
+    DB: makeD1(),
     ...overrides,
   };
 }

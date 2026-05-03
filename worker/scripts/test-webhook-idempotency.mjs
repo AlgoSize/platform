@@ -23,6 +23,7 @@
 import { stripeWebhookHandler } from "../src/handlers/webhook.js";
 import { buildSignatureHeader } from "../src/stripe.js";
 import { getUserByEmail, getUserByCustomerId } from "../src/handlers/_users.js";
+import { makeD1, makeFailingD1 } from "./_d1-stub.mjs";
 
 const SECRET     = "whsec_idempotency_test_secret_xxxxxxxxxxxxxx";  // 32+ chars
 const JWT_SECRET = "idempotency-test-jwt-secret-32-or-more-chars";
@@ -54,7 +55,7 @@ function makeKV() {
   };
 }
 
-function makeEnv() {
+function makeEnv(overrides = {}) {
   return {
     JWT_SECRET,
     SITE_ORIGIN: "http://localhost:5000",
@@ -64,6 +65,8 @@ function makeEnv() {
     STRIPE_PRICE_ID: "price_test_monthly",
     SESSIONS: makeKV(),
     USERS:    makeKV(),
+    DB:       makeD1(),
+    ...overrides,
   };
 }
 
@@ -78,15 +81,15 @@ async function makeSignedRequest(body, opts = {}) {
   });
 }
 
-// Count how many `user:*` rows exist (excludes email:/cust:/quota: indexes).
-function countUserRecords(env) {
-  let n = 0;
-  for (const key of env.USERS._store.keys()) if (key.startsWith("user:")) n++;
-  return n;
+// Count how many user rows exist in D1 (post-#25 user records live there).
+async function countUserRecords(env) {
+  const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM users").first();
+  return row ? row.n : 0;
 }
 
 // Count how many times any USERS KV key was written. Useful to assert
-// "the second delivery did not touch USERS at all".
+// "the second delivery did not touch USERS at all" (USERS KV still holds
+// quota counters and the Stripe-event dedup row lives in SESSIONS).
 function totalUsersWrites(env) {
   let n = 0;
   for (const v of env.USERS._writes.values()) n += v;
@@ -123,7 +126,7 @@ console.log("\nwebhook idempotency — dedup on event.id\n");
     "first delivery body reports handled=checkout.session.completed");
 
   const writesAfterFirst = totalUsersWrites(env);
-  expect(countUserRecords(env) === 1, "first delivery created exactly 1 user");
+  expect(await countUserRecords(env) === 1, "first delivery created exactly 1 user");
 
   // Second delivery — should short-circuit.
   const res2 = await stripeWebhookHandler(await makeSignedRequest(body), env);
@@ -135,7 +138,7 @@ console.log("\nwebhook idempotency — dedup on event.id\n");
   // Critical: USERS KV must NOT have been touched on the duplicate.
   expect(totalUsersWrites(env) === writesAfterFirst,
     "duplicate delivery did not touch USERS KV (write count unchanged)");
-  expect(countUserRecords(env) === 1, "still exactly 1 user record after duplicate");
+  expect(await countUserRecords(env) === 1, "still exactly 1 user record after duplicate");
 }
 
 // 2. Same event delivered three times — dedup row exists with 7-day TTL.
@@ -158,7 +161,7 @@ console.log("\nwebhook idempotency — dedup on event.id\n");
   for (let i = 0; i < 3; i++) {
     await stripeWebhookHandler(await makeSignedRequest(body), env);
   }
-  expect(countUserRecords(env) === 1, "3x delivery → 1 user record");
+  expect(await countUserRecords(env) === 1, "3x delivery → 1 user record");
 
   const dedupKey = "stripeEvent:evt_idem_triple";
   expect(env.SESSIONS._store.has(dedupKey), "dedup row written under stripeEvent:<id>");
@@ -247,18 +250,11 @@ console.log("\nwebhook idempotency — failure semantics\n");
 
 // 5. Handler failure (5xx) → dedup row NOT written → next retry processes.
 {
-  const env = makeEnv();
-  // Make the FIRST attempt fail by replacing USERS.put with a thrower for
-  // exactly one call. The handler will throw → 500 → we rely on Stripe to
-  // retry. After the throw, restore put and re-deliver: the second attempt
-  // must actually create the user.
-  const realPut = env.USERS.put.bind(env.USERS);
-  let putCalls = 0;
-  env.USERS.put = async (k, v, o) => {
-    putCalls++;
-    if (putCalls === 1) throw new Error("simulated transient KV failure");
-    return realPut(k, v, o);
-  };
+  // Make the FIRST D1 INSERT fail to simulate a transient backend hiccup.
+  // The handler will throw → 500 → we rely on Stripe to retry. After the
+  // throw, the wrapper restores normal D1 behavior and re-delivery must
+  // actually create the user.
+  const env = makeEnv({ DB: makeFailingD1({ failOn: 1 }) });
 
   const body = JSON.stringify({
     id: "evt_retry_me",

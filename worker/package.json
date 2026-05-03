@@ -13,6 +13,7 @@
     "itty-router": "^5.0.18"
   },
   "devDependencies": {
+    "better-sqlite3": "^12.9.0",
     "wrangler": "^3.78.0"
   }
 }
