@@ -1,0 +1,8 @@
+---
+# Front matter intentionally empty so Jekyll processes this file and
+# resolves {{ "/sitemap.xml" | absolute_url }} below.
+---
+User-agent: *
+Allow: /
+
+Sitemap: {{ "/sitemap.xml" | absolute_url }}

@@ -15,6 +15,7 @@ permalink: /:path/
 
 plugins:
   - jekyll-feed
+  - jekyll-sitemap
 
 # Blog defaults (Task #27). Posts under site/_posts/*.md inherit the
 # post layout and live at /blog/<slug>/. The post layout reads
