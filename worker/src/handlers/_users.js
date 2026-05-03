@@ -1,65 +1,70 @@
-// USERS KV access helpers shared by the checkout, webhook, and signup handlers.
+// Cloudflare D1 access helpers shared by the checkout, webhook, and signup
+// handlers. Migrated from KV in Task #25.
 //
-// Layout in the USERS namespace:
-//   user:<userId>   → JSON {
-//                       userId, email, plan, stripeCustomerId, subStatus,
-//                       createdAt, updatedAt
-//                     }
-//   email:<email>   → userId (lookup index)
-//   cust:<custId>   → userId (Stripe customer id index, used by the webhook
-//                     to resolve customer.subscription.deleted events)
+// Schema (see worker/migrations/0001_init.sql):
+//   users(user_id PK, email UNIQUE, stripe_customer_id UNIQUE,
+//         plan, sub_status, created_at, updated_at)
 //
-// `plan` is "free" | "paid" (Task #19). Records written before Task #19
-// shipped don't have the field — `getUserById` patches them on read so the
-// rest of the codebase can rely on the field being present. Existing rows
-// are treated as "paid" because the only way to land in USERS pre-#19 was
-// through a successful Stripe checkout.
+// `plan` is "free" | "paid". `sub_status` is "active" | "inactive" | NULL.
+// `stripe_customer_id` is NULL for free-tier users — UNIQUE allows multiple
+// NULLs in SQLite/D1, so we don't need a sentinel value.
+//
+// Public function shape (and return shape) is unchanged from the KV-backed
+// version so handlers (webhook.js, checkout.js, billing.js, me.js,
+// signup.js) didn't need any edits during the migration.
 
 function newUserId() {
-  // 24-char base32-ish ID. crypto.randomUUID is available in Workers.
+  // 24-char base32-ish ID. crypto.randomUUID is available in Workers + Node 20+.
   return "usr_" + crypto.randomUUID().replace(/-/g, "").slice(0, 20);
 }
 
-// Patch missing fields on read so callers don't have to check. Keeps the
-// migration cost zero — no batch backfill needed.
-function normalize(user) {
-  if (!user) return null;
-  if (!user.plan) {
-    // Pre-Task-#19 records all came from a paid Stripe checkout, so default
-    // them to "paid". Free-tier rows written by /api/signup always set the
-    // field explicitly.
-    user.plan = user.stripeCustomerId ? "paid" : "free";
-  }
-  return user;
+// Translate a snake_case D1 row to the camelCase user shape the rest of the
+// codebase expects. Centralized here so adding a column doesn't ripple out
+// to every handler.
+function rowToUser(row) {
+  if (!row) return null;
+  return {
+    userId:           row.user_id,
+    email:            row.email,
+    // Pre-Task-#19 rows might land here without a plan (the column has a
+    // DEFAULT 'free' so the import script populates it). Fall back to the
+    // same heuristic the old normalize() used: a paid customer iff there's
+    // a Stripe customer attached.
+    plan:             row.plan || (row.stripe_customer_id ? "paid" : "free"),
+    // Free users get an empty string here so the existing call sites (which
+    // do `if (!user.stripeCustomerId)`) keep working without edits.
+    stripeCustomerId: row.stripe_customer_id || "",
+    subStatus:        row.sub_status,
+    createdAt:        row.created_at,
+    updatedAt:        row.updated_at,
+  };
 }
 
 export async function getUserByEmail(env, email) {
-  const userId = await env.USERS.get(`email:${email.toLowerCase()}`);
-  if (!userId) return null;
-  return getUserById(env, userId);
+  if (!email) return null;
+  const row = await env.DB
+    .prepare("SELECT * FROM users WHERE email = ?")
+    .bind(email.toLowerCase())
+    .first();
+  return rowToUser(row);
 }
 
 export async function getUserByCustomerId(env, customerId) {
-  const userId = await env.USERS.get(`cust:${customerId}`);
-  if (!userId) return null;
-  return getUserById(env, userId);
+  if (!customerId) return null;
+  const row = await env.DB
+    .prepare("SELECT * FROM users WHERE stripe_customer_id = ?")
+    .bind(customerId)
+    .first();
+  return rowToUser(row);
 }
 
 export async function getUserById(env, userId) {
-  const raw = await env.USERS.get(`user:${userId}`);
-  return raw ? normalize(JSON.parse(raw)) : null;
-}
-
-async function writeUser(env, user) {
-  await env.USERS.put(`user:${user.userId}`, JSON.stringify(user));
-  await env.USERS.put(`email:${user.email.toLowerCase()}`, user.userId);
-  // Free users have no Stripe customer — only write the cust→userId index
-  // for paid records, otherwise we'd pollute the namespace with `cust:`
-  // keys whose values cannot be resolved from any Stripe webhook.
-  if (user.stripeCustomerId) {
-    await env.USERS.put(`cust:${user.stripeCustomerId}`, user.userId);
-  }
-  return user;
+  if (!userId) return null;
+  const row = await env.DB
+    .prepare("SELECT * FROM users WHERE user_id = ?")
+    .bind(userId)
+    .first();
+  return rowToUser(row);
 }
 
 /**
@@ -73,32 +78,51 @@ async function writeUser(env, user) {
  */
 export async function upsertUserFromCheckout(env, { email, stripeCustomerId, subStatus }) {
   const now = Math.floor(Date.now() / 1000);
+  const lowered = email.toLowerCase();
+
+  // Look up by Stripe customer first (most authoritative — a duplicate
+  // signup would still come back to the same Stripe customer object), then
+  // fall back to email so a free signup that later upgrades is found.
   const existing =
     (await getUserByCustomerId(env, stripeCustomerId)) ||
-    (await getUserByEmail(env, email));
+    (await getUserByEmail(env, lowered));
 
   if (existing) {
-    const updated = {
+    await env.DB.prepare(
+      `UPDATE users
+          SET email = ?,
+              stripe_customer_id = ?,
+              plan = 'paid',
+              sub_status = ?,
+              updated_at = ?
+        WHERE user_id = ?`,
+    ).bind(lowered, stripeCustomerId, subStatus, now, existing.userId).run();
+
+    return {
       ...existing,
-      email,
+      email:            lowered,
       stripeCustomerId,
+      plan:             "paid",
       subStatus,
-      plan: "paid",
-      updatedAt: now,
+      updatedAt:        now,
     };
-    return writeUser(env, updated);
   }
 
-  const user = {
-    userId: newUserId(),
-    email,
-    plan: "paid",
+  const userId = newUserId();
+  await env.DB.prepare(
+    `INSERT INTO users (user_id, email, stripe_customer_id, plan, sub_status, created_at, updated_at)
+     VALUES (?, ?, ?, 'paid', ?, ?, ?)`,
+  ).bind(userId, lowered, stripeCustomerId, subStatus, now, now).run();
+
+  return {
+    userId,
+    email:            lowered,
+    plan:             "paid",
     stripeCustomerId,
     subStatus,
-    createdAt: now,
-    updatedAt: now,
+    createdAt:        now,
+    updatedAt:        now,
   };
-  return writeUser(env, user);
 }
 
 /**
@@ -112,31 +136,42 @@ export async function upsertUserFromCheckout(env, { email, stripeCustomerId, sub
  * their run history. A real magic-link auth flow is a separate follow-up.
  */
 export async function createFreeUser(env, { email }) {
-  const existing = await getUserByEmail(env, email);
+  const lowered = email.toLowerCase();
+  const existing = await getUserByEmail(env, lowered);
   if (existing) return { user: existing, alreadyExisted: true };
 
   const now = Math.floor(Date.now() / 1000);
+  const userId = newUserId();
+  await env.DB.prepare(
+    `INSERT INTO users (user_id, email, stripe_customer_id, plan, sub_status, created_at, updated_at)
+     VALUES (?, ?, NULL, 'free', NULL, ?, ?)`,
+  ).bind(userId, lowered, now, now).run();
+
   const user = {
-    userId: newUserId(),
-    email,
-    plan: "free",
-    stripeCustomerId: "",   // empty — free users have no Stripe customer
-    subStatus: null,        // null — no subscription
-    createdAt: now,
-    updatedAt: now,
+    userId,
+    email:            lowered,
+    plan:             "free",
+    stripeCustomerId: "",      // empty — free users have no Stripe customer
+    subStatus:        null,    // null — no subscription
+    createdAt:        now,
+    updatedAt:        now,
   };
-  await writeUser(env, user);
   return { user, alreadyExisted: false };
 }
 
 /** Flip the user's subscription status. Used by customer.subscription.deleted. */
 export async function setSubStatusByCustomerId(env, customerId, subStatus) {
-  const user = await getUserByCustomerId(env, customerId);
-  if (!user) return null;
-  const updated = { ...user, subStatus, updatedAt: Math.floor(Date.now() / 1000) };
+  if (!customerId) return null;
+  const now = Math.floor(Date.now() / 1000);
+  const result = await env.DB.prepare(
+    `UPDATE users
+        SET sub_status = ?, updated_at = ?
+      WHERE stripe_customer_id = ?`,
+  ).bind(subStatus, now, customerId).run();
+
   // Cancellation does NOT downgrade a paid record back to "free" — a former
   // paid customer keeps unlimited until their subscription period ends, and
   // the account-level decision (re-enroll, delete, etc.) is out of scope.
-  await env.USERS.put(`user:${user.userId}`, JSON.stringify(updated));
-  return updated;
+  if (!result.meta || !result.meta.changes) return null;
+  return getUserByCustomerId(env, customerId);
 }
