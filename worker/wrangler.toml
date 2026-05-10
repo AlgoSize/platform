@@ -95,9 +95,15 @@ routes = [
 
 [env.production.vars]
 # Production site origin: must match the hostname users load the site from.
-# Used for CORS allow-list, cookie scope, and Stripe redirect URLs.
-# See DEPLOY.md §2.4. Override here if you ship under www. or a different host.
-SITE_ORIGIN = "https://algosize.com"
+# Used for CORS allow-list, cookie scope, OAuth redirect URLs (Google, Stripe),
+# and the magic-link verification URL embedded in sign-in emails.
+#
+# Currently set to the workers.dev URL because the Worker is the host that
+# serves /api/* (and the OAuth callback round-trips through the same origin).
+# When the algosize.com custom-domain route is reactivated, swap this back
+# to "https://algosize.com" and re-add that hostname as an authorized
+# redirect URI in Google Cloud Console.
+SITE_ORIGIN = "https://algosize.guillaumelauzier.workers.dev"
 COOKIE_NAME = "algosize_session"
 ANALYTICS_DOMAIN  = "algosize.com"
 PLAUSIBLE_ENDPOINT = "https://plausible.io"
@@ -201,6 +207,16 @@ service = "algosize-sandbox-staging"
 #                          just no-ops with a single warn-level log line.
 #                          Provisioning + rotation steps live in DEPLOY.md
 #                          §3.6, DNS records (SPF/DKIM/DMARC) in §4.4.
+#   GOOGLE_CLIENT_ID       OAuth 2.0 Client ID from Google Cloud Console
+#   GOOGLE_CLIENT_SECRET   OAuth 2.0 Client Secret matching the Client ID.
+#                          Together they enable the "Sign in with Google"
+#                          button on the Starter pricing card. Authorized
+#                          redirect URI in Google Cloud Console must be:
+#                            <SITE_ORIGIN>/api/auth/google/callback
+#                          When unset, the /api/auth/google/start route
+#                          redirects to /?auth=google_not_configured and
+#                          the rest of the worker keeps working — only the
+#                          Google sign-in option is disabled.
 #
 # Local dev: put these in `worker/.dev.vars` (gitignored). See
 # `worker/.dev.vars.example` for the template.
@@ -212,6 +228,8 @@ service = "algosize-sandbox-staging"
 #   cd worker && wrangler secret put STRIPE_PRICE_ID        --env production
 #   cd worker && wrangler secret put OPENAI_API_KEY         --env production
 #   cd worker && wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON --env production
+#   cd worker && wrangler secret put GOOGLE_CLIENT_ID            --env production
+#   cd worker && wrangler secret put GOOGLE_CLIENT_SECRET        --env production
 #
 # Staging: same names, different values (Stripe TEST mode keys, separate
 # Sentry project DSN, etc.). Set them with `--env staging`:

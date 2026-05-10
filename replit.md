@@ -301,6 +301,79 @@ admin-only roster page.
   send goes out through Gmail. Without it, `sendTransactional` no-ops and
   the user sees "check your inbox" but never receives the email.
 
+## Google OAuth sign-in (2026-05-10)
+
+Added "Sign in with Google" alongside the magic-link flow. Both options
+co-exist on the Starter pricing card; either one mints the same session
+cookie via `issueJWT` + `buildSessionCookie`.
+
+- **Worker:** new `worker/src/handlers/auth_google.js` exposes
+  `GET /api/auth/google/start` (mints a 32-byte CSRF state, stores
+  `gstate:<state>` in `SESSIONS` KV with a 10-min TTL, redirects to
+  Google's consent screen with `scope=openid email profile`,
+  `prompt=select_account`) and `GET /api/auth/google/callback`
+  (validates+consumes the state, exchanges the auth code at
+  `oauth2.googleapis.com/token`, fetches `openidconnect.googleapis.com/v1/userinfo`,
+  HARD-BLOCKS unverified emails with `?auth=email_not_verified`,
+  finds-or-creates the user via `getUserByEmail`/`createFreeUser`,
+  issues the session cookie, 302s to `/dashboard/`). Wired in
+  `worker/src/index.js` behind the existing `signupRateLimit`
+  (10/min/IP) for `/start` and a dedicated `google_cb` bucket
+  (30/min/IP) for `/callback`.
+- **Frontend:** `site/index.html` Starter card gets a divider +
+  white "Sign in with Google" button (`href="/api/auth/google/start"`)
+  below the magic-link form. New `site/assets/js/auth-banner.js`
+  reads `?auth=<code>` on the homepage and renders a friendly
+  banner mapping each error code (e.g. `email_not_verified`,
+  `google_token_failed`, `expired_or_invalid`) to user-facing copy,
+  then strips the param via `history.replaceState`. Banner styles
+  + button styles in `site/assets/css/main.css`
+  (`.signup-divider`, `.btn-google`, `.auth-banner.error/info`).
+- **Secrets.** New required secrets `GOOGLE_CLIENT_ID` +
+  `GOOGLE_CLIENT_SECRET` (documented at the bottom of
+  `worker/wrangler.toml`). When unset, `/api/auth/google/start`
+  redirects to `/?auth=google_not_configured` and the rest of the
+  worker keeps working — only the Google option is disabled.
+- **Production routing.** Worker is now exposed at
+  `https://algosize.guillaumelauzier.workers.dev` (the default
+  workers.dev subdomain). `[env.production.vars] SITE_ORIGIN`
+  updated to match so OAuth `redirect_uri` round-trips through
+  the same origin and CORS / cookie scope line up. The
+  `algosize.com/api/*` route binding is kept in case the custom
+  domain is reactivated — when that happens, swap `SITE_ORIGIN`
+  back to `https://algosize.com` and add that hostname as an
+  authorized redirect URI in Google Cloud Console.
+- **Coverage.** `worker/scripts/test-google-oauth.mjs` (23
+  assertions: state stored in KV, state is single-use,
+  `email_verified=false` is hard-blocked, no cookie issued on
+  unverified email, error-param passthrough, missing-code rejection,
+  not-configured fast-path, successful flow mints the cookie and
+  redirects to `/dashboard/`). Wired into `cd worker && npm test`.
+
+## Deploy steps for the workers.dev rollout
+
+1. In **https://console.cloud.google.com/apis/credentials**, create
+   an OAuth 2.0 Client ID (Web application) and add this exact
+   authorized redirect URI:
+   ```
+   https://algosize.guillaumelauzier.workers.dev/api/auth/google/callback
+   ```
+2. Set the secrets on the production Worker:
+   ```
+   cd worker
+   wrangler secret put GOOGLE_CLIENT_ID     --env production
+   wrangler secret put GOOGLE_CLIENT_SECRET --env production
+   ```
+3. Deploy:
+   ```
+   wrangler deploy --env production
+   ```
+4. Smoke-test:
+   ```
+   curl -sI https://algosize.guillaumelauzier.workers.dev/api/auth/google/start
+   # → 302 Location: https://accounts.google.com/o/oauth2/v2/auth?…
+   ```
+
 Still TODO (not blocking the dashboard):
 - `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID` —
   required only for paid signup + the Stripe webhook.
