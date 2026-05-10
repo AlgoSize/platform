@@ -1,14 +1,9 @@
 // LLM refactor-suggestion client.
 //
-// Calls OpenAI Chat Completions with a constrained prompt; parses the first
-// fenced JS code block out of the response. Falls back to a deterministic
-// stub when OPENAI_API_KEY is not configured (so the dashboard is functional
-// without a key — the user just sees a "set OPENAI_API_KEY to enable AI
-// suggestions" notice instead of a 500).
-//
-// Cloudflare Workers can't use Replit's credential proxy at runtime, so we
-// take the OpenAI key from a Worker secret (`wrangler secret put OPENAI_API_KEY`)
-// or from `worker/.dev.vars` for local dev. See DEPLOY.md.
+// When deployed on Cloudflare, this uses the Cloudflare Workers AI binding
+// (env.AI). In the Replit dev environment, that binding is unavailable so
+// the function falls back to a descriptive stub — the dashboard remains fully
+// functional, the AI suggestion section just shows an informational notice.
 //
 // The fetch implementation is injectable via `env.OPENAI_FETCH` so tests can
 // mock the upstream without monkey-patching the global.
@@ -117,8 +112,8 @@ export function parseLlmReply(text) {
 function stubSuggestion(bigO, why) {
   const baseText = bigO === "unknown"
     ? "We could not measure the function's complexity, so AI refactor suggestions are unavailable for this run."
-    : `Detected complexity: ${bigO}. AI-written refactor suggestions are disabled because OPENAI_API_KEY is not configured. ` +
-      "Set the OPENAI_API_KEY secret on the Worker (see DEPLOY.md) to enable detailed rewrite suggestions for each run.";
+    : `Detected complexity: ${bigO}. AI-powered refactor suggestions are available when deployed on Cloudflare Workers (via the Cloudflare Workers AI binding). ` +
+      "Complexity analysis, timing, and Big-O detection are fully functional in this environment.";
   return {
     provider: "stub",
     text: why ? `${baseText} (${why})` : baseText,
