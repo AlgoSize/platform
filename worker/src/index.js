@@ -21,6 +21,7 @@ import { meHandler } from "./handlers/me.js";
 import { listRunsHandler, getRunHandler } from "./handlers/runs.js";
 import { billingPortalHandler } from "./handlers/billing.js";
 import { requestMagicLinkHandler, verifyMagicLinkHandler } from "./handlers/auth_magic.js";
+import { googleStartHandler, googleCallbackHandler } from "./handlers/auth_google.js";
 import { adminListUsersHandler, adminUsersCsvHandler, requireAdmin } from "./handlers/admin.js";
 import { pageviewPixelHandler } from "./handlers/pageview.js";
 import { seedHandler } from "./handlers/_seed.js";
@@ -78,6 +79,15 @@ router.post("/api/analyze/algo",    analyzeRateLimit, requireAuth, enforceQuota(
 // random and unbruteforceable.
 router.post("/api/auth/request-link", signupRateLimit, requestMagicLinkHandler);
 router.get( "/api/auth/verify",       makeRateLimit({ keyName: "verify", limit: 30, windowSec: 60 }), verifyMagicLinkHandler);
+
+// ---- Google OAuth — second sign-in option (email verified by Google) ------
+// /start redirects to Google's consent screen; /callback exchanges the code,
+// requires `email_verified: true` from Google's userinfo endpoint, then
+// finds/creates the user and issues the same session cookie magic-link does.
+// Both endpoints are GET (browser-driven redirects), share the signup rate-
+// limit bucket so they can't be used to flood Google's token endpoint.
+router.get( "/api/auth/google/start",    signupRateLimit, googleStartHandler);
+router.get( "/api/auth/google/callback", makeRateLimit({ keyName: "google_cb", limit: 30, windowSec: 60 }), googleCallbackHandler);
 
 // ---- Admin endpoints — gated by env.ADMIN_EMAILS allowlist ----------------
 router.get( "/api/admin/users",      requireAdmin, adminListUsersHandler);

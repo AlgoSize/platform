@@ -42,6 +42,8 @@ const env = {
   EMAIL_DELEGATED_USER:   process.env.EMAIL_DELEGATED_USER   || "noreply@algosize.com",
   E2E_TEST_SECRET:        process.env.E2E_TEST_SECRET        || "",
   GOOGLE_SERVICE_ACCOUNT_JSON: process.env.GOOGLE_SERVICE_ACCOUNT_JSON || "",
+  GOOGLE_CLIENT_ID:       process.env.GOOGLE_CLIENT_ID       || "",
+  GOOGLE_CLIENT_SECRET:   process.env.GOOGLE_CLIENT_SECRET   || "",
   SENTRY_DSN:             process.env.SENTRY_DSN             || "",
 };
 
