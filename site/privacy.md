@@ -1,0 +1,180 @@
+---
+layout: page
+title: Privacy Policy
+description: How Algosize collects, uses, and protects your information.
+permalink: /privacy/
+---
+
+**Last Updated: May 10, 2026**
+**Effective Date: May 10, 2026**
+
+## 1. Introduction
+
+This Privacy Policy describes how Algosize ("Algosize," "we," "us," or "our") collects, uses, and protects information about you when you visit algosize.com or use our services (collectively, the "Service"). The Service helps developers and organizations cut cloud spend, find vulnerabilities, and optimize critical algorithms.
+
+By using the Service, you agree to the collection and use of information in accordance with this Privacy Policy.
+
+## 2. Who We Are (Data Controller)
+
+The data controller responsible for your personal data is:
+
+**[Algosize Legal Entity Name]**
+[Registered Address]
+Email: privacy@algosize.com
+
+If you have questions about this Privacy Policy or our data practices, please contact us at the address above.
+
+## 3. Information We Collect
+
+### 3.1 Information You Provide
+
+- **Account information:** name, email address, password (stored as a salted hash), and authentication tokens.
+- **Billing information:** payment details processed by our payment provider, Stripe. We do not store full card numbers on our servers.
+- **Code and configuration submissions:** source code, configuration files, infrastructure-as-code, repository URLs, and other artifacts you submit to our analyzers ("Customer Content").
+- **Communications:** support requests, feedback, survey responses, and other messages you send us.
+
+### 3.2 Information Collected Automatically
+
+- **Usage data:** features used, pages visited, API requests, errors encountered, timestamps, and referrer URLs.
+- **Device and connection data:** IP address, browser type, operating system, device identifiers, and approximate location derived from IP.
+- **Cookies and similar technologies:** see Section 8.
+
+### 3.3 Information from Third Parties
+
+- **OAuth/SSO providers** (e.g., GitHub) if you sign in using a third-party identity provider — typically your email, name, avatar, and provider user ID.
+- **Payment processor** (Stripe) — transaction status, last four digits of card, country of card issuer, and fraud signals.
+
+## 4. How We Use Your Information
+
+We use your information to:
+
+- Provide, operate, and maintain the Service;
+- Authenticate users and secure accounts;
+- Run analyses on submitted code and return results to you;
+- Process payments and manage subscriptions;
+- Communicate with you about your account, security alerts, and product updates;
+- Monitor and improve the Service, including debugging and product analytics;
+- Detect, prevent, and address fraud, abuse, and security incidents;
+- Comply with legal obligations.
+
+## 5. Legal Bases for Processing (EEA/UK Users)
+
+If you are in the European Economic Area or the United Kingdom, we process your personal data on the following legal bases under the GDPR and UK GDPR:
+
+- **Performance of a contract** — to deliver the Service you signed up for;
+- **Legitimate interests** — to secure the Service, prevent fraud, improve the product, and conduct ordinary business operations;
+- **Consent** — for optional cookies, marketing, and where required by law;
+- **Legal obligation** — to comply with applicable laws.
+
+You have the right to object to processing based on legitimate interests; see Section 12.
+
+## 6. How We Share Information
+
+We do not sell your personal data. We share information only with:
+
+### 6.1 Service Providers (Sub-processors)
+
+- **Cloudflare** — hosting, edge compute (Workers), DDoS protection;
+- **Stripe** — payment processing and fraud prevention;
+- **GitHub** — code repository hosting and Pages hosting;
+- **Email delivery providers** — transactional and account email;
+- **Analytics providers** — aggregate, privacy-respecting usage statistics.
+
+A current list of sub-processors is available on request at privacy@algosize.com. Sub-processors are bound by contractual data-protection obligations.
+
+### 6.2 Legal and Safety
+
+We may disclose information if required by law, subpoena, court order, or to protect the rights, property, or safety of Algosize, our users, or the public.
+
+### 6.3 Business Transfers
+
+If Algosize is involved in a merger, acquisition, or sale of assets, your information may be transferred. We will notify affected users before personal data becomes subject to a different privacy policy.
+
+## 7. Code You Submit
+
+When you submit code, configurations, or other artifacts to our analyzers:
+
+- We run them in **isolated sandboxes** for the sole purpose of generating the analysis you requested.
+- We do **not** use your Customer Content to train general-purpose machine-learning models.
+- We do **not** share your Customer Content with third parties for their own purposes.
+- We retain Customer Content only as long as needed to deliver and improve your results, then delete or aggregate it (see Section 9).
+- You are responsible for ensuring you have the right to share that content with us, and for not submitting personal data of third parties without a valid legal basis.
+
+## 8. Cookies and Tracking
+
+We use the following categories of cookies and similar technologies:
+
+- **Strictly necessary** — required for authentication, session management, and security. Cannot be disabled.
+- **Functional** — to remember settings and preferences.
+- **Analytics** — to measure performance and understand how the Service is used. Set only with consent where required by law.
+
+You can control cookies through your browser settings. Disabling strictly necessary cookies may break authentication.
+
+## 9. Data Retention
+
+We retain personal data for as long as your account is active or as needed to provide the Service. Specifically:
+
+- **Account data** — until you delete your account, plus a short grace period for backups (typically up to 30 days).
+- **Submitted code and analysis results** — typically up to 30 days after generation, unless you choose to retain them longer or we are required to keep them for legal or security reasons.
+- **Billing and tax records** — as required by tax and accounting laws (typically 5–10 years).
+- **Security and audit logs** — up to 12 months.
+
+You can request deletion of your account and associated data at any time at privacy@algosize.com.
+
+## 10. International Data Transfers
+
+We are a global service. Your data may be processed in countries outside your own, including the United States and the European Union. When transferring personal data internationally, we rely on appropriate safeguards such as the European Commission's Standard Contractual Clauses, the UK International Data Transfer Addendum, or other lawful mechanisms.
+
+## 11. Security
+
+We implement reasonable administrative, technical, and physical safeguards including:
+
+- TLS encryption in transit;
+- Encryption at rest for sensitive stored data;
+- Isolated sandboxing for code execution;
+- Role-based access controls and least-privilege principles;
+- Regular dependency updates and security reviews.
+
+No system is completely secure, and we cannot guarantee absolute security of your data. If you discover a vulnerability, please report it responsibly to security@algosize.com.
+
+## 12. Your Rights
+
+Depending on your jurisdiction, you may have the right to:
+
+- Access the personal data we hold about you;
+- Correct inaccurate or incomplete data;
+- Delete your data ("right to be forgotten");
+- Object to or restrict certain processing;
+- Receive your data in a portable format;
+- Withdraw consent where processing is based on consent;
+- Lodge a complaint with your local supervisory authority.
+
+To exercise these rights, email privacy@algosize.com. We will respond within the timeframe required by applicable law (typically within 30 days).
+
+### Users in California (CCPA/CPRA)
+
+California residents have the right to know what personal information is collected, the right to delete personal information, the right to correct inaccurate information, the right to opt out of "sale" or "sharing" (we do not sell or share personal information as defined under CCPA), and the right to non-discrimination for exercising these rights.
+
+### Users in Turkey (KVKK)
+
+Under Turkey's Personal Data Protection Law (Law No. 6698 — KVKK), data subjects have rights similar to those described above, including the right to know whether personal data is processed, request information about processing, request correction or deletion, and lodge a complaint with the Personal Data Protection Authority (KVKK Kurumu). Contact privacy@algosize.com to exercise these rights.
+
+## 13. Children's Privacy
+
+The Service is not intended for individuals under the age of 16. We do not knowingly collect personal data from children. If you believe a child has provided us data, please contact privacy@algosize.com so we can delete it.
+
+## 14. Third-Party Links
+
+The Service may link to third-party websites or services. We are not responsible for their privacy practices. Review their policies before sharing information.
+
+## 15. Changes to This Privacy Policy
+
+We may update this Privacy Policy from time to time. Material changes will be communicated by email or in-product notice at least 30 days before they take effect. The "Last Updated" date at the top reflects the most recent revision. Continued use of the Service after a change takes effect constitutes acceptance of the updated policy.
+
+## 16. Contact
+
+Questions, requests, or complaints:
+
+- **Email:** privacy@algosize.com
+- **Security:** security@algosize.com
+- **Mail:** [Algosize Legal Entity Name], [Registered Address]

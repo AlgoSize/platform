@@ -1,0 +1,44 @@
+Add a Privacy Policy page and a Terms of Service page to the Jekyll site at site/.
+
+Context for the repo:
+- Jekyll marketing site lives in site/, vanilla CSS, no frameworks.
+- Permalinks should be /privacy/ and /terms/ (trailing slash, matches the other pages).
+- The existing layout used by content pages is `page` (or `default` if `page` doesn't exist — check site/_layouts/ first and use whichever the existing About/Pricing-style pages use; do not invent a new layout).
+
+Tasks:
+
+1. Create `site/privacy.md` with the exact contents I will paste below this prompt (file 1).
+   - Keep the YAML front matter as-is.
+   - Do not rewrite, summarize, or reformat the body.
+
+2. Create `site/terms.md` with the exact contents I will paste below this prompt (file 2).
+   - Same rules: keep front matter, do not rewrite the body.
+
+3. Update the site footer so both pages are linked.
+   - Find the footer partial (likely site/_includes/footer.html or rendered inside site/_layouts/default.html).
+   - Add two links next to any existing footer links:
+       <a href="{{ '/privacy/' | relative_url }}">Privacy</a>
+       <a href="{{ '/terms/' | relative_url }}">Terms</a>
+   - Match the surrounding markup, spacing, and CSS class conventions exactly. Do NOT add new CSS classes or restyle the footer.
+   - If there is no footer partial yet, add a minimal one to site/_includes/footer.html and include it from the default layout, using the same vanilla-CSS style as the rest of the site.
+
+4. If the signup, checkout, or account-creation flow has a "by continuing you agree to..." line, update it to link to /terms/ and /privacy/. If there is no such line yet, add one near the primary CTA on the signup/checkout page in this exact form:
+       <p class="legal-note">
+         By creating an account you agree to our
+         <a href="{{ '/terms/' | relative_url }}">Terms</a> and
+         <a href="{{ '/privacy/' | relative_url }}">Privacy Policy</a>.
+       </p>
+   Use whatever class name is already used for small/secondary text on that page instead of `legal-note` if one exists.
+
+5. Verify locally:
+   - Run `cd site && bundle exec jekyll serve --host 0.0.0.0 --port 5000`
+   - Open http://localhost:5000/privacy/ and http://localhost:5000/terms/ — both should render with the site's normal header, footer, and page styling, no 404s.
+   - Confirm the footer links navigate correctly from any page.
+
+6. Do NOT:
+   - Edit anything under worker/, worker-sandbox/, shared/, or scripts/.
+   - Add new gems or dependencies.
+   - Introduce a CSS framework or new build step.
+   - Change any analytics, auth, or Stripe code.
+
+Commit message: "Add Privacy Policy and Terms of Service pages, link from footer".
