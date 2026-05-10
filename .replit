@@ -1,4 +1,4 @@
-modules = ["ruby-3.2", "nodejs-20", "python-3.11"]
+modules = ["nodejs-20", "web", "bash", "ruby-3.2"]
 [agent]
 expertMode = true
 stack = "BEST_EFFORT_FALLBACK"
