@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "acorn": "^8.14.0",
+    "cookie-parser": "^1.4.7",
+    "express": "^4.22.1",
     "itty-router": "^5.0.18"
   },
   "devDependencies": {

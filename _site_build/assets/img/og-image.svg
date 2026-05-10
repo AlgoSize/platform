@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Algosize Open Graph / Twitter Card image (1200×630).
+  Source for /og-image.png. Reuses the [as] brand mark from
+  /assets/img/brand-mark.svg, paired with the wordmark and tagline.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0a0d14"/>
+      <stop offset="1" stop-color="#11151e"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.85" cy="0.15" r="0.6">
+      <stop offset="0" stop-color="#5eead4" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#5eead4" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Canvas -->
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="630" fill="url(#glow)"/>
+
+  <!-- Hairline frame -->
+  <rect x="24" y="24" width="1152" height="582" rx="20" ry="20"
+        fill="none" stroke="#1e2532" stroke-width="2"/>
+
+  <!-- Brand lockup: [as] mark + wordmark -->
+  <g transform="translate(96 168)">
+    <g font-family="ui-monospace, 'JetBrains Mono', 'DejaVu Sans Mono', Menlo, Consolas, monospace"
+       font-weight="800"
+       font-size="148"
+       dominant-baseline="central">
+      <text x="0"   y="0" fill="#5eead4">[</text>
+      <text x="62"  y="0" fill="#f1f3f6">as</text>
+      <text x="218" y="0" fill="#5eead4">]</text>
+    </g>
+    <text x="312" y="0"
+          font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
+          font-weight="700"
+          font-size="116"
+          letter-spacing="-3"
+          fill="#f1f3f6"
+          dominant-baseline="central">Algosize</text>
+  </g>
+
+  <!-- Headline -->
+  <text x="96" y="360"
+        font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
+        font-weight="600"
+        font-size="58"
+        letter-spacing="-2"
+        fill="#f1f3f6">Cut cloud waste.</text>
+  <text x="96" y="430"
+        font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
+        font-weight="600"
+        font-size="58"
+        letter-spacing="-2"
+        fill="#f1f3f6">Catch vulns. Optimize algorithms.</text>
+
+  <!-- Subtitle -->
+  <text x="96" y="510"
+        font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
+        font-weight="400"
+        font-size="30"
+        fill="#8a93a3">Engineering ops, not vibes.</text>
+
+  <!-- URL chip -->
+  <g transform="translate(96 552)">
+    <rect x="0" y="-26" rx="8" ry="8" width="200" height="44" fill="none" stroke="#1e2532" stroke-width="1.5"/>
+    <text x="16" y="0"
+          font-family="ui-monospace, 'JetBrains Mono', 'DejaVu Sans Mono', Menlo, Consolas, monospace"
+          font-size="20"
+          fill="#5eead4"
+          dominant-baseline="central">algosize.com</text>
+  </g>
+</svg>

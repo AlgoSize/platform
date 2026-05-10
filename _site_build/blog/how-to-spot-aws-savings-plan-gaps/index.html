@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" /><title>How to spot AWS Savings Plan gaps before the bill arrives — Algosize</title>
+    <meta name="description" content="AWS Savings Plans look great in the dashboard until you read them line by line. Here's the four-gap checklist we run on every Cost &amp; Usage Report — and how to fix each one before next month's invoice." />
+    <link rel="canonical" href="https://algosize.com/blog/how-to-spot-aws-savings-plan-gaps/" />
+    <link rel="stylesheet" href="/assets/css/main.css" />
+    <link rel="alternate" type="application/rss+xml" title="Algosize — Engineering blog" href="https://algosize.com/feed.xml" />
+
+    <!-- Favicons / app icons. Sourced from /assets/img/brand-mark.svg ([as] mark). -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Algosize" />
+    <meta property="og:title" content="How to spot AWS Savings Plan gaps before the bill arrives — Algosize" />
+    <meta property="og:description" content="AWS Savings Plans look great in the dashboard until you read them line by line. Here's the four-gap checklist we run on every Cost &amp; Usage Report — and how to fix each one before next month's invoice." />
+    <meta property="og:url" content="https://algosize.com/blog/how-to-spot-aws-savings-plan-gaps/" />
+    <meta property="og:image" content="https://algosize.com/assets/img/blog/aws-savings-plan-gaps.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Algosize — [as] brand mark with the tagline ‘Cut cloud waste. Catch vulnerabilities early. Optimize your algorithms.’" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="How to spot AWS Savings Plan gaps before the bill arrives — Algosize" />
+    <meta name="twitter:description" content="AWS Savings Plans look great in the dashboard until you read them line by line. Here's the four-gap checklist we run on every Cost &amp; Usage Report — and how to fix each one before next month's invoice." />
+    <meta name="twitter:image" content="https://algosize.com/assets/img/blog/aws-savings-plan-gaps.png" />
+    <meta name="twitter:image:alt" content="Algosize — [as] brand mark with the tagline ‘Cut cloud waste. Catch vulnerabilities early. Optimize your algorithms.’" /></head>
+  <body>
+    <header class="nav">
+  <div class="nav-inner">
+    <a href="/" class="brand">
+      <span class="brand-mark" aria-hidden="true">[as]</span>
+      <span class="brand-word">Algosize</span>
+    </a>
+    <nav class="nav-links" aria-label="Primary">
+      <a href="/#features">Features</a>
+      <a href="/#pricing">Pricing</a>
+      <a href="/blog/">Blog</a>
+      <a href="/dashboard/">Dashboard</a>
+    </nav>
+  </div>
+</header>
+
+
+<article class="post">
+  <div class="container container-narrow">
+
+    <header class="post-head"><div class="post-tags" aria-label="Post tags">
+        <span class="post-tag mono">#cloud-cost</span>
+        <span class="post-tag mono">#aws</span>
+        <span class="post-tag mono">#finops</span>
+        
+      </div><h1 class="post-title">How to spot AWS Savings Plan gaps before the bill arrives</h1><p class="post-lede">AWS Savings Plans look great in the dashboard until you read them line by line. Here's the four-gap checklist we run on every Cost &amp; Usage Report — and how to fix each one before next month's invoice.</p><div class="post-byline">
+        <span class="post-byline-author">Algosize Engineering</span>
+        <span class="post-byline-sep" aria-hidden="true">·</span>
+        <time datetime="2026-04-08T13:00:00+00:00">April 8, 2026</time>
+        <span class="post-byline-sep" aria-hidden="true">·</span>
+        <span class="post-byline-time">8 min read</span>
+      </div>
+    </header><figure class="post-hero" aria-hidden="true">
+      <img src="/assets/img/blog/aws-savings-plan-gaps.png"
+           alt=""
+           width="1200" height="630"
+           loading="eager" decoding="async" />
+    </figure><aside class="post-toc" id="post-toc" aria-label="Table of contents" hidden>
+      <h2 class="post-toc-title">In this post</h2>
+      <ul id="post-toc-list"></ul>
+    </aside>
+
+    <div class="post-prose" id="post-prose">
+      <p>You bought a 1-year, no-upfront Compute Savings Plan twelve months ago. The Cost Explorer card says “94% utilization” and you stop reading. Next month the same card says 88%, the month after 81%, and by the end of the renewal cycle you’re paying On-Demand prices on a third of your fleet <em>and</em> a separate fixed commitment for capacity nobody is using.</p>
+
+<p>The dashboard isn’t lying. It’s just answering a different question than the one you actually care about. <strong>Utilization</strong> measures how much of your <em>commitment</em> you spent. <strong>Coverage</strong> measures how much of your <em>spend</em> was at the discounted rate. Most teams stare at the first number, miss the second, and pay the gap in cash.</p>
+
+<p>This post is the four-gap checklist we run on every customer’s Cost &amp; Usage Report (CUR). It takes about an hour the first time, twenty minutes a month after that, and we’ve yet to run it on an account where it didn’t pay for the engineer’s whole afternoon.</p>
+
+<h2 id="the-metric-you-actually-want">The metric you actually want</h2>
+
+<p>Open a fresh tab and write this on a sticky note: <strong>uncovered eligible spend</strong>. Not utilization. Not effective savings rate. Not commitment used.</p>
+
+<p>Uncovered eligible spend is the dollar amount you paid On-Demand for resources a Savings Plan <em>would have</em> discounted if the math had lined up. It’s the part of the bill nobody sends you a Slack alert about, because from AWS’s point of view nothing went wrong — you used a service, you paid for it, end of story.</p>
+
+<p>A Savings Plan is a futures contract. You pre-commit to $X per hour of compute and AWS gives you up to 66% off the published rate on anything that fits the contract. The contract has fine print, the fine print has edges, and the gaps live on those edges.</p>
+
+<p>There are exactly four edges that matter in practice. We list them in order of how often they bite, not how big they are.</p>
+
+<h2 id="gap-1-family-mismatch">Gap 1: family-mismatch</h2>
+
+<p>A Compute Savings Plan covers EC2, Fargate, and Lambda usage <em>across instance families</em>, but only if AWS can re-price the family at the same hourly rate as your commitment. An EC2 Instance Savings Plan does not — it’s locked to a single family in a single region.</p>
+
+<p>The trap is the EC2 Instance Savings Plan. You bought it back when the team was running c5 boxes for everything. Two quarters later someone read a benchmark, the platform team flipped the auto-scaling group to c6i, and the new boxes are 8% cheaper at On-Demand prices. Your old commitment now covers nothing they’re running. Utilization on the dashboard reads 100% (you’re “using” all of it on the few c5 boxes still in the fleet) and coverage on c6i reads 0%.</p>
+
+<p>How to find it: pull the CUR for the last full month, group by <code class="language-plaintext highlighter-rouge">pricing/Term</code> and <code class="language-plaintext highlighter-rouge">lineItem/UsageType</code>, and look for any usage type with a non-trivial On-Demand spend that <em>also</em> has a sibling family covered by an Instance Savings Plan. We use this query as a starting point:</p>
+
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">SELECT</span> <span class="n">line_item_usage_type</span><span class="p">,</span> <span class="k">SUM</span><span class="p">(</span><span class="n">line_item_unblended_cost</span><span class="p">)</span> <span class="k">AS</span> <span class="n">od_spend</span>
+<span class="k">FROM</span> <span class="n">cur_table</span>
+<span class="k">WHERE</span> <span class="n">line_item_line_item_type</span> <span class="o">=</span> <span class="s1">'Usage'</span>
+  <span class="k">AND</span> <span class="n">pricing_term</span> <span class="o">=</span> <span class="s1">'OnDemand'</span>
+  <span class="k">AND</span> <span class="n">product_product_family</span> <span class="o">=</span> <span class="s1">'Compute Instance'</span>
+<span class="k">GROUP</span> <span class="k">BY</span> <span class="mi">1</span>
+<span class="k">HAVING</span> <span class="k">SUM</span><span class="p">(</span><span class="n">line_item_unblended_cost</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">100</span>
+<span class="k">ORDER</span> <span class="k">BY</span> <span class="mi">2</span> <span class="k">DESC</span><span class="p">;</span>
+</code></pre></div></div>
+
+<p>Any row in the output that lives in a family adjacent to one you’ve already committed to is a candidate. The fix is almost always to convert the Instance Savings Plan to a Compute Savings Plan at renewal — same dollar commitment, much wider coverage, ~6% smaller discount. We’ve never had a customer regret the trade.</p>
+
+<h2 id="gap-2-region-mismatch">Gap 2: region-mismatch</h2>
+
+<p>Compute Savings Plans are region-agnostic across EC2 and Fargate. They are <em>not</em> region-agnostic across services in the way you’d think. Sagemaker Savings Plans? Region-locked. RDS Reserved Instances? Region-locked. The new Bedrock provisioned-throughput commitment? Region-locked.</p>
+
+<p>The bite happens when your platform team runs a DR exercise, fails over to a secondary region for two days, and the bill for those two days runs at On-Demand rates on top of your existing commitment in the primary region. We’ve seen this pattern most often in financial-services customers who rehearse failover quarterly — the rehearsal is excellent practice, the surprise spend afterwards is not.</p>
+
+<p>How to find it: in the same CUR, group by <code class="language-plaintext highlighter-rouge">product/region</code> and <code class="language-plaintext highlighter-rouge">pricing/Term</code>. Anything On-Demand in a region where you don’t hold a regional commitment is a candidate.</p>
+
+<p>The fix is policy, not procurement. Pick one of:</p>
+
+<ul>
+  <li>Buy a small Compute Savings Plan in the DR region sized to a 24-hour failover.</li>
+  <li>Run the DR exercise on Spot to keep the unplanned spend bounded.</li>
+  <li>Accept the cost of the rehearsal and budget for it explicitly. (“Surprise” spend is much worse than budgeted spend, even if the dollar amount is identical.)</li>
+</ul>
+
+<h2 id="gap-3-instance-class-skew">Gap 3: instance-class skew</h2>
+
+<p>Some of the largest gaps we see are inside a single family. You have a Compute Savings Plan, you’re running c6i across the fleet, and you assume coverage is 100%. Then someone provisions a c6i<em>d</em>.4xlarge for a stateful workload that needs the local NVMe and the SP rate doesn’t match the d-suffix variant 1:1 — there’s a small premium for the local storage, and that premium is uncovered.</p>
+
+<p>The same thing happens between regular and <code class="language-plaintext highlighter-rouge">n</code> (high-network) variants, between <code class="language-plaintext highlighter-rouge">g</code> (graviton) and non-graviton, and between metal and virtualised within the same family. Each is a single-digit-percent variance in coverage. They add up.</p>
+
+<p>How to find it: split coverage reports by full instance type, not just family. AWS’s own coverage report defaults to family-level rollups, which is exactly the rollup that hides this gap. In the CUR, group by <code class="language-plaintext highlighter-rouge">product/instanceType</code> rather than <code class="language-plaintext highlighter-rouge">product/instanceFamily</code> and you’ll see the skew immediately.</p>
+
+<p>The fix is to either (a) re-quote your commitment with the heavier-variant rate factored in, or (b) standardise on the base variant for the workload and only deviate when there’s a measured reason. The standardisation play is usually the cheaper one — most teams discover the d-suffix wasn’t actually needed.</p>
+
+<h2 id="gap-4-sandbox-and-dev-burn">Gap 4: sandbox and dev burn</h2>
+
+<p>The most common gap we see is also the most embarrassing one. The platform team buys a tight Compute Savings Plan sized to production traffic. The data team spins up a 32-vCPU Notebooks instance for a Friday-afternoon experiment, leaves it running over the weekend, and Monday morning you’ve paid On-Demand on a workload that wasn’t part of the commitment plan.</p>
+
+<p>You can’t predict experiments. You can predict that there will be experiments. So size the commitment with a 10–15% headroom buffer over the production baseline, <em>then</em> set up a budget alert at the buffer-line so the platform team gets pinged the moment dev burn pushes utilization into the buffer.</p>
+
+<p>How to find it: tag every non-prod resource with an <code class="language-plaintext highlighter-rouge">env=dev|staging|sandbox</code> tag (you should be doing this anyway for a thousand other reasons). In the CUR, group by <code class="language-plaintext highlighter-rouge">resourceTags/user_env</code> and look at the On-Demand fraction by environment. If <code class="language-plaintext highlighter-rouge">dev</code> or <code class="language-plaintext highlighter-rouge">sandbox</code> shows up with five-figure monthly On-Demand spend, you have a gap.</p>
+
+<p>The fix has two halves: (1) buy a small Savings Plan sized to typical dev burn, and (2) put a hard cap on instance size in non-prod via Service Control Policies. Most teams won’t <em>consciously</em> spin up an x1e.16xlarge for a Friday notebook, but somebody will eventually click the wrong dropdown.</p>
+
+<h2 id="a-weekly-review-that-takes-20-minutes">A weekly review that takes 20 minutes</h2>
+
+<p>Once you’ve found and fixed the gaps once, the maintenance loop is short:</p>
+
+<ol>
+  <li><strong>Monday morning</strong>, pull the CUR for last week, run the four group-bys above.</li>
+  <li>Note any row where uncovered eligible spend exceeds your alert threshold (we use $1,000/week as a starting point — adjust to your bill size).</li>
+  <li>For each row, decide: is this a one-off (DR rehearsal, weekend experiment) or a trend (a new family rolling out across the fleet)?</li>
+  <li>One-offs go in a “watch” list. Trends become a procurement ticket — convert, top up, or reshape the commitment.</li>
+  <li><strong>Last business day of the quarter</strong>, review the watch list. Anything that became a trend during the quarter joins the procurement ticket queue. Anything that didn’t gets archived.</li>
+</ol>
+
+<p>That’s it. Twenty minutes, every Monday. The first time you run it you’ll find six-to-twelve months of accumulated gap. The discipline after that catches the next gap inside a week instead of a year.</p>
+
+<h2 id="what-this-looks-like-end-to-end">What this looks like end-to-end</h2>
+
+<p>The customer who prompted this checklist had a 3-year all-upfront Compute Savings Plan that the dashboard showed at 96% utilization. We pulled their CUR and ran the four queries. Findings:</p>
+
+<ul>
+  <li><strong>Family-mismatch:</strong> $14,200/mo of On-Demand c6i spend that the SP wasn’t routing to (their commitment was Instance-flavoured, not Compute-flavoured).</li>
+  <li><strong>Region-mismatch:</strong> $3,400/mo of On-Demand in eu-west-2, which they only used for a customer-specific compliance workload nobody had told the platform team about.</li>
+  <li><strong>Instance-class skew:</strong> $1,800/mo on the d-suffix variant.</li>
+  <li><strong>Sandbox burn:</strong> $6,100/mo on a single g5.12xlarge instance an ML researcher had provisioned and forgotten about three weeks earlier.</li>
+</ul>
+
+<p>Total gap: $25,500/month, or $306,000/year, on a Savings Plan the dashboard had told them was working perfectly.</p>
+
+<p>The gaps were all closed within a sprint. The instance-class skew got reshaped at the next renewal, the dev burn got a Service Control Policy and a Slack alert, and we left the team with the four queries in a SQL file they run every Monday.</p>
+
+<blockquote>
+  <p>Utilization is the wrong question. The right question is: how much eligible spend slipped past the discount last month?</p>
+</blockquote>
+
+<p>If you want a tool that runs the four queries on your CUR and surfaces the gaps for you, that’s literally what Algosize’s cost analyzer does — drop in a CUR export, get the four numbers and the per-row drill-down. But the queries above will take you 90% of the way there with nothing more than <code class="language-plaintext highlighter-rouge">aws s3 cp</code> and <code class="language-plaintext highlighter-rouge">duckdb</code>.</p>
+
+<p>Either way: stop reading utilization, start reading coverage, and run the checklist on Monday morning. The bill arrives on the 3rd.</p>
+
+    </div>
+
+    <script>
+      (function () {
+        var prose = document.getElementById("post-prose");
+        var toc   = document.getElementById("post-toc");
+        var list  = document.getElementById("post-toc-list");
+        if (!prose || !toc || !list) return;
+        var headings = prose.querySelectorAll("h2[id], h3[id]");
+        if (headings.length < 3) return;
+        var sub = null;
+        headings.forEach(function (h) {
+          var li = document.createElement("li");
+          var a  = document.createElement("a");
+          a.href = "#" + h.id;
+          a.textContent = h.textContent;
+          li.appendChild(a);
+          if (h.tagName === "H2") {
+            list.appendChild(li);
+            sub = null;
+          } else {
+            if (!sub) {
+              var lastTop = list.lastElementChild;
+              if (!lastTop) { list.appendChild(li); return; }
+              sub = document.createElement("ul");
+              lastTop.appendChild(sub);
+            }
+            sub.appendChild(li);
+          }
+        });
+        toc.hidden = false;
+      })();
+    </script>
+
+    <hr class="post-divider" /><aside class="post-share" aria-label="Share this post">
+      <span class="post-share-label mono">Share</span>
+      <ul class="post-share-list">
+        <li>
+          <a class="post-share-link" target="_blank" rel="noopener noreferrer"
+             href="https://www.linkedin.com/sharing/share-offsite/?url=https%3A%2F%2Falgosize.com%2Fblog%2Fhow-to-spot-aws-savings-plan-gaps%2F"
+             data-share="linkedin">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+              <path fill="currentColor" d="M4.98 3.5a2.5 2.5 0 1 1 0 5.001 2.5 2.5 0 0 1 0-5.001zM3 9.75h4v11H3v-11zM10 9.75h3.84v1.5h.05c.54-.95 1.86-1.95 3.83-1.95 4.1 0 4.86 2.7 4.86 6.21v5.24h-4v-4.65c0-1.11-.02-2.54-1.55-2.54-1.55 0-1.79 1.21-1.79 2.46v4.73h-4v-11z"/>
+            </svg>
+            <span>LinkedIn</span>
+          </a>
+        </li>
+        <li>
+          <a class="post-share-link" target="_blank" rel="noopener noreferrer"
+             href="https://twitter.com/intent/tweet?text=How+to+spot+AWS+Savings+Plan+gaps+before+the+bill+arrives&amp;url=https%3A%2F%2Falgosize.com%2Fblog%2Fhow-to-spot-aws-savings-plan-gaps%2F"
+             data-share="x">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+              <path fill="currentColor" d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231 5.45-6.231Zm-1.161 17.52h1.833L7.084 4.126H5.117L17.083 19.77Z"/>
+            </svg>
+            <span>X</span>
+          </a>
+        </li>
+        <li>
+          <a class="post-share-link" target="_blank" rel="noopener noreferrer"
+             href="https://news.ycombinator.com/submitlink?u=https%3A%2F%2Falgosize.com%2Fblog%2Fhow-to-spot-aws-savings-plan-gaps%2F&amp;t=How+to+spot+AWS+Savings+Plan+gaps+before+the+bill+arrives"
+             data-share="hn">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+              <rect x="3" y="3" width="18" height="18" rx="2"
+                    fill="none" stroke="currentColor" stroke-width="1.8"/>
+              <path fill="currentColor"
+                    d="M9.4 7l2.6 4.6L14.6 7H17l-4 7v3h-2v-3L7 7h2.4z"/>
+            </svg>
+            <span>Hacker News</span>
+          </a>
+        </li>
+        <li>
+          <button type="button" class="post-share-link post-share-copy"
+                  data-share="copy" data-share-url="https://algosize.com/blog/how-to-spot-aws-savings-plan-gaps/"
+                  aria-label="Copy link to this post">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+              <path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+                    d="M9 13a4.5 4.5 0 0 0 6.36 0l3-3a4.5 4.5 0 0 0-6.36-6.36l-1.5 1.5M15 11a4.5 4.5 0 0 0-6.36 0l-3 3a4.5 4.5 0 0 0 6.36 6.36l1.5-1.5"/>
+            </svg>
+            <span class="post-share-copy-default">Copy link</span>
+            <span class="post-share-copy-done" hidden>Copied</span>
+          </button>
+        </li>
+      </ul>
+    </aside>
+    <script>
+      (function () {
+        var btn = document.querySelector(".post-share-copy");
+        if (!btn) return;
+        btn.addEventListener("click", function () {
+          var url = btn.getAttribute("data-share-url") || location.href;
+          var done = btn.querySelector(".post-share-copy-done");
+          var def  = btn.querySelector(".post-share-copy-default");
+          var flash = function () {
+            if (!done || !def) return;
+            def.hidden = true;
+            done.hidden = false;
+            btn.classList.add("is-done");
+            setTimeout(function () {
+              def.hidden = false;
+              done.hidden = true;
+              btn.classList.remove("is-done");
+            }, 1600);
+          };
+          if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(url).then(flash, function () { fallback(url, flash); });
+          } else {
+            fallback(url, flash);
+          }
+        });
+        function fallback(text, cb) {
+          var ta = document.createElement("textarea");
+          ta.value = text;
+          ta.setAttribute("readonly", "");
+          ta.style.position = "absolute";
+          ta.style.left = "-9999px";
+          document.body.appendChild(ta);
+          ta.select();
+          try { document.execCommand("copy"); cb(); } catch (e) {}
+          document.body.removeChild(ta);
+        }
+      })();
+    </script>
+
+    <aside class="post-cta" aria-label="Try Algosize">
+      <h2 class="post-cta-title">Stop reading. Start optimizing.</h2>
+      <p class="post-cta-body">
+        Algosize is one tool for the three bills engineering teams keep paying:
+        wasted cloud, undiscovered vulnerabilities, and slow code that ships
+        anyway. Five free runs a month, no credit card to browse.
+      </p>
+      <p class="post-cta-actions">
+        <a href="/#pricing" class="btn btn-primary" data-cta="post-footer">
+          See pricing →
+        </a>
+        <a href="/dashboard/" class="btn btn-ghost">Open the dashboard</a>
+      </p>
+    </aside>
+
+  </div>
+</article><script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "mainEntityOfPage": { "@type": "WebPage", "@id": "https://algosize.com/blog/how-to-spot-aws-savings-plan-gaps/" },
+  "headline": "How to spot AWS Savings Plan gaps before the bill arrives",
+  "description": "AWS Savings Plans look great in the dashboard until you read them line by line. Here's the four-gap checklist we run on every Cost &amp; Usage Report — and how to fix each one before next month's invoice.",
+  "datePublished": "2026-04-08T13:00:00+00:00",
+  "dateModified": "2026-04-08T13:00:00+00:00",
+  "author":    { "@type": "Organization", "name": "Algosize Engineering" },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Algosize",
+    "logo": { "@type": "ImageObject", "url": "https://algosize.com/apple-touch-icon.png" }
+  },
+  "image": "https://algosize.com/assets/img/blog/aws-savings-plan-gaps.png"}
+</script>
+
+<footer class="footer">
+  <div class="container">
+    <div class="footer-inner">
+      <a href="/" class="brand">
+        <span class="brand-mark" aria-hidden="true">[as]</span>
+        <span class="brand-word">Algosize</span>
+      </a>
+      <nav class="footer-links" aria-label="Footer">
+        <a href="/#features">Features</a>
+        <a href="/#pricing">Pricing</a>
+        <a href="/blog/">Blog</a>
+        <a href="/dashboard/">Dashboard</a>
+      </nav>
+      <nav class="footer-social" aria-label="Algosize on social media">
+        <a href="https://www.facebook.com/Algosize/" class="footer-social-link"
+           target="_blank" rel="noopener noreferrer" aria-label="Facebook">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true" focusable="false">
+            <path d="M20 2H4a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h8v-8h-2.5v-3H12V9.5A3.5 3.5 0 0 1 15.5 6H18v3h-2a1 1 0 0 0-1 1v1.5h3l-.5 3H15V22h5a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z"/>
+          </svg>
+        </a>
+        <a href="https://www.linkedin.com/company/algosize/" class="footer-social-link"
+           target="_blank" rel="noopener noreferrer" aria-label="LinkedIn">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true" focusable="false">
+            <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 0 1-2.063-2.065 2.064 2.064 0 1 1 2.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/>
+          </svg>
+        </a>
+        <a href="https://twitter.com/algosize" class="footer-social-link"
+           target="_blank" rel="noopener noreferrer" aria-label="X (Twitter)">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true" focusable="false">
+            <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.73-8.835L2 2.25h6.968l4.27 5.65 5.006-5.65zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+          </svg>
+        </a>
+        <a href="https://instagram.com/algosize" class="footer-social-link"
+           target="_blank" rel="noopener noreferrer" aria-label="Instagram">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true" focusable="false">
+            <path fill-rule="evenodd" d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.052.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98C8.333 23.986 8.741 24 12 24c3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 1 0 0 12.324 6.162 6.162 0 0 0 0-12.324zM12 16a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm6.406-11.845a1.44 1.44 0 1 0 0 2.881 1.44 1.44 0 0 0 0-2.881z"/>
+          </svg>
+        </a>
+        <a href="https://www.youtube.com/@algosize" class="footer-social-link"
+           target="_blank" rel="noopener noreferrer" aria-label="YouTube">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true" focusable="false">
+            <path d="M23.495 6.205a3.007 3.007 0 0 0-2.088-2.088c-1.871-.501-9.396-.501-9.396-.501s-7.507-.01-9.396.501A3.007 3.007 0 0 0 .527 6.205a31.247 31.247 0 0 0-.522 5.805 31.247 31.247 0 0 0 .522 5.783 3.007 3.007 0 0 0 2.088 2.088c1.868.502 9.396.502 9.396.502s7.506 0 9.396-.502a3.007 3.007 0 0 0 2.088-2.088 31.247 31.247 0 0 0 .5-5.783 31.247 31.247 0 0 0-.5-5.805zM9.609 15.601V8.408l6.264 3.602z"/>
+          </svg>
+        </a>
+        <a href="https://www.tiktok.com/@algosize" class="footer-social-link"
+           target="_blank" rel="noopener noreferrer" aria-label="TikTok">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true" focusable="false">
+            <path d="M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93-.01 2.92.01 5.84-.02 8.75-.08 1.4-.54 2.79-1.35 3.94-1.31 1.92-3.58 3.17-5.91 3.21-1.43.08-2.86-.31-4.08-1.03-2.02-1.19-3.44-3.37-3.65-5.71-.02-.5-.03-1-.01-1.49.18-1.9 1.12-3.72 2.58-4.96 1.66-1.44 3.98-2.13 6.15-1.72.02 1.48-.04 2.96-.04 4.44-.99-.32-2.15-.23-3.02.37-.63.41-1.11 1.04-1.36 1.75-.21.51-.15 1.07-.14 1.61.24 1.64 1.82 3.02 3.5 2.87 1.12-.01 2.19-.66 2.77-1.61.19-.33.4-.67.41-1.06.1-1.79.06-3.57.07-5.36.01-4.03-.01-8.05.02-12.07z"/>
+          </svg>
+        </a>
+      </nav>
+    </div>
+    <p class="footer-copy">© 2026 Algosize</p>
+  </div>
+</footer>
+
+<script>
+      // API base for the Worker. Empty in production (same origin via
+      // Cloudflare route algosize.com/api/*); set to the wrangler dev URL
+      // in local development. See site/_config.yml.
+      window.ALGOSIZE_API_BASE = "";
+    </script>
+    <script src="/assets/js/checkout.js" defer></script>
+    <script src="/assets/js/analytics.js" defer></script>
+  </body>
+</html>
