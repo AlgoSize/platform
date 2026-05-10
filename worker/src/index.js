@@ -20,7 +20,8 @@ import { logoutHandler } from "./handlers/logout.js";
 import { meHandler } from "./handlers/me.js";
 import { listRunsHandler, getRunHandler } from "./handlers/runs.js";
 import { billingPortalHandler } from "./handlers/billing.js";
-import { signupHandler } from "./handlers/signup.js";
+import { requestMagicLinkHandler, verifyMagicLinkHandler } from "./handlers/auth_magic.js";
+import { adminListUsersHandler, adminUsersCsvHandler, requireAdmin } from "./handlers/admin.js";
 import { pageviewPixelHandler } from "./handlers/pageview.js";
 import { seedHandler } from "./handlers/_seed.js";
 import { enforceQuota } from "./quota.js";
@@ -68,8 +69,19 @@ router.post("/api/analyze/cost",    analyzeRateLimit, requireAuth, enforceQuota(
 router.post("/api/analyze/vuln",    analyzeRateLimit, requireAuth, enforceQuota(analyzeVulnHandler));
 router.post("/api/analyze/algo",    analyzeRateLimit, requireAuth, enforceQuota(analyzeAlgoHandler));
 
-// ---- Free-tier signup (Task #19) — no auth, creates a session cookie -----
-router.post("/api/signup",          signupRateLimit, signupHandler);
+// ---- Magic-link auth — email-verified sign-in/sign-up ---------------------
+// Replaces the old /api/signup endpoint (which issued a session immediately
+// without verifying email ownership). Request endpoint shares the signup
+// rate-limit bucket so an attacker can't flood email sends. Verify endpoint
+// is GET so it can be clicked from email; given a generous per-IP cap to
+// keep KV reads bounded under a click-storm even though tokens are 32-byte
+// random and unbruteforceable.
+router.post("/api/auth/request-link", signupRateLimit, requestMagicLinkHandler);
+router.get( "/api/auth/verify",       makeRateLimit({ keyName: "verify", limit: 30, windowSec: 60 }), verifyMagicLinkHandler);
+
+// ---- Admin endpoints — gated by env.ADMIN_EMAILS allowlist ----------------
+router.get( "/api/admin/users",      requireAdmin, adminListUsersHandler);
+router.get( "/api/admin/users.csv",  requireAdmin, adminUsersCsvHandler);
 
 // ---- Session routes (Task #8) ---------------------------------------------
 router.post("/api/logout",          requireAuth, logoutHandler);

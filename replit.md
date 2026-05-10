@@ -242,6 +242,65 @@ Verified live (cookie-jar end-to-end):
 - `POST /api/analyze/cost` / `/algo` → 400 with proper input-validation
   errors (correct behaviour for malformed input — the gating works)
 
+## Magic-link auth + admin email list (2026-05-10)
+
+Replaced the immediate-session free signup with verified email auth and added an
+admin-only roster page.
+
+- **Magic-link auth.** New `worker/src/handlers/auth_magic.js` with two routes:
+  - `POST /api/auth/request-link` — accepts `{email}`, mints a 32-byte
+    base64url token, stores `magic:<token>` in `SESSIONS` KV (15-min TTL,
+    payload `{email, createdAt}`), and emails a sign-in link via the existing
+    `sendTransactional` pipe (fire-and-forget on `ctx.waitUntil`). Always
+    returns `200 {ok, message, ttlMinutes}` regardless of whether the email
+    is on file (no account enumeration). Rate-limited via the existing
+    `signupRateLimit` bucket (10/min/IP).
+  - `GET /api/auth/verify?token=…` — single-use: deletes the token before
+    issuing the session so a re-clicked link can never mint two cookies.
+    Calls `getUserByEmail` → `createFreeUser` if missing → `issueJWT` +
+    `buildSessionCookie` → `302 /dashboard/`. Bad/expired/missing tokens
+    `302 /?auth=expired_or_invalid|missing_token|server_error` with NO
+    cookie set.
+  - New `magicLinkEmail({email, verifyUrl, ttlMinutes})` template in
+    `worker/src/email/templates.js` (text + HTML, same `shellHtml` shell as
+    the welcome email).
+- **Admin endpoints + middleware.** New `worker/src/handlers/admin.js`:
+  - `requireAdmin` composes on top of `requireAuth`; non-admins get 403.
+    Allowlist parsed from `env.ADMIN_EMAILS` (comma-separated, trim +
+    lowercase, tolerates whitespace and casing).
+  - `GET /api/admin/users` — JSON `{count, items[]}` with userId, email,
+    plan, subStatus, stripeCustomerId, createdAt, updatedAt, ordered by
+    `created_at DESC`.
+  - `GET /api/admin/users.csv` — `text/csv; charset=utf-8` with
+    `content-disposition: attachment; filename="algosize-users-YYYY-MM-DD.csv"`.
+    CSV escaping handles commas, quotes, and newlines per RFC 4180. Timestamps
+    rendered as ISO 8601 UTC.
+- **Frontend.** `site/index.html` Starter form now reads "Email me a sign-in
+  link →" and "We'll email you a one-time link to verify your address."
+  `site/assets/js/checkout.js` posts to `/api/auth/request-link` and shows
+  "Check your inbox" in place of the old immediate redirect. New
+  `site/admin.html` (permalink `/admin/`, `sitemap: false`) renders the user
+  table with Refresh + Download CSV buttons; `site/assets/js/admin.js` calls
+  `/api/admin/users`, bounces 401 → `/?auth=required`, shows a friendly
+  "Access denied" panel on 403, and points the CSV button at
+  `/api/admin/users.csv`.
+- **Config.** `worker/wrangler.toml` adds `ADMIN_EMAILS =
+  "guillaumelauzier@gmail.com"` to `[vars]`, `[env.production.vars]`, and
+  `[env.staging.vars]`. No new KV namespace, no new D1 table — magic tokens
+  reuse `SESSIONS` KV with the `magic:` prefix.
+- **Coverage.** `worker/scripts/test-magic-link.mjs` (29 assertions: input
+  validation, token storage shape + TTL, KV key prefix, email normalization,
+  enumeration safety, single-use deletion, replay rejection, cookie issuance,
+  user create-or-reuse) and `worker/scripts/test-admin.mjs` (22 assertions:
+  401/403/passthrough gating, allowlist parsing, JSON shape + ordering, CSV
+  headers + escaping + ISO timestamps + filename). Full suite now 16 files,
+  679 assertions, all green.
+- **Note on prod.** This is Cloudflare-only — to go live: redeploy the worker
+  (`cd worker && wrangler deploy --env production`), then verify
+  `GOOGLE_SERVICE_ACCOUNT_JSON` is set as a Worker secret so the magic-link
+  send goes out through Gmail. Without it, `sendTransactional` no-ops and
+  the user sees "check your inbox" but never receives the email.
+
 Still TODO (not blocking the dashboard):
 - `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID` —
   required only for paid signup + the Stripe webhook.

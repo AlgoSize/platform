@@ -92,6 +92,36 @@ export function quotaWarning({ email, runsUsed, runsLimit, resetsOn }) {
   return { subject, text, html };
 }
 
+export function magicLinkEmail({ email, verifyUrl, ttlMinutes }) {
+  const subject = "Your Algosize sign-in link";
+  const text = [
+    `Hi,`,
+    ``,
+    `Click the link below to sign in to Algosize as ${email}.`,
+    `The link is valid for ${ttlMinutes} minutes and can only be used once.`,
+    ``,
+    `${verifyUrl}`,
+    ``,
+    `If you didn't request this, you can safely ignore the email — no`,
+    `account changes will be made.`,
+    ``,
+    `— The Algosize team`,
+  ].join("\n");
+  const html = shellHtml(
+    "Sign in to Algosize",
+    `
+      <p style="margin:0 0 16px">Click the button below to sign in as <code style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#7ee0c0">${escapeHtml(email)}</code>. The link is valid for <strong>${ttlMinutes} minutes</strong> and can only be used once.</p>
+      <p style="margin:0 0 24px">
+        <a href="${verifyUrl}" style="display:inline-block;padding:12px 20px;background:#7ee0c0;color:#06281f;text-decoration:none;border-radius:8px;font-weight:600">Sign in to Algosize →</a>
+      </p>
+      <p style="margin:0 0 8px;font-size:13px;color:#8b949e">Or paste this URL into your browser:</p>
+      <p style="margin:0 0 16px;font-size:12px;word-break:break-all;color:#7ee0c0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace">${escapeHtml(verifyUrl)}</p>
+      <p style="margin:16px 0 0;font-size:13px;color:#8b949e">If you didn't request this, you can safely ignore this email — no account changes will be made.</p>
+    `,
+  );
+  return { subject, text, html };
+}
+
 function escapeHtml(s) {
   return String(s)
     .replace(/&/g, "&amp;")

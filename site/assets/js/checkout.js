@@ -94,53 +94,54 @@
           return;
         }
 
-        if (msgEl) { msgEl.textContent = "Creating your free account…"; msgEl.style.color = ""; }
+        if (msgEl) { msgEl.textContent = "Sending your sign-in link…"; msgEl.style.color = ""; }
         if (button) {
           button.dataset.originalText = button.textContent;
-          button.textContent = "Signing up…";
+          button.textContent = "Sending…";
           button.disabled = true;
         }
 
-        fetch(apiUrl("/api/signup"), {
+        // Magic-link flow: POST /api/auth/request-link instead of /api/signup.
+        // The Worker emails a one-time verification URL; clicking it issues
+        // the session cookie and redirects to /dashboard/. The marketing page
+        // never sees the cookie itself.
+        fetch(apiUrl("/api/auth/request-link"), {
           method: "POST",
           headers: { "Accept": "application/json", "Content-Type": "application/json" },
-          // Need credentials:'include' so the Set-Cookie response is honored
-          // for the cross-origin Worker (algosize.com → algosize-worker.dev
-          // in non-prod). The Worker pins SameSite=Lax + Secure in prod.
           credentials: "include",
           body: JSON.stringify({ email: email }),
         }).then(function (res) {
           return res.json().then(function (body) { return { res: res, body: body }; });
         }).then(function (result) {
           var res = result.res, body = result.body;
-          if (res.status === 201 && body && body.redirectUrl) {
-            window.location.assign(body.redirectUrl);
-            return;  // don't restore button — we're navigating away
+          if (res.ok) {
+            if (msgEl) {
+              msgEl.style.color = "";
+              msgEl.textContent = "Check your inbox — we just emailed " + email +
+                " a sign-in link. It expires in " + (body.ttlMinutes || 15) + " minutes.";
+            }
+            if (button) {
+              button.textContent = "Link sent ✓";
+              // Leave disabled to discourage repeat-clicks (rate-limited anyway).
+            }
+            return;
           }
-          // 409 email_taken / 400 invalid_email surface friendly messages.
-          // For 409 we steer the user toward Stripe checkout (the only
-          // current login path for paid users).
           if (msgEl) {
             msgEl.style.color = "#c62828";
-            if (res.status === 409) {
-              msgEl.textContent = "An account with this email already exists. " +
-                "If you're a Pro subscriber, sign in by clicking \"Start with Stripe\".";
-            } else {
-              msgEl.textContent = (body && body.message) || ("Signup failed (HTTP " + res.status + ")");
-            }
+            msgEl.textContent = (body && body.message) || ("Could not send link (HTTP " + res.status + ")");
           }
           if (button) {
-            button.textContent = button.dataset.originalText || "Start free →";
+            button.textContent = button.dataset.originalText || "Email me a sign-in link →";
             button.disabled = false;
           }
         }).catch(function (err) {
-          console.error("signup error", err);
+          console.error("magic-link error", err);
           if (msgEl) {
             msgEl.style.color = "#c62828";
-            msgEl.textContent = "Could not reach the signup service. Please try again.";
+            msgEl.textContent = "Could not reach the sign-in service. Please try again.";
           }
           if (button) {
-            button.textContent = button.dataset.originalText || "Start free →";
+            button.textContent = button.dataset.originalText || "Email me a sign-in link →";
             button.disabled = false;
           }
         });

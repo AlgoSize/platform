@@ -1,0 +1,94 @@
+---
+layout: default
+title: Admin
+description: Algosize admin — signed-up users.
+permalink: /admin/
+sitemap: false
+---
+
+<header class="nav dash-nav">
+  <div class="nav-inner">
+    <a href="/" class="brand">
+      <span class="brand-mark" aria-hidden="true">[as]</span>
+      <span class="brand-word">Algosize</span>
+    </a>
+    <div class="dash-nav-actions">
+      <span class="dash-user-email mono" id="admin-user-email" hidden></span>
+      <a href="/dashboard/" class="btn btn-ghost btn-sm">Dashboard</a>
+      <button id="admin-logout-btn" type="button" class="btn btn-ghost btn-sm">Sign out</button>
+    </div>
+  </div>
+</header>
+
+<main class="dashboard">
+  <div class="container">
+
+    <div class="dash-head">
+      <span class="eyebrow">Admin</span>
+      <h1>Signed-up users</h1>
+      <p class="lede">
+        Every email that has verified ownership through the magic-link flow,
+        newest first. Export the list as CSV for outreach or backup.
+      </p>
+    </div>
+
+    <div id="admin-error" class="quota-banner" hidden style="border-color:#5a1d1d;background:#1f0d0d">
+      <div class="quota-banner-text">
+        <strong id="admin-error-title">Access denied</strong>
+        <p id="admin-error-msg">You're signed in but this account is not on the admin allowlist.</p>
+      </div>
+    </div>
+
+    <section class="panel" id="panel-users">
+      <header class="panel-head">
+        <div class="panel-heading">
+          <span class="panel-tag">Users</span>
+          <h2><span id="admin-user-count">—</span> emails on file</h2>
+          <p class="panel-desc">Plan, subscription status, and signup date for every account. Free signups appear here as soon as they verify their email.</p>
+        </div>
+        <div class="panel-actions">
+          <button type="button" class="btn btn-ghost btn-sm" id="admin-refresh-btn">Refresh</button>
+          <a id="admin-csv-btn" href="#" class="btn btn-primary btn-sm" download>Download CSV</a>
+        </div>
+      </header>
+      <div class="panel-body">
+        <div id="admin-users-table">
+          <div class="panel-empty">Loading users…</div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<style>
+  .admin-table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+  .admin-table th, .admin-table td {
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid #21262d;
+    vertical-align: top;
+  }
+  .admin-table th {
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #8b949e;
+    font-weight: 600;
+    background: #0d1117;
+    position: sticky; top: 0;
+  }
+  .admin-table td.mono { font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: 0.86rem; }
+  .admin-pill {
+    display: inline-block; padding: 2px 8px; border-radius: 999px;
+    font-size: 0.72rem; letter-spacing: 0.04em; text-transform: uppercase; font-weight: 600;
+  }
+  .admin-pill-free { background: #21262d; color: #c9d1d9; }
+  .admin-pill-paid { background: rgba(126,224,192,0.15); color: #7ee0c0; }
+  .admin-pill-active { background: rgba(126,224,192,0.15); color: #7ee0c0; }
+  .admin-pill-inactive { background: #3a1d1d; color: #f0a8a8; }
+  .admin-pill-none { background: transparent; color: #6e7681; }
+  .admin-table-wrap { overflow-x: auto; }
+</style>
+
+<script src="{{ '/assets/js/admin.js' | relative_url }}" defer></script>

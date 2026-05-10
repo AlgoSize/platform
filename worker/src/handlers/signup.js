@@ -1,16 +1,15 @@
-// POST /api/signup — email-only free-tier signup (Task #19).
+// Legacy email-only free-tier signup (Task #19).
 //
-// No password, no Stripe — just an email address. Creates a user record
-// with `plan: "free"`, issues a 30-day session JWT, sets the cookie, and
-// returns 200 / 201 so the dashboard JS can redirect.
+// NOT ROUTED in production any more — the public `/api/signup` endpoint
+// was removed when magic-link auth shipped (see handlers/auth_magic.js).
+// Issuing a session without verifying email ownership let anyone claim
+// any address and inherit its run history.
 //
-// This is intentionally NOT a login mechanism. If the email is already
-// taken — free OR paid — we return 409 instead of issuing a session for
-// the existing user. Doing otherwise would let anyone claim any email and
-// inherit that user's run history. A real magic-link or OAuth flow is a
-// separate follow-up.
-//
-// Auth: this route runs WITHOUT requireAuth — that's the whole point.
+// The handler is kept (un-routed) because `worker/scripts/test-quota.mjs`
+// uses it to fast-create authenticated free users for the quota tests
+// without going through the two-step magic-link flow. If the quota tests
+// are ever migrated to call the real auth pipeline, this file can be
+// deleted outright.
 
 import { issueJWT, buildSessionCookie } from "../auth.js";
 import { createFreeUser } from "./_users.js";

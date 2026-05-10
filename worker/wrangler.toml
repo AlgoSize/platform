@@ -71,6 +71,10 @@ PLAUSIBLE_ENDPOINT = "https://plausible.io"
 # no-ops with a single warn-level log line. See DEPLOY.md §3.6.
 EMAIL_FROM           = "Algosize <noreply@algosize.com>"
 EMAIL_DELEGATED_USER = "noreply@algosize.com"
+# Comma-separated allowlist of admin email addresses. Anyone in this list,
+# once signed in, can hit /api/admin/* and view the signed-up email roster.
+# Override per-environment below.
+ADMIN_EMAILS         = "guillaumelauzier@gmail.com"
 
 # ----------------------------------------------------------------------------
 # Production overrides (used by `wrangler deploy --env production`).
@@ -99,6 +103,7 @@ ANALYTICS_DOMAIN  = "algosize.com"
 PLAUSIBLE_ENDPOINT = "https://plausible.io"
 EMAIL_FROM           = "Algosize <noreply@algosize.com>"
 EMAIL_DELEGATED_USER = "noreply@algosize.com"
+ADMIN_EMAILS         = "guillaumelauzier@gmail.com"
 
 [[env.production.kv_namespaces]]
 binding = "SESSIONS"
@@ -146,6 +151,7 @@ PLAUSIBLE_ENDPOINT = "https://plausible.io"
 # sends don't touch the production noreply@ inbox.
 EMAIL_FROM           = "Algosize Staging <noreply-staging@algosize.com>"
 EMAIL_DELEGATED_USER = "noreply-staging@algosize.com"
+ADMIN_EMAILS         = "guillaumelauzier@gmail.com"
 
 # KV namespace IDs are placeholders. Create the real ones with:
 #   wrangler kv namespace create SESSIONS --env staging
