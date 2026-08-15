@@ -70,8 +70,18 @@ export function summarize(analyzer, result) {
     return `${pct}% savings · ${sug} suggestion${sug === 1 ? "" : "s"}`;
   }
   if (analyzer === "vuln") {
+    // Prefer the audit summary when present — it covers both scan modes and
+    // already counts every severity.
+    if (result.summary && typeof result.summary.totalIssues === "number") {
+      const s = result.summary;
+      return `${s.totalIssues} issue${s.totalIssues === 1 ? "" : "s"} · grade ${s.grade} · ` +
+             `${s.counts.critical} crit, ${s.counts.high} high`;
+    }
     const c = result.counts || {};
-    const total = (c.critical || 0) + (c.high || 0) + (c.medium || 0) + (c.low || 0);
+    // `unknown` must be in the total. Leaving it out reported "0 advisories"
+    // for a repo whose advisories were all unrated — which, before the CVSS
+    // fix, was most of them.
+    const total = (c.critical || 0) + (c.high || 0) + (c.medium || 0) + (c.low || 0) + (c.unknown || 0);
     return `${total} advisor${total === 1 ? "y" : "ies"} · ${c.critical || 0} crit, ${c.high || 0} high`;
   }
   if (analyzer === "algo") {

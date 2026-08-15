@@ -279,7 +279,21 @@ function detectDangerousEval(file) {
 
     const evalMatch    = /\beval\s*\(/.exec(code);
     const newFuncMatch = /\bnew\s+Function\s*\(/.exec(code);
-    const execMatch    = /\bexec\s*\(/.exec(code);
+    // `exec` needs a negative lookbehind for `.` — without it, every
+    // `SOME_REGEX.exec(str)` in a JavaScript codebase was reported as a
+    // high-severity command-execution finding. RegExp.prototype.exec is one
+    // of the most common calls in JS, so the scanner drowned real findings
+    // in noise on any real repo (this very file has three of them).
+    //
+    // What stays flagged: a bare `exec(` — Python's built-in, or a
+    // destructured `const { exec } = require("child_process")` — plus the
+    // explicit child_process/os/subprocess spellings.
+    const execMatch =
+      /(?<![.\w$])exec\s*\(/.exec(code) ||
+      /\b(?:child_process|cp)\.execS?y?n?c?\s*\(/.exec(code) ||
+      /\bexecSync\s*\(/.exec(code) ||
+      /\bos\.system\s*\(/.exec(code) ||
+      /\bsubprocess\.(?:run|call|check_output|check_call|Popen)\s*\([^)]*shell\s*=\s*True/.exec(code);
 
     if (evalMatch || newFuncMatch) {
       findings.push({
@@ -414,6 +428,111 @@ function detectInsecureHttp(file) {
 
 
 // ---------------------------------------------------------------------------
+// Detector 6: table-driven code smells
+// ---------------------------------------------------------------------------
+//
+// The five detectors above each needed their own control flow (comment
+// handling, multiple regexes, context-sensitive severity). These don't —
+// they're "does this line match a pattern that is essentially always a
+// finding", so they live in a table instead of six near-identical functions.
+//
+// Rule for adding one: the pattern must be specific enough that a match is
+// almost certainly the real thing. `\bexec\s*\(` was in the codebase and
+// matched every `regex.exec(s)` call — a detector that cries wolf costs more
+// trust than the finding it catches is worth. Where a pattern needs an
+// escape hatch, `unless` suppresses the match.
+
+const CODE_PATTERNS = [
+  {
+    type: "private_key_material",
+    severity: "critical",
+    // The PEM banner itself — no ambiguity about what this is.
+    regex: /-----BEGIN\s+(?:RSA|DSA|EC|OPENSSH|PGP|ENCRYPTED)?\s*PRIVATE KEY-----/,
+    recommendation: "Remove this private key from source control, rotate it immediately, and load key material from a secret store at runtime. Assume the key is compromised — it is in your git history.",
+  },
+  {
+    type: "disabled_tls_verification",
+    severity: "high",
+    regex: /rejectUnauthorized\s*:\s*false|NODE_TLS_REJECT_UNAUTHORIZED\s*[:=]\s*["']?0|InsecureSkipVerify\s*:\s*true|CURLOPT_SSL_VERIFYPEER\s*(?:,|=>)\s*(?:false|0)\b|\bverify\s*=\s*False\b/,
+    recommendation: "Never disable certificate verification outside a throwaway local test — it turns TLS into plaintext against any network attacker. If a private CA is the problem, add that CA to the trust store instead.",
+  },
+  {
+    type: "insecure_deserialization",
+    severity: "high",
+    // yaml.load is only unsafe without a safe loader, hence `unless`.
+    regex: /\bpickle\.loads?\s*\(|\byaml\.load\s*\(|\bunserialize\s*\(|\bMarshal\.load\s*\(|readObject\s*\(\s*\)/,
+    unless: /SafeLoader|safe_load|Loader\s*=\s*yaml\.C?SafeLoader/,
+    recommendation: "Deserializing untrusted data executes attacker-chosen code. Use a data-only format (JSON), or the safe variant of the API — `yaml.safe_load`, and never `pickle` on anything that crossed a trust boundary.",
+  },
+  {
+    type: "command_injection",
+    severity: "critical",
+    // A shell command built by interpolation or concatenation. Composed
+    // from two halves so the "which call" and "which argument shape" parts
+    // stay readable — and so the dotted spellings (`os.system`,
+    // `child_process.exec`) are matched explicitly rather than being
+    // excluded by the bare-call lookbehind.
+    regex: new RegExp(
+      // …the call
+      "(?:(?:^|[^.\\w$])(?:exec|execSync|spawnSync?|popen|system)" +
+      "|\\b(?:os\\.system|child_process\\.exec\\w*|subprocess\\.(?:run|call|Popen)))" +
+      // …fed a template with ${}, a concatenated string, or a Python f-string
+      "\\s*\\(\\s*(?:`[^`]*\\$\\{|[\"'][^\"']*[\"']\\s*\\+\\s*[A-Za-z_$]|f[\"'][^\"']*\\{)",
+    ),
+    recommendation: "Build the command as an argument array rather than a shell string (`execFile(cmd, [args])`, `subprocess.run([...], shell=False)`). Interpolating a variable into a shell string is remote code execution the moment that variable is attacker-influenced.",
+  },
+  {
+    type: "weak_hash_algorithm",
+    severity: "medium",
+    regex: /createHash\s*\(\s*["'](?:md5|sha1)["']|\bhashlib\.(?:md5|sha1)\s*\(|MessageDigest\.getInstance\s*\(\s*["'](?:MD5|SHA-?1)["']/i,
+    recommendation: "MD5 and SHA-1 are broken for anything security-relevant. Use SHA-256 or better for integrity, and a password hash (bcrypt/scrypt/Argon2) for credentials — never a raw digest.",
+  },
+  {
+    type: "insecure_randomness",
+    severity: "medium",
+    // Only when the line is clearly about a secret value — Math.random()
+    // for a UI jitter or a sample array is fine and must not be flagged.
+    regex: /(?:Math\.random\s*\(\s*\)|\brandom\.(?:random|randint|choice)\s*\()/,
+    requires: /token|secret|password|passwd|api[_-]?key|nonce|salt|otp|session|csrf|uuid|reset[_-]?code/i,
+    recommendation: "Math.random() and Python's `random` are predictable and must not generate security tokens. Use `crypto.getRandomValues` / `crypto.randomUUID` in JS, or `secrets` in Python.",
+  },
+  {
+    type: "xss_sink",
+    severity: "high",
+    // innerHTML / document.write fed something that isn't a bare literal,
+    // plus React's explicit escape hatch.
+    regex: /\.innerHTML\s*=\s*(?:[^"'`\s][^;]*|`[^`]*\$\{)|\bdocument\.write\s*\(\s*[^"')]|dangerouslySetInnerHTML/,
+    recommendation: "Assigning untrusted data to innerHTML executes it. Use textContent for text, or sanitize with a vetted library (DOMPurify) when HTML is genuinely required.",
+  },
+];
+
+function detectCodePatterns(file) {
+  const findings = [];
+  const lines = file.content.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const text = lines[i];
+    if (isCommentLine(text)) continue;
+    const ci = commentStartIndex(text);
+    const code = ci >= 0 ? text.slice(0, ci) : text;
+
+    for (const pat of CODE_PATTERNS) {
+      if (!pat.regex.test(code)) continue;
+      if (pat.unless && pat.unless.test(code)) continue;
+      if (pat.requires && !pat.requires.test(code)) continue;
+      findings.push({
+        severity: pat.severity,
+        type: pat.type,
+        path: file.path,
+        line: i + 1,
+        snippet: trimSnippet(text),
+        recommendation: pat.recommendation,
+      });
+    }
+  }
+  return findings;
+}
+
+// ---------------------------------------------------------------------------
 // Aggregator
 // ---------------------------------------------------------------------------
 
@@ -423,6 +542,7 @@ const DETECTORS = [
   detectSqlConcat,
   detectSqlTemplateLiteral,
   detectInsecureHttp,
+  detectCodePatterns,
 ];
 
 const SEVERITY_RANK = { critical: 4, high: 3, medium: 2, low: 1 };

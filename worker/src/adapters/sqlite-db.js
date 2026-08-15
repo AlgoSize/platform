@@ -10,19 +10,26 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DB_PATH = join(__dirname, "..", "..", "data", "algosize.db");
 const SCHEMA_PATH = join(__dirname, "..", "..", "migrations", "0001_init.sql");
 
-let _db = null;
+// One connection per path. Keyed by path rather than a single `_db` global
+// because callers can ask for `:memory:` — and with a single global, the
+// first caller's choice silently became everyone's.
+const _dbs = new Map();
 
-function getDb() {
-  if (_db) return _db;
-  const dir = dirname(DB_PATH);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  _db = new Database(DB_PATH);
+function getDb(path) {
+  const cached = _dbs.get(path);
+  if (cached) return cached;
+  if (path !== ":memory:") {
+    const dir = dirname(path);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  }
+  const db = new Database(path);
   // Apply schema
   if (existsSync(SCHEMA_PATH)) {
     const schema = readFileSync(SCHEMA_PATH, "utf-8");
-    _db.exec(schema);
+    db.exec(schema);
   }
-  return _db;
+  _dbs.set(path, db);
+  return db;
 }
 
 // D1 statement wrapper
@@ -62,16 +69,25 @@ function makeStatement(db, sql) {
   };
 }
 
-// D1 database wrapper
-export function createSqliteDb() {
+/**
+ * D1-shaped binding backed by better-sqlite3.
+ *
+ * `path` defaults to the on-disk dev database. Pass `":memory:"` for an
+ * isolated, throwaway database — which is what test scripts want, and what
+ * `createSqliteDb(":memory:")` previously did NOT do: the argument was
+ * ignored outright, so `scripts/test-google-oauth.mjs` quietly read and
+ * wrote the tracked `worker/data/algosize.db`, leaving test users in a
+ * committed file and carrying state between runs.
+ */
+export function createSqliteDb(path = DB_PATH) {
   return {
     prepare(sql) {
-      const db = getDb();
+      const db = getDb(path);
       return makeStatement(db, sql);
     },
     exec(sql) {
       try {
-        const db = getDb();
+        const db = getDb(path);
         db.exec(sql);
         return Promise.resolve();
       } catch (err) {
