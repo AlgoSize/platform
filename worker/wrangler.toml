@@ -85,6 +85,20 @@ ADMIN_EMAILS         = "guillaumelauzier@gmail.com"
 # ----------------------------------------------------------------------------
 [env.production]
 name   = "algosize"
+# REQUIRED because `routes` is set below. Wrangler decides whether to publish
+# the <name>.<subdomain>.workers.dev host with:
+#
+#   const deployToWorkersDev = config.workers_dev ?? routes.length === 0;
+#
+# so leaving this unset while `routes` is non-empty resolves to `false` and
+# every deploy takes the Worker OFF workers.dev. That is the host SITE_ORIGIN
+# points at (the algosize.com/api/* route below is kept dormant for a future
+# custom-domain switch), so an unset value silently removes the API from its
+# own documented origin — which is exactly what happened on the first
+# automated deploy: `wrangler deploy` succeeded and /api/me started returning
+# 404. `worker/scripts/test-wrangler-config.mjs` now fails the build if this
+# invariant is broken again.
+workers_dev = true
 # Same-origin API binding so the browser can POST to https://algosize.com/api/*
 # without CORS preflights and so session cookies are first-party. The marketing
 # site is served by GitHub Pages on the apex; this route hands /api/* to the

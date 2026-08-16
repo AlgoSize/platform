@@ -168,6 +168,12 @@ jobs:
               sleep $((attempt * 5))
             fi
           done
-          echo "::error::Smoke test failed after 5 attempts: $HOST/api/me last returned $STATUS (expected 401 unauthenticated or 200 with cookie). Body:"
-          cat /tmp/body || true
+          # Report enough to tell the failure modes apart without needing the
+          # raw log (which is not always reachable): a 404 from the API Worker
+          # itself looks identical to a 404 from a different Worker occupying
+          # the same name, or from workers.dev not serving this Worker at all.
+          ROOT_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$HOST/" || echo "000")
+          SERVED_BY=$(curl -s -o /dev/null -D - "$HOST/api/me" 2>/dev/null | tr -d '\r' | grep -iE '^(server|cf-ray|x-powered-by):' | tr '\n' ' ')
+          echo "::error::Smoke test failed after 5 attempts: $HOST/api/me last returned $STATUS (expected 401 unauthenticated, or 200 with a cookie). $HOST/ returned $ROOT_STATUS. Response headers: ${SERVED_BY:-none}. Body: $(head -c 300 /tmp/body 2>/dev/null)"
+          echo "::error::If / serves the marketing site, another Worker has taken this service name. If both are 404, the Worker is not published on this host — check workers_dev in worker/wrangler.toml."
           exit 1
