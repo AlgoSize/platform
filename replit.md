@@ -352,6 +352,12 @@ cookie via `issueJWT` + `buildSessionCookie`.
 
 ## Deploy steps for the workers.dev rollout
 
+> ⚠️ **Superseded — see "SITE_ORIGIN pointed at the wrong host" below
+> (2026-08-16).** `SITE_ORIGIN` is back to `https://algosize.com`; the
+> redirect URI in step 1 below is stale. Register
+> `https://algosize.com/api/auth/google/callback` in Google Cloud Console
+> instead, and see that section for why.
+
 1. In **https://console.cloud.google.com/apis/credentials**, create
    an OAuth 2.0 Client ID (Web application) and add this exact
    authorized redirect URI:
@@ -463,3 +469,56 @@ and the one-command check.
   gate.
 - Coverage: `worker/scripts/test-security-audit.mjs` wired into `npm test`,
   which is now green end to end.
+
+## SITE_ORIGIN pointed at the wrong host (2026-08-16)
+
+With the deploy pipeline finally green (see above), the site itself
+surfaced three production symptoms:
+
+- Dashboard "Recent runs" panel: `Error internal_error`.
+- Stripe Checkout: `Couldn't start Stripe Checkout: STRIPE_PRICE_ID is
+  not set.`
+- "Sign in with Google": `{"error":"not_found","path":"/"}`.
+
+The first two are missing production secrets — `JWT_SECRET` (every
+`requireAuth`-gated route 500s before it ever reads a cookie; see
+`worker/src/auth.js` `requireSecret`) and `STRIPE_PRICE_ID`
+(`worker/src/stripe.js`). Not fixable from the repo — they need
+`wrangler secret put <NAME> --env production` with real values only the
+account owner has.
+
+The third **was** a real, fixable bug: `[env.production.vars] SITE_ORIGIN`
+in `worker/wrangler.toml` was `https://algosize.guillaumelauzier.workers.dev`
+— the bare API Worker's own host, which serves no HTML. Every
+browser-facing redirect built as `` `${SITE_ORIGIN}${path}` `` — Google
+OAuth start/callback (both the error and success paths), magic-link
+verify, Stripe checkout success/cancel, the Stripe billing-portal
+`return_url` — sent the browser there instead of to the real site, and
+landed on the Worker's JSON 404 fallthrough. `{"path":"/"}` matched exactly:
+`GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` are also unset, so
+`googleStartHandler` takes its `isOauthConfigured()` fast path straight to
+`siteRedirect(env, "/?auth=google_not_configured")`.
+
+Same-origin calls from `algosize.com` to `/api/*` were unaffected — that's
+the `algosize.com/api/*` Cloudflare route (`worker/wrangler.toml`), a
+separate binding to this same Worker, and it had been live the whole time.
+That's *why* the dashboard could render "internal_error" as text (the fetch
+succeeded, JSON parsed, only the redirect-driven flows were broken) rather
+than everything looking equally dead.
+
+This was drift from the documented design, not a new decision:
+`DEPLOY.md` §2.4 already said `SITE_ORIGIN` should be `https://algosize.com`,
+and the `wrangler.toml` comment that set it to workers.dev said outright
+"when the algosize.com custom-domain route is reactivated, swap this back" —
+it already had been.
+
+**Fix:** `SITE_ORIGIN` back to `https://algosize.com` for `[env.production]`.
+`workers_dev = true` stays, so the `*.workers.dev` alias is still reachable
+for direct curl testing — `SITE_ORIGIN` just no longer points humans at it.
+
+**Action required, outside this repo:** Google Cloud Console's authorized
+redirect URI must be updated to `https://algosize.com/api/auth/google/callback`
+(the old workers.dev one can be removed). Google rejects the callback
+outright if the Worker's `redirect_uri` doesn't exactly match what's
+registered — so this still won't complete until both the redirect URI is
+updated *and* `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` are set.
