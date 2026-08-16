@@ -1,6 +1,21 @@
 {
+  // Static-asset Worker for the built Jekyll site (`_site_build`), added by
+  // Cloudflare's autoconfig bot in #3 and deployed by Cloudflare Workers
+  // Builds.
+  //
+  // The service name MUST NOT be `algosize`. That is the API Worker's
+  // service (see worker/wrangler.toml), which GitHub Actions deploys from
+  // `.github/workflows/worker.yml`. With both configs named `algosize`, the
+  // two pipelines deploy different Workers to the same service and the last
+  // one to run wins — so an ordinary site change could silently replace the
+  // live API, and an API deploy could replace the site.
+  //
+  // Related: wrangler resolves its config by walking UP the directory tree,
+  // so this file also shadows worker/wrangler.toml for any wrangler command
+  // run from inside `worker/`. Every wrangler invocation in the repo
+  // therefore passes `--config wrangler.toml` explicitly. See DEPLOY.md §2.0.
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "algosize",
+  "name": "algosize-site",
   "compatibility_date": "2026-05-11",
   "observability": {
     "enabled": true
