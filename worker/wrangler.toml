@@ -109,15 +109,31 @@ routes = [
 
 [env.production.vars]
 # Production site origin: must match the hostname users load the site from.
-# Used for CORS allow-list, cookie scope, OAuth redirect URLs (Google, Stripe),
-# and the magic-link verification URL embedded in sign-in emails.
+# Used for CORS allow-list, cookie scope, AND every browser-facing redirect
+# built as `${SITE_ORIGIN}${path}` — Google OAuth start/callback (both the
+# error and success paths), magic-link verify, Stripe checkout success/cancel,
+# and the Stripe billing-portal return_url. All of those land the browser on
+# this exact host, so it must be a host that serves human-facing pages
+# (`/`, `/dashboard/`, `/#pricing`), not the bare Worker.
 #
-# Currently set to the workers.dev URL because the Worker is the host that
-# serves /api/* (and the OAuth callback round-trips through the same origin).
-# When the algosize.com custom-domain route is reactivated, swap this back
-# to "https://algosize.com" and re-add that hostname as an authorized
-# redirect URI in Google Cloud Console.
-SITE_ORIGIN = "https://algosize.guillaumelauzier.workers.dev"
+# This was set to the workers.dev URL while the algosize.com custom-domain
+# route was believed inactive — but that route (below) binds this same
+# Worker at algosize.com/api/*, and it has been live the whole time. With
+# SITE_ORIGIN pointed at workers.dev, every one of those redirects sent the
+# browser to the bare API Worker instead of the real site: the Worker has no
+# route for "/" or "/dashboard/", so its JSON 404 fallthrough is what the
+# user saw instead of the marketing site or dashboard. Same-origin calls
+# from algosize.com to /api/* still worked throughout (that's the route
+# below, unaffected by this var), which is why the API itself looked "up"
+# while every redirect-driven flow was broken.
+#
+# workers_dev = true (below) keeps the *.workers.dev alias published too —
+# useful for curl-testing the API directly — but SITE_ORIGIN must name the
+# host a human is actually looking at.
+#
+# Google Cloud Console's authorized redirect URI must match: it needs to be
+# https://algosize.com/api/auth/google/callback, not the workers.dev one.
+SITE_ORIGIN = "https://algosize.com"
 COOKIE_NAME = "algosize_session"
 ANALYTICS_DOMAIN  = "algosize.com"
 PLAUSIBLE_ENDPOINT = "https://plausible.io"
