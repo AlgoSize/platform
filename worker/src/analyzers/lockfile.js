@@ -197,6 +197,20 @@ function parseYarnLock(content) {
 // are silently skipped: they're widely used in dev requirements where the
 // resolved version isn't fixed, and reporting "maybe vulnerable" hurts trust.
 
+/**
+ * PEP 503 name normalization: lowercase, and collapse any run of `-`, `_` or
+ * `.` into a single `-`.
+ *
+ * This is not cosmetic. OSV indexes PyPI packages under their normalized
+ * name, so querying `flask_cors` or `zope.interface` matches nothing at all
+ * — the audit reports a clean bill of health for a package that has open
+ * advisories. Lowercasing alone (what this did before) fixes `Django` but
+ * not `Flask_Cors`, and requirements files are full of the latter.
+ */
+export function normalizePypiName(name) {
+  return String(name).toLowerCase().replace(/[-_.]+/g, "-");
+}
+
 function parseRequirementsTxt(content) {
   const out = new Map();
   for (const raw of content.split(/\r?\n/)) {
@@ -204,9 +218,9 @@ function parseRequirementsTxt(content) {
     if (!line) continue;
     if (line.startsWith("-")) continue;            // -r other.txt, -e ...
     if (/^(git\+|https?:|file:)/i.test(line)) continue;
-    const m = /^([A-Za-z0-9][A-Za-z0-9._-]*)\s*===?\s*([0-9A-Za-z][0-9A-Za-z.+!-]*)/.exec(line);
+    const m = /^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*===?\s*([0-9A-Za-z][0-9A-Za-z.+!-]*)/.exec(line);
     if (!m) continue;
-    const name = m[1].toLowerCase();
+    const name = normalizePypiName(m[1]);
     const version = m[2];
     const key = name + "@" + version;
     if (!out.has(key)) out.set(key, { name, version });

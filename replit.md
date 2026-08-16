@@ -381,3 +381,85 @@ Still TODO (not blocking the dashboard):
   (per `worker/src/analyzers/llm.js`); set this to enable AI savings
   suggestions on the cost/vuln/algo pages.
 - `SENTRY_DSN` — observability only; everything works without it.
+
+## Security auditor fixes + wrangler config pinning (2026-08-15)
+
+Bug-fix pass over the vulnerability scanner (`POST /api/analyze/vuln`), plus
+the CI failure on PR #3.
+
+### Scanner bugs fixed
+
+- **CVSS vectors never produced a severity.** `extractSeverity` searched the
+  vector string for a bare number; CVSS vectors don't contain their base
+  score, so the search never matched. Every advisory without a GitHub-style
+  text rating — most PyPI (PYSEC), Go and distro advisories — came back
+  `unknown`, leaving nothing to triage on. New `worker/src/analyzers/cvss.js`
+  computes the base score exactly per FIRST for v3.0/v3.1 and v2.0, and
+  approximates v4.0 through the v3 formula with `approximate: true`.
+  Advisories now carry `cvssScore` / `cvssVector` / `cvssVersion`.
+- **Remediation advice could be a commit SHA.** `extractFixedIn` took the
+  last `fixed` event across every range including OSV `GIT` ranges, whose
+  values are commit hashes. It now skips GIT ranges and picks the *lowest*
+  fix at or above the installed version, so a 1.2.x user is told to go to
+  1.2.9 rather than jumping two majors.
+- **PyPI packages were silently unmatched.** requirements.txt names were
+  lowercased but not PEP 503-normalized, so `Flask_Cors==3.0.0` queried OSV
+  as `flask_cors` and matched nothing — a false negative that reads as
+  "clean". Also fixed: `requests[security]==2.25.1` (extras) failed to parse
+  at all.
+- **`regex.exec(str)` was reported as command execution.** `/\bexec\s*\(/`
+  matched every `RegExp.prototype.exec` call, burying real findings under
+  high-severity noise on any JS repo. Now requires a bare `exec(` or an
+  explicit `child_process`/`os.system`/`subprocess(shell=True)` spelling.
+- **Silent truncation.** The 1000-package and 100-advisory caps cut audits
+  short with no signal. Both now report through to `summary.complete` /
+  `summary.partial`.
+- **GitHub throttling looked like an empty repo.** A 429/403 from
+  raw.githubusercontent was treated as "file not found", producing a
+  confident `no_lockfiles_found`. Now a `503 github_rate_limited`.
+- **Run-history headline dropped `unknown`.** `summarize("vuln", …)` omitted
+  unknown-severity advisories from its total, so a repo with 7 unrated
+  advisories displayed "0 advisories".
+
+### New in the scanner
+
+- Seven detectors: `private_key_material`, `disabled_tls_verification`,
+  `insecure_deserialization`, `command_injection`, `weak_hash_algorithm`,
+  `insecure_randomness`, `xss_sink` — each with negative cases in the tests,
+  because the `exec` bug is what an over-eager pattern costs.
+- `worker/src/analyzers/audit.js`: one `summary` verdict for both scan modes
+  — score, grade, counts, and an ordered remediation list (rotate leaked
+  credentials → patch fixable dependencies → assess unfixable ones → fix
+  injection sinks → hygiene). Grades are capped by the worst finding.
+
+### CI: PR #3 (`e2e / Playwright happy-path`)
+
+Root cause: PR #3 adds `wrangler.jsonc` at the **repo root**. Wrangler
+resolves config by walking up the directory tree, so that file wins over
+`worker/wrangler.toml` even when wrangler runs inside `worker/`. Verified by
+A/B: with the file, `wrangler dev` serves a bindings-less static-asset
+Worker and `/api/me` returns 404 (e2e goes red); `wrangler deploy --dry-run`
+uploads 0.31 KiB with "No bindings found" instead of 363 KiB with
+SESSIONS/USERS/DB/SANDBOX. The same hijack means a deploy from `worker/`
+would publish the static-asset Worker over the live API — both configs are
+named `algosize`.
+
+Fixes: every wrangler invocation now passes `--config wrangler.toml`
+(`tests/e2e/playwright.config.js`, `.github/workflows/worker.yml`, both
+`package.json` scripts), plus `tests/e2e/tests/00-worker-health.spec.js` —
+a guard spec that runs first and fails with an explicit message if the
+Worker on :8787 isn't the API Worker. DEPLOY.md §2.0 documents the hazard
+and the one-command check.
+
+### Other
+
+- `createSqliteDb(path)` ignored its argument, so
+  `createSqliteDb(":memory:")` in `test-google-oauth.mjs` read and wrote the
+  tracked `worker/data/algosize.db` — leaving test users in a committed file
+  and carrying state between runs.
+- The algorithm optimizer's no-API-key stub pointed users at Cloudflare
+  Workers AI; the code path is gated on `OPENAI_API_KEY`. This was the one
+  pre-existing failing assertion in `npm test`, which blocked the CI deploy
+  gate.
+- Coverage: `worker/scripts/test-security-audit.mjs` wired into `npm test`,
+  which is now green end to end.

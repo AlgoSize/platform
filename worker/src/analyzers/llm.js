@@ -110,10 +110,15 @@ export function parseLlmReply(text) {
 }
 
 function stubSuggestion(bigO, why) {
+  // Name the switch that actually turns suggestions on. This code path is
+  // reached precisely when `env.OPENAI_API_KEY` is unset (see
+  // getRefactorSuggestion), so telling the user to deploy to Cloudflare —
+  // which changes nothing on its own — sends them down the wrong path.
   const baseText = bigO === "unknown"
     ? "We could not measure the function's complexity, so AI refactor suggestions are unavailable for this run."
-    : `Detected complexity: ${bigO}. AI-powered refactor suggestions are available when deployed on Cloudflare Workers (via the Cloudflare Workers AI binding). ` +
-      "Complexity analysis, timing, and Big-O detection are fully functional in this environment.";
+    : `Detected complexity: ${bigO}. AI-powered refactor suggestions turn on once OPENAI_API_KEY is set on the Worker ` +
+      "(`wrangler secret put OPENAI_API_KEY`). " +
+      "Complexity analysis, timing, and Big-O detection are fully functional without it.";
   return {
     provider: "stub",
     text: why ? `${baseText} (${why})` : baseText,

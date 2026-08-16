@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy --env production"
+    "dev": "wrangler dev --config wrangler.toml",
+    "deploy": "wrangler deploy --config wrangler.toml --env production"
   }
 }

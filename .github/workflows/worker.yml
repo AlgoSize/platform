@@ -116,11 +116,11 @@ jobs:
       # the sandbox dir.
       - name: Deploy worker-sandbox
         working-directory: worker-sandbox
-        run: ../worker/node_modules/.bin/wrangler deploy --env "$TARGET_ENV"
+        run: ../worker/node_modules/.bin/wrangler deploy --config wrangler.toml --env "$TARGET_ENV"
 
       - name: Deploy worker (main API)
         working-directory: worker
-        run: ./node_modules/.bin/wrangler deploy --env "$TARGET_ENV"
+        run: ./node_modules/.bin/wrangler deploy --config wrangler.toml --env "$TARGET_ENV"
 
       - name: Smoke-test the deployed worker
         run: |

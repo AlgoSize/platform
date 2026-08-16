@@ -64,12 +64,21 @@ export default defineConfig({
       stderr: "pipe",
     },
     {
-      // Cloudflare Worker via wrangler dev. KV state is in-memory (no
+      // Cloudflare Worker via wrangler dev. `--config wrangler.toml` is
+      // NOT redundant: wrangler walks up the directory tree looking for a
+      // config file, and a `wrangler.jsonc` at the REPO ROOT wins over
+      // `worker/wrangler.toml` even when wrangler is invoked from inside
+      // `worker/`. When that happened (PR #3, Cloudflare's autoconfig bot),
+      // wrangler dev booted a bindings-less static-asset Worker, every
+      // /api/* call failed, and this suite went red with no hint as to why.
+      // Pinning the path makes the Worker under test unambiguous.
+      //
+      // KV state is in-memory (no
       // --persist-to) — every restart starts with empty SESSIONS + USERS
       // and the dashboard spec re-seeds via POST /api/_test/seed in
       // beforeAll. That keeps tests independent from any stale on-disk
       // state and avoids cross-process SQLite contention.
-      command: "./node_modules/.bin/wrangler dev --port 8787 --ip 127.0.0.1",
+      command: "./node_modules/.bin/wrangler dev --config wrangler.toml --port 8787 --ip 127.0.0.1",
       cwd: WORKER_DIR,
       port: 8787,
       reuseExistingServer: !process.env.CI,

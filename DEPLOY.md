@@ -148,6 +148,39 @@ The Worker source lives in `worker/`. It binds two KV namespaces and reads
 four secrets. You'll create the KV namespaces, paste their IDs into
 `wrangler.toml`, then deploy.
 
+### 2.0 Wrangler config resolution — pin it
+
+Every wrangler command in this repo passes `--config wrangler.toml`
+explicitly, and the CI workflows do the same. That is deliberate, not
+noise.
+
+Wrangler searches for its config by walking **up** the directory tree, so a
+`wrangler.json` / `wrangler.jsonc` at the repo root wins over
+`worker/wrangler.toml` even when wrangler is invoked from inside `worker/`.
+Cloudflare's autoconfig bot opens exactly that PR (see PR #3), and the
+consequences are not subtle:
+
+- `wrangler dev` boots a Worker with **no bindings** — no KV, no D1, no
+  vars — so every `/api/*` route 404s and the Playwright suite fails with a
+  timeout that points nowhere near the cause.
+- `wrangler deploy` from `worker/` uploads that root config's Worker
+  instead. Both configs are named `algosize`, so **the static-asset Worker
+  replaces the live API Worker** on the same name.
+
+Verify which config wrangler picked before any real deploy:
+
+```bash
+cd worker
+./node_modules/.bin/wrangler deploy --config wrangler.toml --dry-run --outdir /tmp/wo
+# expect: "Your worker has access to the following bindings:" listing
+#         SESSIONS, USERS, DB, SANDBOX. If it says "No bindings found",
+#         wrangler loaded the wrong file.
+```
+
+`tests/e2e/tests/00-worker-health.spec.js` asserts this in CI: it fails
+fast with an explicit message if the Worker answering on :8787 is not the
+API Worker.
+
 ### 2.1 Authenticate wrangler
 
 ```bash

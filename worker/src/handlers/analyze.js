@@ -25,6 +25,7 @@ import {
   MAX_PACKAGES_PER_AUDIT,
 } from "../analyzers/lockfile.js";
 import { osvBatchQuery, osvHydrateVulns } from "../analyzers/osv.js";
+import { buildAuditSummary } from "../analyzers/audit.js";
 import { runUserCode } from "../analyzers/sandbox_runner.js";
 import { inferBigO } from "../analyzers/bigo.js";
 import { getRefactorSuggestion } from "../analyzers/llm.js";
@@ -242,6 +243,17 @@ async function fetchLockfilesFromGithub({ owner, repo }, fetchImpl) {
       try { res = await fetchImpl(url); }
       catch { return { filename, status: 0, content: null }; }
       if (res.status === 404) return { filename, status: 404, content: null };
+      // 429/403 is GitHub throttling us, not "this repo has no lockfiles".
+      // Treating them as a miss produced a confident `no_lockfiles_found`
+      // 404 — telling the user their repo has no dependencies to audit when
+      // in truth we were rate-limited and never looked.
+      if (res.status === 429 || res.status === 403) {
+        const e = new Error(
+          "GitHub is rate-limiting our requests for this repo's lockfiles. Wait a minute and try again.",
+        );
+        e.fetchError = true; e.code = "github_rate_limited"; e.status = 503;
+        throw e;
+      }
       if (res.status >= 500) {
         const e = new Error(`GitHub raw content unavailable (HTTP ${res.status})`);
         e.fetchError = true; e.code = "github_unavailable"; e.status = 502;
@@ -298,7 +310,12 @@ export async function analyzeVulnHandler(request, env, ctx) {
   const validation = validateVulnInput(body);
   if (!validation.ok) return json({ error: validation.error, message: validation.message }, 400);
   let result;
-  try { result = await Promise.resolve(analyzeVuln(validation.value)); }
+  try {
+    result = await Promise.resolve(analyzeVuln(validation.value));
+    // Same verdict block the dependency audit returns, so a caller can read
+    // one shape regardless of which mode they used.
+    result = { ...result, summary: buildAuditSummary({ findings: result.findings }) };
+  }
   catch (err) {
     console.error("analyze/vuln: engine error", err);
     await captureException(env, ctx, err, {
@@ -387,6 +404,10 @@ async function runLockfileAudit(body, env, request, ctx) {
   // rather than getting a half-correct CVE list).
   const allPackages = [];
   const summary = [];
+  // Set when the per-audit package cap cuts the list short, so the response
+  // can say the audit was partial instead of implying full coverage.
+  let truncatedPackages = false;
+  let totalPackagesFound = 0;
   for (const m of manifests) {
     let parsed;
     try { parsed = parseLockfile(m.filename, m.content); }
@@ -405,18 +426,25 @@ async function runLockfileAudit(body, env, request, ctx) {
       ecosystem: parsed.ecosystem,
       packageCount: parsed.packages.length,
     });
+    totalPackagesFound += parsed.packages.length;
     for (const p of parsed.packages) {
+      if (allPackages.length >= MAX_PACKAGES_PER_AUDIT) { truncatedPackages = true; continue; }
       allPackages.push({ name: p.name, version: p.version, ecosystem: parsed.ecosystem });
-      if (allPackages.length >= MAX_PACKAGES_PER_AUDIT) break;
     }
-    if (allPackages.length >= MAX_PACKAGES_PER_AUDIT) break;
   }
 
   let advisories = [];
+  // Truncation counters — filled in by the OSV client so the response can
+  // admit when the audit was partial (see analyzers/audit.js `complete`).
+  const partial = {
+    filesTruncated: truncatedPackages,
+    packagesTruncated: false,
+    vulnsTruncated: false,
+  };
   if (allPackages.length > 0) {
     try {
-      const matches = await osvBatchQuery(allPackages, fetchImpl);
-      advisories = await osvHydrateVulns(matches, fetchImpl);
+      const matches = await osvBatchQuery(allPackages, fetchImpl, partial);
+      advisories = await osvHydrateVulns(matches, fetchImpl, partial);
     } catch (err) {
       console.error("analyze/vuln: OSV error", err);
       // Observability (Task #22): OSV outages are external — keep them
@@ -439,13 +467,21 @@ async function runLockfileAudit(body, env, request, ctx) {
     }
   }
 
+  const fixCommand = pickFixCommand(summary);
   return json({
     repoUrl: `https://github.com/${repo.owner}/${repo.repo}`,
-    scanned: { manifests: summary, totalPackages: allPackages.length },
+    scanned: {
+      manifests: summary,
+      totalPackages: allPackages.length,
+      // When the cap bit, `totalPackages` is what we audited and
+      // `packagesFound` is what was actually in the lockfiles.
+      packagesFound: totalPackagesFound,
+    },
     counts: countSeverities(advisories),
     advisories,
     topAdvisories: advisories.slice(0, 10),
-    fixCommand: pickFixCommand(summary),
+    fixCommand,
+    summary: buildAuditSummary({ advisories, fixCommand, partial }),
   }, 200);
 }
 
