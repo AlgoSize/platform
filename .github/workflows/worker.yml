@@ -124,12 +124,30 @@ jobs:
 
       - name: Smoke-test the deployed worker
         run: |
-          if [ "$TARGET_ENV" = "production" ]; then
-            HOST="https://algosize.com"
-          else
-            HOST="https://staging.algosize.com"
+          # Probe the host the Worker actually serves /api/* from, read from
+          # the same source of truth the Worker itself uses: SITE_ORIGIN in
+          # worker/wrangler.toml for this environment.
+          #
+          # This was hardcoded to https://algosize.com for production. That
+          # stopped being the API host when the Worker moved to its
+          # workers.dev subdomain and the algosize.com/api/* route was left
+          # dormant (see the SITE_ORIGIN comments in wrangler.toml). The
+          # apex is served by GitHub Pages, so the probe got a 404 from
+          # Pages and failed every deploy — after the deploy itself had
+          # already succeeded. Deriving the host means the two can't drift
+          # apart again: whatever SITE_ORIGIN says is what gets probed.
+          HOST=$(python3 - <<'PY'
+          import os, tomllib
+          cfg = tomllib.load(open("worker/wrangler.toml", "rb"))
+          env = os.environ["TARGET_ENV"]
+          print(cfg["env"][env]["vars"]["SITE_ORIGIN"].rstrip("/"))
+          PY
+          )
+          if [ -z "$HOST" ]; then
+            echo "::error::Could not read SITE_ORIGIN for env '$TARGET_ENV' from worker/wrangler.toml"
+            exit 1
           fi
-          echo "Smoke-testing $HOST/api/me ..."
+          echo "Smoke-testing $HOST/api/me (SITE_ORIGIN for env '$TARGET_ENV') ..."
           # /api/me on an unauthenticated request returns 401 (no session
           # cookie). Anything else (404 from GH Pages = route not bound
           # or propagation lag, 5xx = worker crash) is a deploy failure.
