@@ -84,6 +84,14 @@ export function summarize(analyzer, result) {
     const total = (c.critical || 0) + (c.high || 0) + (c.medium || 0) + (c.low || 0) + (c.unknown || 0);
     return `${total} advisor${total === 1 ? "y" : "ies"} · ${c.critical || 0} crit, ${c.high || 0} high`;
   }
+  if (analyzer === "arch") {
+    const s = result.summary || {};
+    const bySev = s.bySeverity || {};
+    const findings = typeof s.findings === "number" ? s.findings : 0;
+    return `${s.clusters || 0} cluster${s.clusters === 1 ? "" : "s"} · ` +
+           `${findings} finding${findings === 1 ? "" : "s"} · ` +
+           `${bySev.critical || 0} crit, ${bySev.high || 0} high`;
+  }
   if (analyzer === "algo") {
     const bigO = (result.bigO && result.bigO.label) || "unknown";
     const ms = typeof result.wallTimeMs === "number" ? result.wallTimeMs.toFixed(2) : "—";

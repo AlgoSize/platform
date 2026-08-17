@@ -26,7 +26,12 @@ import {
   listApiKeysHandler,
   revokeApiKeyHandler,
 } from "./handlers/keys.js";
-import { analyzeCostHandler, analyzeVulnHandler, analyzeAlgoHandler } from "./handlers/analyze.js";
+import {
+  analyzeCostHandler,
+  analyzeVulnHandler,
+  analyzeAlgoHandler,
+  analyzeArchitectureHandler,
+} from "./handlers/analyze.js";
 import { logoutHandler } from "./handlers/logout.js";
 import { meHandler } from "./handlers/me.js";
 import { listRunsHandler, getRunHandler } from "./handlers/runs.js";
@@ -89,6 +94,10 @@ router.post("/api/stripe/webhook",    stripeWebhookHandler);
 router.post("/api/analyze/cost",    analyzeRateLimit, requireAuth, apiKeyAnalyzeRateLimit, enforceQuota(analyzeCostHandler));
 router.post("/api/analyze/vuln",    analyzeRateLimit, requireAuth, apiKeyAnalyzeRateLimit, enforceQuota(analyzeVulnHandler));
 router.post("/api/analyze/algo",    analyzeRateLimit, requireAuth, apiKeyAnalyzeRateLimit, enforceQuota(analyzeAlgoHandler));
+// Architecture X-ray. Same gate as the other three — an architecture
+// submission is a whole repository, so it is metered like any other run
+// rather than being cheaper because it makes no upstream calls.
+router.post("/api/analyze/architecture", analyzeRateLimit, requireAuth, apiKeyAnalyzeRateLimit, enforceQuota(analyzeArchitectureHandler));
 
 // ---- Magic-link auth — email-verified sign-in/sign-up ---------------------
 // Replaces the old /api/signup endpoint (which issued a session immediately

@@ -18,6 +18,7 @@ import { validateCostInput, analyzeCost } from "../analyzers/cost.js";
 import { analyzeCur, _CUR_HELP_URL } from "../analyzers/cur.js";
 import { validateVulnInput, analyzeVuln } from "../analyzers/vuln.js";
 import { validateAlgoInput, analyzeAlgo } from "../analyzers/algo.js";
+import { validateArchitectureInput, analyzeArchitecture } from "../analyzers/architecture.js";
 import {
   parseLockfile,
   SUPPORTED_FILES as LOCKFILE_NAMES,
@@ -637,6 +638,54 @@ export async function analyzeAlgoHandler(request, env, ctx) {
   const response = await runAnalyzerWithBody(
     body, validateAlgoInput, analyzeAlgo, "analyze/algo", request, env, ctx);
   await maybePersist(ctx, env, request, "algo", body, response);
+  return response;
+}
+
+/**
+ * POST /api/analyze/architecture
+ *
+ * Body: `{ files: [{ path, content }, ...] }` — manifests, configs and source
+ * submitted by the dashboard or by CI. Returns `{ graph, findings,
+ * recommendations, summary, limits }`.
+ *
+ * Pure static analysis: no network, no LLM, and nothing is fetched from the
+ * infrastructure being analyzed. The whole input arrives in the request body,
+ * which is also why the analyzer enforces its own size caps rather than
+ * relying on the platform's.
+ */
+export async function analyzeArchitectureHandler(request, env, ctx) {
+  let body;
+  try { body = await request.json(); }
+  catch { return json({ error: "invalid_json", message: "request body must be valid JSON" }, 400); }
+
+  const validation = validateArchitectureInput(body);
+  if (!validation.ok) {
+    return json({ error: validation.error, message: validation.message }, 400);
+  }
+
+  let result;
+  try {
+    result = analyzeArchitecture(validation.value);
+  } catch (err) {
+    console.error("analyze/architecture: engine error", err);
+    await captureException(env, ctx, err, {
+      request,
+      userId: request.user && request.user.userId,
+      tags:   { source: "analyzer", analyzer: "analyze/architecture" },
+    });
+    return json({ error: "analyzer_failed", message: "could not analyze the submitted files" }, 500);
+  }
+
+  const response = json(result, 200);
+  // Persist the FINDINGS and summary, not the submitted source. An
+  // architecture submission is the customer's entire codebase; storing it in
+  // run history would turn a convenience feature into a second copy of their
+  // repository, and `safeInput` would silently truncate it anyway.
+  await maybePersist(
+    ctx, env, request, "arch",
+    { fileCount: validation.value.files.length, paths: validation.value.files.slice(0, 50).map((f) => f.path) },
+    response,
+  );
   return response;
 }
 
