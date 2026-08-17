@@ -145,11 +145,15 @@ console.log("\nlistRuns() — pagination + filters expired\n");
   // List view strips heavy fields — `result` and `input` must NOT be in the
   // per-item shape. That is the invariant; the exact key list below is how it
   // is enforced, and it also catches a new heavy field being added by accident.
-  // `source` joined the shape with migrations/0007 (CI vs dashboard runs).
+  // `source` joined the shape with migrations/0007 (CI vs dashboard runs);
+  // `repo` + `commitSha` joined with the D-3 runs feed so the CI badge can
+  // name its provenance without fetching the full record. Both are extracted
+  // from the already-parsed input, never the stored result — still no heavy
+  // fields in the list view.
   const sampleKeys = Object.keys(page1.items[0]).sort().join(",");
   expect(!("result" in page1.items[0]) && !("input" in page1.items[0]),
          "list items carry no heavy fields");
-  expect(sampleKeys === "analyzer,createdAt,hasInput,headline,id,ms,source",
+  expect(sampleKeys === "analyzer,commitSha,createdAt,hasInput,headline,id,ms,repo,source",
          `list-item shape is the summary set (got: ${sampleKeys})`);
   expect(page1.nextCursor && typeof page1.nextCursor === "string", "first page returns nextCursor");
 

@@ -96,7 +96,9 @@ const USERS_BACKFILL_COLUMNS = [
 const SCHEMA_RUNS = `
   CREATE TABLE IF NOT EXISTS runs (
     id          TEXT PRIMARY KEY,
-    user_id     TEXT NOT NULL,
+    user_id     TEXT,
+    org_id      TEXT,
+    source      TEXT,
     analyzer    TEXT NOT NULL,
     input_json  TEXT,
     result_json TEXT,
@@ -109,6 +111,18 @@ const SCHEMA_RUNS_INDEX = `
   CREATE INDEX IF NOT EXISTS idx_runs_user_created
     ON runs (user_id, created_at DESC)
 `;
+const SCHEMA_RUNS_ORG_INDEX = `
+  CREATE INDEX IF NOT EXISTS idx_runs_org_created
+    ON runs (org_id, created_at DESC)
+`;
+// Wrangler dev's local D1 persists between runs, so an e2e box that seeded
+// before migrations/0007 has a runs table missing org_id/source and every
+// /api/runs read 500s with "no such column". Same lazy-ALTER pattern as
+// USERS_BACKFILL_COLUMNS below: apply, ignore "duplicate column".
+const RUNS_BACKFILL_COLUMNS = [
+  "ALTER TABLE runs ADD COLUMN org_id TEXT",
+  "ALTER TABLE runs ADD COLUMN source TEXT",
+];
 
 export async function seedHandler(request, env) {
   // Hard 404 in any environment that does not opt in.
@@ -155,9 +169,12 @@ export async function seedHandler(request, env) {
     await env.DB.exec(SCHEMA_RUNS_INDEX.replace(/\s+/g, " ").trim());
     await env.DB.exec(SCHEMA_ORGS.replace(/\s+/g, " ").trim());
     await env.DB.exec(SCHEMA_MEMBERSHIPS.replace(/\s+/g, " ").trim());
-    for (const sql of USERS_BACKFILL_COLUMNS) {
+    for (const sql of USERS_BACKFILL_COLUMNS.concat(RUNS_BACKFILL_COLUMNS)) {
       try { await env.DB.exec(sql); } catch { /* column already present */ }
     }
+    // AFTER the backfill ALTERs: on a persisted pre-0007 table this index
+    // references a column the ALTER above just added.
+    await env.DB.exec(SCHEMA_RUNS_ORG_INDEX.replace(/\s+/g, " ").trim());
 
     const plan = user.subStatus === "active" ? "paid" : "free";
     await env.DB

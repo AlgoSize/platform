@@ -46,7 +46,22 @@ export async function meHandler(request, env, ctx) {
   }
 
   return new Response(
-    JSON.stringify({ email, subStatus, plan, monthlyRunsUsed, monthlyRunsLimit }),
+    JSON.stringify({
+      email,
+      subStatus,
+      plan,
+      monthlyRunsUsed,
+      monthlyRunsLimit,
+      // Billing-state fields (D-1). The dashboard's pill, banners and trial
+      // chip key off these three rather than re-deriving state from plan +
+      // subStatus — `reason` is the ENTITLEMENT_REASON the resolver actually
+      // took, so the UI and the analyzer gate literally cannot disagree.
+      // `plan` above keeps its existing meaning (what the account can DO)
+      // for back-compat; `active` says the same thing explicitly.
+      active: entitlement.active,
+      reason: entitlement.reason,
+      currentPeriodEnd: entitlement.currentPeriodEnd,
+    }),
     {
       status: 200,
       headers: { "content-type": "application/json" },
