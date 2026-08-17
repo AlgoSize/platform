@@ -39,18 +39,49 @@
     el.textContent = msg;
   }
 
+  /**
+   * Assemble what the buyer is actually asking for, read fresh at submit time.
+   *
+   * Deliberately reads the live DOM rather than state pushed here by
+   * pricing.js: the billing toggle and the seat stepper are the source of
+   * truth for what the buyer can see on screen, and anything cached would be
+   * one interaction stale.
+   *
+   * `plan` and `interval` decide which Stripe price is billed. The Worker
+   * refuses a plan it has no configured price for rather than falling back to
+   * a different one — clicking "Firm" must never charge the Solo price.
+   */
+  function purchaseFrom(form) {
+    var payload = {};
+
+    if (form.dataset.plan) payload.plan = form.dataset.plan;
+
+    var billing = document.querySelector('input[name="billing"]:checked');
+    payload.interval = billing && billing.value === "annual" ? "annual" : "monthly";
+
+    // Only the tiers that actually sell seats carry data-seats-from.
+    if (form.dataset.seatsFrom) {
+      var input = document.getElementById(form.dataset.seatsFrom);
+      var seats = input ? parseInt(input.value, 10) : NaN;
+      if (isFinite(seats)) payload.seats = Math.min(100, Math.max(1, seats));
+    }
+
+    return payload;
+  }
+
   function attach() {
     var forms = document.querySelectorAll('form[action="/api/checkout"]');
     Array.prototype.forEach.call(forms, function (form) {
       form.addEventListener("submit", function (event) {
         event.preventDefault();
-        var button = form.querySelector('button[type="submit"], [data-cta="checkout"]');
+        var button = form.querySelector('button[type="submit"], [data-cta^="checkout"]');
         setBusy(button, true);
 
         fetch(apiUrl("/api/checkout"), {
           method: "POST",
-          headers: { "Accept": "application/json" },
+          headers: { "Accept": "application/json", "Content-Type": "application/json" },
           credentials: "omit",
+          body: JSON.stringify(purchaseFrom(form)),
         })
           .then(function (res) {
             return res.json().then(function (body) {

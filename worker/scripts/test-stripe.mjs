@@ -9,6 +9,7 @@ import {
   verifyStripeSignature,
   buildSignatureHeader,
   createCheckoutSession,
+  resolvePrice,
   buildFormBody,
 } from "../src/stripe.js";
 import { checkoutHandler, checkoutSuccessHandler } from "../src/handlers/checkout.js";
@@ -466,6 +467,128 @@ console.log("\nWebhook miscellaneous\n");
     if (j.handled === false) ok("webhook acks unknown event types with 200");
     else fail(`unexpected ack body: ${JSON.stringify(j)}`);
   } else { fail(`expected 200, got ${res.status}`); }
+}
+
+// ---------------------------------------------------------------------------
+// Tiered pricing (Solo / Practice / Firm). The pricing page sends {plan,
+// interval, seats}; the danger these tests exist for is a tier resolving to
+// SOME price rather than to ITS price.
+// ---------------------------------------------------------------------------
+console.log("\nTiered pricing\n");
+
+// 18. No plan → the legacy single price, unchanged.
+{
+  const env = makeEnv();
+  const price = resolvePrice(env, {});
+  if (price && price.base === "price_test_monthly" && !price.perSeat) {
+    ok("no plan resolves to the legacy STRIPE_PRICE_ID");
+  } else { fail(`unexpected legacy price: ${JSON.stringify(price)}`); }
+}
+
+// 19. A configured tier resolves to its OWN price, per interval.
+{
+  const env = makeEnv({
+    STRIPE_PRICE_SOLO_MONTHLY: "price_solo_m",
+    STRIPE_PRICE_SOLO_ANNUAL:  "price_solo_y",
+  });
+  const m = resolvePrice(env, { plan: "solo", interval: "monthly" });
+  const y = resolvePrice(env, { plan: "solo", interval: "annual" });
+  if (m.base === "price_solo_m" && y.base === "price_solo_y") {
+    ok("each (plan, interval) resolves to its own price");
+  } else { fail(`solo resolved to ${m && m.base} / ${y && y.base}`); }
+}
+
+// 20. An unconfigured tier resolves to null — NOT to STRIPE_PRICE_ID.
+{
+  const env = makeEnv({ STRIPE_PRICE_SOLO_MONTHLY: "price_solo_m" });
+  const firm = resolvePrice(env, { plan: "firm", interval: "monthly" });
+  if (firm === null) ok("an unconfigured tier resolves to null, never to a fallback price");
+  else fail(`firm fell back to ${JSON.stringify(firm)}`);
+}
+
+// 21. Unknown plan / interval names are refused rather than coerced.
+{
+  const env = makeEnv({ STRIPE_PRICE_SOLO_MONTHLY: "price_solo_m" });
+  const bogusPlan     = resolvePrice(env, { plan: "enterprise", interval: "monthly" });
+  const bogusInterval = resolvePrice(env, { plan: "solo", interval: "weekly" });
+  if (bogusPlan === null && bogusInterval === null) ok("unknown plan/interval names resolve to null");
+  else fail(`bogus names resolved: ${JSON.stringify(bogusPlan)} / ${JSON.stringify(bogusInterval)}`);
+}
+
+// 22. A per-seat tier bills the base once and the seats separately.
+{
+  const env = makeEnv({
+    STRIPE_PRICE_PRACTICE_MONTHLY:      "price_practice_base",
+    STRIPE_PRICE_PRACTICE_MONTHLY_SEAT: "price_practice_seat",
+  });
+  let sent = null;
+  env.FETCH = null;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, init) => {
+    sent = init.body;
+    return { ok: true, status: 200, json: async () => ({ id: "cs_1", url: "https://stripe/x" }) };
+  };
+  try {
+    await createCheckoutSession(env, {
+      successUrl: "http://x/s?session_id={CHECKOUT_SESSION_ID}",
+      cancelUrl: "http://x/c",
+      plan: "practice", interval: "monthly", quantity: 4,
+    });
+  } finally { globalThis.fetch = realFetch; }
+
+  const params = new URLSearchParams(sent || "");
+  const baseOk = params.get("line_items[0][price]") === "price_practice_base"
+              && params.get("line_items[0][quantity]") === "1";
+  const seatOk = params.get("line_items[1][price]") === "price_practice_seat"
+              && params.get("line_items[1][quantity]") === "4";
+  if (baseOk && seatOk) ok("per-seat tier bills base at qty 1 and seats on their own line");
+  else fail(`unexpected line items: ${sent}`);
+}
+
+// 23. checkoutHandler refuses an unconfigured tier instead of charging
+//     something else. This is the test that matters most: the failure mode it
+//     rules out is a silent wrong charge, which no user would report as a bug.
+{
+  const env = makeEnv();   // no tier prices configured at all
+  const realFetch = globalThis.fetch;
+  let stripeCalled = false;
+  globalThis.fetch = async () => {
+    stripeCalled = true;
+    return { ok: true, status: 200, json: async () => ({ id: "cs_1", url: "https://stripe/x" }) };
+  };
+  let res;
+  try {
+    res = await checkoutHandler(
+      new Request("http://x/api/checkout", {
+        method: "POST",
+        headers: { "Accept": "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ plan: "firm", interval: "monthly" }),
+      }),
+      env,
+    );
+  } finally { globalThis.fetch = realFetch; }
+
+  const body = await res.json();
+  if (res.status === 503 && body.error === "plan_not_available" && !stripeCalled) {
+    ok("checkoutHandler refuses an unconfigured tier with 503 and never calls Stripe");
+  } else { fail(`expected 503 plan_not_available, got ${res.status} ${JSON.stringify(body)} (stripe called: ${stripeCalled})`); }
+}
+
+// 24. An unknown plan name is a client error, not a config error.
+{
+  const env = makeEnv();
+  const res = await checkoutHandler(
+    new Request("http://x/api/checkout", {
+      method: "POST",
+      headers: { "Accept": "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ plan: "enterprise" }),
+    }),
+    env,
+  );
+  const body = await res.json();
+  if (res.status === 400 && body.error === "plan_not_available") {
+    ok("checkoutHandler rejects an unknown plan name with 400");
+  } else { fail(`expected 400, got ${res.status} ${JSON.stringify(body)}`); }
 }
 
 console.log();

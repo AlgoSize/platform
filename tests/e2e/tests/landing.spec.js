@@ -12,7 +12,7 @@
 import { test, expect } from "@playwright/test";
 
 test.describe("landing page", () => {
-  test("renders the pricing CTA form pointed at /api/checkout", async ({ page }) => {
+  test("renders one pricing CTA form per tier, pointed at /api/checkout", async ({ page }) => {
     const consoleErrors = [];
     page.on("pageerror",   (err) => consoleErrors.push(`pageerror: ${err.message}`));
     page.on("console",     (msg) => { if (msg.type() === "error") consoleErrors.push(`console.error: ${msg.text()}`); });
@@ -23,13 +23,23 @@ test.describe("landing page", () => {
 
     await expect(page).toHaveTitle(/Algosize/i);
 
-    const ctaForm = page.locator('form[action="/api/checkout"]');
-    await expect(ctaForm).toBeVisible();
-    await expect(ctaForm).toHaveAttribute("method", /post/i);
+    // One form per tier. Asserting the exact set rather than "at least one"
+    // is the point: a tier whose form lost its data-plan would silently fall
+    // back to the legacy single price, which is a wrong charge rather than a
+    // visible break — see resolvePrice in worker/src/stripe.js.
+    const ctaForms = page.locator('form[action="/api/checkout"]');
+    await expect(ctaForms).toHaveCount(3);
 
-    const ctaButton = ctaForm.locator('button[type="submit"]');
-    await expect(ctaButton).toBeVisible();
-    await expect(ctaButton).toBeEnabled();
+    const plans = await ctaForms.evaluateAll((forms) => forms.map((f) => f.dataset.plan));
+    expect(plans, "each tier CTA names its own plan").toEqual(["solo", "practice", "firm"]);
+
+    for (const plan of plans) {
+      const form = page.locator(`form[action="/api/checkout"][data-plan="${plan}"]`);
+      await expect(form, `${plan} form is a POST`).toHaveAttribute("method", /post/i);
+      const button = form.locator('button[type="submit"]');
+      await expect(button, `${plan} CTA is visible`).toBeVisible();
+      await expect(button, `${plan} CTA is enabled`).toBeEnabled();
+    }
 
     expect(consoleErrors, "no console / page errors on the landing page").toEqual([]);
   });
@@ -44,6 +54,7 @@ test.describe("landing page", () => {
       capturedRequest = {
         method:  request.method(),
         headers: request.headers(),
+        body:    request.postDataJSON(),
       };
       await route.fulfill({
         status: 200,
@@ -69,6 +80,12 @@ test.describe("landing page", () => {
     expect(req.method(), "checkout request must be POST").toBe("POST");
     expect(capturedRequest, "the Playwright route() captured the request").not.toBeNull();
     expect(capturedRequest.method).toBe("POST");
+
+    // The body is what decides which Stripe price is billed, so it is worth
+    // asserting rather than assuming: the first tier CTA is Solo, and the
+    // billing toggle defaults to monthly.
+    expect(capturedRequest.body, "checkout body names the tier and period")
+      .toMatchObject({ plan: "solo", interval: "monthly" });
 
     // Wait for the redirect that checkout.js issues via window.location.assign.
     await page.waitForURL("**/?from=stripe-mock", { timeout: 10_000 });

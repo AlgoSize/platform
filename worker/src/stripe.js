@@ -69,14 +69,64 @@ export async function stripeFetch(env, path, { method = "POST", body, idempotenc
 // Checkout session helpers
 // ---------------------------------------------------------------------------
 
+/** The tiers the pricing page sells, and the two billing periods. */
+export const PLANS     = Object.freeze(["solo", "practice", "firm"]);
+export const INTERVALS = Object.freeze(["monthly", "annual"]);
+
 /**
- * Create a Checkout Session for the monthly subscription plan.
+ * Resolve which Stripe price(s) a requested tier bills against.
+ *
+ * Config is one env var per (plan × interval), plus an optional `_SEAT`
+ * companion for tiers that charge a base fee plus a per-seat fee:
+ *
+ *   STRIPE_PRICE_SOLO_MONTHLY
+ *   STRIPE_PRICE_PRACTICE_MONTHLY        base fee
+ *   STRIPE_PRICE_PRACTICE_MONTHLY_SEAT   per-seat fee, quantity = seats
+ *   STRIPE_PRICE_FIRM_ANNUAL             …and so on
+ *
+ * Returns `null` when the requested tier has no price configured. Callers MUST
+ * treat that as a refusal and must not fall back to another price: the whole
+ * point of resolving per-tier is that clicking "Firm — $599" can never quietly
+ * charge the Solo amount. A tier that isn't wired up yet fails loudly and
+ * visibly instead.
+ *
+ * With no `plan` at all this returns the legacy single-price config, so every
+ * caller that predates tiered pricing behaves exactly as it did before.
+ */
+export function resolvePrice(env, { plan, interval } = {}) {
+  if (!plan) {
+    return env.STRIPE_PRICE_ID ? { base: env.STRIPE_PRICE_ID, seat: null, perSeat: false } : null;
+  }
+
+  const p = String(plan).toLowerCase();
+  const i = String(interval || "monthly").toLowerCase();
+  if (!PLANS.includes(p) || !INTERVALS.includes(i)) return null;
+
+  const key  = `STRIPE_PRICE_${p.toUpperCase()}_${i.toUpperCase()}`;
+  const base = env[key];
+  if (!base) return null;
+
+  const seat = env[`${key}_SEAT`] || null;
+  return { base, seat, perSeat: !!seat };
+}
+
+/**
+ * Create a Checkout Session.
+ *
  * `successUrl` MUST contain the literal `{CHECKOUT_SESSION_ID}` placeholder
  * — Stripe substitutes the real session id when redirecting the user back.
+ *
+ * `plan`/`interval` select the tier (see resolvePrice). Omit both to bill the
+ * legacy single STRIPE_PRICE_ID.
  */
-export function createCheckoutSession(env, { successUrl, cancelUrl, customerEmail, quantity, orgId } = {}) {
-  if (!env.STRIPE_PRICE_ID) {
-    throw new Error("STRIPE_PRICE_ID is not set. See worker/.dev.vars.example.");
+export function createCheckoutSession(env, { successUrl, cancelUrl, customerEmail, quantity, orgId, plan, interval } = {}) {
+  const price = resolvePrice(env, { plan, interval });
+  if (!price) {
+    throw new Error(
+      plan
+        ? `No Stripe price configured for plan "${plan}" (${interval || "monthly"}). See worker/.dev.vars.example.`
+        : "STRIPE_PRICE_ID is not set. See worker/.dev.vars.example.",
+    );
   }
 
   // Seats. This was hardcoded to "1", which is why the product could not sell
@@ -87,12 +137,24 @@ export function createCheckoutSession(env, { successUrl, cancelUrl, customerEmai
 
   const body = {
     mode: "subscription",
-    "line_items[0][price]": env.STRIPE_PRICE_ID,
-    "line_items[0][quantity]": String(seats),
     success_url: successUrl,
     cancel_url: cancelUrl,
     allow_promotion_codes: "true",
   };
+
+  if (price.perSeat) {
+    // Base fee billed once, seats billed on their own line. A single line item
+    // cannot express "$149 plus $39 a seat", and folding the base into the
+    // seat price would overcharge every account past the first seat.
+    body["line_items[0][price]"]    = price.base;
+    body["line_items[0][quantity]"] = "1";
+    body["line_items[1][price]"]    = price.seat;
+    body["line_items[1][quantity]"] = String(seats);
+  } else {
+    body["line_items[0][price]"]    = price.base;
+    body["line_items[0][quantity]"] = String(seats);
+  }
+
   if (customerEmail) body.customer_email = customerEmail;
   if (orgId) {
     // Both locations on purpose: client_reference_id comes back on the
