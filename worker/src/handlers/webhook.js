@@ -185,7 +185,13 @@ async function handleSubscriptionDeleted(env, event) {
     return;
   }
 
-  const updated = await setSubStatusByCustomerId(env, customerId, "inactive");
+  // Record what the customer already paid for. src/entitlement.js serves paid
+  // features until this timestamp and free after it, which is what turns a
+  // cancellation into an actual downgrade instead of a no-op. Stripe sends
+  // unix seconds; a missing value leaves the stored one alone.
+  const periodEnd = typeof sub.current_period_end === "number" ? sub.current_period_end : null;
+
+  const updated = await setSubStatusByCustomerId(env, customerId, "inactive", periodEnd);
   if (!updated) {
     console.warn("customer.subscription.deleted: no user found for customer", customerId);
   }

@@ -1,0 +1,37 @@
+-- Adds the column entitlement needs to end a cancelled subscription.
+--
+-- Before this, `sub_status` was written by the Stripe webhook but never read
+-- when deciding paid vs free, so a cancelled customer kept full access
+-- indefinitely (see the comment this replaces in handlers/_users.js).
+--
+-- `current_period_end` is the paid-through date from the Stripe subscription
+-- object. src/entitlement.js serves paid features to a cancelled account only
+-- while `now < current_period_end` — the period they already paid for — and
+-- drops them to free after it.
+--
+-- Unix epoch SECONDS, matching Stripe's own `current_period_end` field and the
+-- `created_at`/`updated_at` columns on this table (the `runs` table uses
+-- milliseconds; the two conventions are documented where they differ).
+-- NULL means "no paid-through date on file": entitlement treats that as
+-- expired for a non-active subscription, which is deliberate — see below.
+--
+-- Apply with:
+--   wrangler d1 execute algosize --file=migrations/0002_entitlement.sql --remote
+--
+-- NOTE, before applying to production: any pre-existing row with
+-- plan='paid' AND sub_status <> 'active' will resolve to free the moment this
+-- ships, because there is no paid-through date to grant grace from. That is
+-- the intended fail-closed direction, but check the blast radius first:
+--
+--   SELECT COUNT(*) FROM users WHERE plan = 'paid' AND IFNULL(sub_status,'') <> 'active';
+--
+-- If that returns anything, backfill those rows from Stripe (or set
+-- sub_status='active' for the ones that genuinely are) before deploying.
+-- Rows with sub_status='active' are unaffected — they never consult this column.
+--
+-- Unlike 0001/0002 this migration is NOT self-guarding: SQLite has no
+-- `ADD COLUMN IF NOT EXISTS`, so running it twice errors with "duplicate
+-- column name". The local SQLite adapter records applied migrations in
+-- `_migrations` so boot stays idempotent; for D1, run it once.
+
+ALTER TABLE users ADD COLUMN current_period_end INTEGER;

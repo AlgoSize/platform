@@ -26,7 +26,7 @@ const QUOTA_TTL_SECONDS  = 60 * 60 * 24 * 35;  // 35 days — see comment above
 // templates.js ("you have 1 run left") stays accurate as the limit changes.
 const QUOTA_WARN_AT_RUNS = FREE_MONTHLY_LIMIT - 1;
 
-import { getUserById } from "./handlers/_users.js";
+import { resolveEntitlement } from "./entitlement.js";
 import { sendTransactional as defaultSendTransactional } from "./email/transactional.js";
 import { quotaWarning } from "./email/templates.js";
 
@@ -163,10 +163,12 @@ function jsonResponse(body, status = 200) {
  * Wrap an authenticated analyzer handler with quota enforcement.
  *
  * Behavior, given `request.user.userId` from `requireAuth`:
- *   1. Load the user row from USERS KV.
- *   2. If `plan === "paid"` → call the handler unchanged (paid users skip
- *      quota and never increment the counter).
- *   3. If `plan === "free"`:
+ *   1. Resolve entitlement via src/entitlement.js (the only place that
+ *      decides paid vs free, and the only place that reads sub_status).
+ *   2. If entitled → call the handler unchanged (paid users skip quota and
+ *      never increment the counter). A cancelled subscriber stays entitled
+ *      until the end of the period they paid for, then stops.
+ *   3. Otherwise (free, cancelled-and-expired, or no user row at all):
  *      a. Read the current month's count. If >= 5 → return 402
  *         `{ error: "quota_exceeded", monthlyRunsUsed, monthlyRunsLimit,
  *            upgradeUrl }` WITHOUT calling the handler.
@@ -189,18 +191,24 @@ export function enforceQuota(handler, { now, sendTransactional: sendTxOverride }
       return jsonResponse({ error: "unauthorized" }, 401);
     }
 
-    const user = await getUserById(env, sessionUser.userId);
-    // Missing user row under a valid session is unusual but defensible —
-    // treat as paid so we don't lock the user out (their session JWT is
-    // valid). The webhook is the source of truth for plan downgrades.
-    const plan = (user && user.plan) || "paid";
+    const ts = now ? (typeof now === "function" ? now() : now) : new Date();
 
-    if (plan === "paid") {
+    // One source of truth for paid vs free (src/entitlement.js). This used to
+    // read `(user && user.plan) || "paid"`, so a missing users row granted
+    // unlimited access — and `sub_status` was never consulted at all, so a
+    // cancelled customer never lost it. Both now fail closed.
+    const entitlement = await resolveEntitlement(env, sessionUser.userId, {
+      now: Math.floor(ts.getTime() / 1000),
+      ctx,
+      request,
+    });
+    const user = entitlement.user;
+
+    if (entitlement.active) {
       return handler(request, env, ctx);
     }
 
     // Free tier — gate on the month counter.
-    const ts   = now ? (typeof now === "function" ? now() : now) : new Date();
     const used = await getMonthlyUsage(env, sessionUser.userId, ts);
     if (used >= FREE_MONTHLY_LIMIT) {
       return jsonResponse(

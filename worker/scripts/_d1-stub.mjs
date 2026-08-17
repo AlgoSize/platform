@@ -4,7 +4,7 @@
 // closest local equivalent is better-sqlite3 with `:memory:`, which is what
 // we use here — it gives the tests a real SQL engine instead of a
 // hand-rolled query matcher and stays in lockstep with the production
-// schema by re-applying `migrations/0001_init.sql` on each construction.
+// schema by re-applying every file in `migrations/` on each construction.
 //
 // Exposes:
 //   makeD1()           — returns a fresh D1-shaped binding with the schema
@@ -18,13 +18,23 @@
 // code actually calls (prepare/.bind/.first/.all/.run, batch, exec).
 
 import Database from "better-sqlite3";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const SCHEMA_PATH = join(__dirname, "..", "migrations", "0001_init.sql");
-const SCHEMA_SQL = readFileSync(SCHEMA_PATH, "utf8");
+const MIGRATIONS_DIR = join(__dirname, "..", "migrations");
+
+// Every migration, in filename order. Reading the directory means a new
+// migration reaches the tests the moment it lands, with no second place to
+// remember to update. No applied-migrations tracking is needed here (unlike
+// the persistent adapter in src/adapters/sqlite-db.js) because every makeD1()
+// builds a fresh :memory: database, so even a non-idempotent ALTER runs once.
+const SCHEMA_SQL = readdirSync(MIGRATIONS_DIR)
+  .filter((f) => f.endsWith(".sql"))
+  .sort()
+  .map((f) => readFileSync(join(MIGRATIONS_DIR, f), "utf8"))
+  .join("\n");
 
 /** Create an in-memory D1 binding with the schema applied. */
 export function makeD1() {

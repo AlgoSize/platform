@@ -35,6 +35,11 @@ function rowToUser(row) {
     // do `if (!user.stripeCustomerId)`) keep working without edits.
     stripeCustomerId: row.stripe_customer_id || "",
     subStatus:        row.sub_status,
+    // Unix epoch SECONDS the current Stripe billing period runs to, or null
+    // when we have no paid-through date on file. src/entitlement.js uses it
+    // to grant a cancelled subscriber the remainder of the period they paid
+    // for — see migrations/0002_entitlement.sql.
+    currentPeriodEnd: typeof row.current_period_end === "number" ? row.current_period_end : null,
     createdAt:        row.created_at,
     updatedAt:        row.updated_at,
   };
@@ -164,19 +169,35 @@ export async function createFreeUser(env, { email }) {
   return { user, alreadyExisted: false };
 }
 
-/** Flip the user's subscription status. Used by customer.subscription.deleted. */
-export async function setSubStatusByCustomerId(env, customerId, subStatus) {
+/**
+ * Flip the user's subscription status. Used by customer.subscription.deleted.
+ *
+ * `currentPeriodEnd` (unix seconds, from the Stripe subscription object) is
+ * what makes cancellation actually take effect: the row keeps plan='paid',
+ * but src/entitlement.js only serves paid features while
+ * `now < current_period_end`, then drops the account to free.
+ *
+ * Previously this function set sub_status and nothing read it, so cancelling
+ * changed nothing at all — a former customer kept unlimited access forever.
+ * Pass the period end whenever the event carries one; omitting it leaves the
+ * stored value untouched rather than clearing a date we still need.
+ */
+export async function setSubStatusByCustomerId(env, customerId, subStatus, currentPeriodEnd = null) {
   if (!customerId) return null;
   const now = Math.floor(Date.now() / 1000);
-  const result = await env.DB.prepare(
-    `UPDATE users
-        SET sub_status = ?, updated_at = ?
-      WHERE stripe_customer_id = ?`,
-  ).bind(subStatus, now, customerId).run();
 
-  // Cancellation does NOT downgrade a paid record back to "free" — a former
-  // paid customer keeps unlimited until their subscription period ends, and
-  // the account-level decision (re-enroll, delete, etc.) is out of scope.
+  const result = currentPeriodEnd === null
+    ? await env.DB.prepare(
+        `UPDATE users
+            SET sub_status = ?, updated_at = ?
+          WHERE stripe_customer_id = ?`,
+      ).bind(subStatus, now, customerId).run()
+    : await env.DB.prepare(
+        `UPDATE users
+            SET sub_status = ?, current_period_end = ?, updated_at = ?
+          WHERE stripe_customer_id = ?`,
+      ).bind(subStatus, currentPeriodEnd, now, customerId).run();
+
   if (!result.meta || !result.meta.changes) return null;
   return getUserByCustomerId(env, customerId);
 }
