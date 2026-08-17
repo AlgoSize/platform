@@ -232,7 +232,12 @@ console.log("\nwebhook idempotency — independence between events\n");
 // 4. Unknown event types are also deduped.
 {
   const env = makeEnv();
-  const body = JSON.stringify({ id: "evt_unknown_1", type: "invoice.paid", data: { object: {} } });
+  // Must be a type the switch genuinely does not handle. This used to be
+  // `invoice.paid`, which the subscription-lifecycle work turned into a
+  // handled event — `customer.discount.created` is one we have no reason to
+  // ever act on, so it keeps testing the default branch rather than silently
+  // becoming a second test of a real handler.
+  const body = JSON.stringify({ id: "evt_unknown_1", type: "customer.discount.created", data: { object: {} } });
   const res1 = await stripeWebhookHandler(await makeSignedRequest(body), env);
   const body1 = await res1.json();
   expect(res1.status === 200 && body1.handled === false,

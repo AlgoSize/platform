@@ -1,10 +1,33 @@
 // POST /api/stripe/webhook
 //
 // Verifies Stripe's signature using Web Crypto, then handles:
-//   checkout.session.completed   → idempotently create/refresh user (active)
-//   customer.subscription.deleted → flip user subStatus to "inactive"
+//   checkout.session.completed          → idempotently create/refresh user
+//   customer.subscription.created       → mirror status, period, seats, tier
+//   customer.subscription.updated       → same (this is how a Portal tier or
+//                                          seat change reaches our database)
+//   customer.subscription.deleted       → cancel, keeping the paid-through date
+//   customer.subscription.trial_will_end → 3-day trial reminder email
+//   invoice.paid                        → back to active, clears past_due
+//   invoice.payment_failed              → past_due + dunning email
 //
 // All other event types are accepted with 200 so Stripe stops retrying.
+//
+// Until the lifecycle events above were added, the only two we handled were
+// checkout and cancel, which left the database wrong in every case in
+// between: a customer who changed tier or seat count in the Customer Portal
+// kept whatever they first signed up with, and a failed payment was invisible
+// — no status change, no email, no dunning at all.
+//
+// `sub_status` therefore now carries Stripe's own subscription status
+// ("active" | "trialing" | "past_due" | "canceled" | "unpaid" | "incomplete"
+// | …) rather than only the "active"/"inactive" pair the original two
+// handlers wrote. src/entitlement.js owns the mapping from that status to
+// what we actually serve; nothing here decides access.
+//
+// `plan` stays "paid" across every one of these transitions, including
+// cancellation. It records that this is a billing account, not whether the
+// account is currently entitled — that question is `sub_status` plus
+// `current_period_end`, and it has exactly one reader.
 //
 // Stripe webhooks are server-to-server: we can't set cookies on the user's
 // browser from here. The user-facing cookie + redirect happens in the
@@ -19,12 +42,16 @@
 // verification so an attacker can't pollute our dedup table by spamming
 // the endpoint with bogus event ids.
 
-import { verifyStripeSignature } from "../stripe.js";
+import { verifyStripeSignature, stripeFetch } from "../stripe.js";
 import {
   upsertUserFromCheckout,
   setSubStatusByCustomerId,
+  updateSubscriptionByCustomerId,
+  getUserByCustomerId,
 } from "./_users.js";
 import { captureException, captureMessage } from "../observability.js";
+import { sendTransactional as defaultSendTransactional } from "../email/transactional.js";
+import { paymentFailed, trialEndingSoon } from "../email/templates.js";
 
 // 7 days, a few days longer than Stripe's documented retry window. Picked
 // long enough that a delayed retry can't slip past the dedup table, short
@@ -62,7 +89,13 @@ function jsonResponse(body, status = 200) {
   });
 }
 
-export async function stripeWebhookHandler(request, env, ctx) {
+/**
+ * `sendTransactional` is injectable so the lifecycle tests can assert exactly
+ * how many emails a given event produced without a Gmail credential. The
+ * router calls this with three arguments and gets the real sender.
+ */
+export async function stripeWebhookHandler(request, env, ctx, { sendTransactional: sendTxOverride } = {}) {
+  const send = sendTxOverride || defaultSendTransactional;
   if (!env.STRIPE_WEBHOOK_SECRET) {
     console.error("webhook: STRIPE_WEBHOOK_SECRET is not set");
     // Observability (Task #22): a missing webhook secret is a deploy-time
@@ -115,8 +148,29 @@ export async function stripeWebhookHandler(request, env, ctx) {
         await handleCheckoutCompleted(env, event);
         break;
 
+      // Both carry the same object and the same fields we care about, so
+      // they share a handler. `.created` also fires for subscriptions started
+      // outside checkout (Stripe dashboard, API), which is the case the
+      // checkout-only flow used to miss entirely.
+      case "customer.subscription.created":
+      case "customer.subscription.updated":
+        await handleSubscriptionUpsert(env, ctx, event);
+        break;
+
       case "customer.subscription.deleted":
         await handleSubscriptionDeleted(env, event);
+        break;
+
+      case "customer.subscription.trial_will_end":
+        await handleTrialWillEnd(env, ctx, event, send);
+        break;
+
+      case "invoice.paid":
+        await handleInvoicePaid(env, ctx, event);
+        break;
+
+      case "invoice.payment_failed":
+        await handleInvoicePaymentFailed(env, ctx, event, send);
         break;
 
       default:
@@ -194,5 +248,264 @@ async function handleSubscriptionDeleted(env, event) {
   const updated = await setSubStatusByCustomerId(env, customerId, "inactive", periodEnd);
   if (!updated) {
     console.warn("customer.subscription.deleted: no user found for customer", customerId);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Subscription lifecycle
+// ---------------------------------------------------------------------------
+
+/**
+ * customer.subscription.created / .updated — mirror the subscription onto the
+ * user row. This is the only path by which a tier switch or a seat-count
+ * change made in the Stripe Customer Portal reaches our database; without it
+ * the customer's invoice and their entitlement drift apart silently.
+ */
+async function handleSubscriptionUpsert(env, ctx, event) {
+  const sub = event.data?.object;
+  if (!sub) throw new Error("event missing data.object");
+
+  const customerId = customerIdOf(sub);
+  if (!customerId) {
+    console.warn(`${event.type} missing customer id`, { subId: sub.id });
+    return;
+  }
+
+  const fields = subscriptionFields(sub);
+  const updated = await updateSubscriptionByCustomerId(env, customerId, fields);
+  if (updated) return;
+
+  // No row for this customer. Two ways to get here, both real: a subscription
+  // created straight from the Stripe dashboard/API (never went through our
+  // checkout), or `.created` overtaking `checkout.session.completed` in
+  // delivery order. Recover the email from Stripe and create the row, so the
+  // seat count and tier aren't lost until the next subscription update.
+  const email = await resolveCustomerEmail(env, ctx, sub, customerId);
+  if (!email) {
+    console.warn(`${event.type}: no user for customer and no email to create one`, customerId);
+    return;
+  }
+
+  await upsertUserFromCheckout(env, {
+    email,
+    stripeCustomerId: customerId,
+    subStatus: fields.subStatus,
+  });
+  // upsertUserFromCheckout writes identity and status; the subscription
+  // detail columns it doesn't know about are filled in by a second pass.
+  await updateSubscriptionByCustomerId(env, customerId, fields);
+}
+
+/**
+ * invoice.paid — the renewal succeeded (or a dunning retry finally landed).
+ * Returns the account to `active`, which clears a `past_due` set by an earlier
+ * failure, and advances the paid-through date to the period just bought.
+ */
+async function handleInvoicePaid(env, ctx, event) {
+  const invoice = event.data?.object;
+  if (!invoice) throw new Error("event missing data.object");
+
+  const customerId = customerIdOf(invoice);
+  if (!customerId) {
+    console.warn("invoice.paid missing customer id", { invoiceId: invoice.id });
+    return;
+  }
+
+  const updated = await updateSubscriptionByCustomerId(env, customerId, {
+    plan:             "paid",
+    subStatus:        "active",
+    // `undefined` when the invoice carries no line period, which leaves the
+    // stored paid-through date alone rather than clearing it.
+    currentPeriodEnd: invoicePeriodEnd(invoice),
+  });
+  if (!updated) {
+    console.warn("invoice.paid: no user found for customer", customerId);
+  }
+}
+
+/**
+ * invoice.payment_failed — flag the account `past_due` and tell the customer.
+ *
+ * `past_due` does NOT cut access off here: src/entitlement.js keeps serving
+ * until `current_period_end`, which is what gives Stripe's ~2 weeks of retries
+ * room to succeed. The email is the actual product behaviour — a silent
+ * failure is how a subscription dies of an expired card.
+ */
+async function handleInvoicePaymentFailed(env, ctx, event, send) {
+  const invoice = event.data?.object;
+  if (!invoice) throw new Error("event missing data.object");
+
+  const customerId = customerIdOf(invoice);
+  if (!customerId) {
+    console.warn("invoice.payment_failed missing customer id", { invoiceId: invoice.id });
+    return;
+  }
+
+  const user = await updateSubscriptionByCustomerId(env, customerId, {
+    subStatus: "past_due",
+  });
+  if (!user) {
+    console.warn("invoice.payment_failed: no user found for customer", customerId);
+    return;
+  }
+  if (!user.email) return;
+
+  // Awaited rather than queued on ctx.waitUntil: sendTransactional never
+  // throws (it funnels its own failures to Sentry), so awaiting cannot turn a
+  // mail outage into a 500 and a Stripe retry storm. What it does buy is that
+  // the dedup row is only written once the send has been attempted, and the
+  // event dedup above is what makes "exactly one email per failed invoice"
+  // true even when Stripe redelivers.
+  await send(env, ctx, {
+    to: user.email,
+    ...paymentFailed({
+      email:        user.email,
+      amountDue:    formatMoney(invoice.amount_due, invoice.currency),
+      accessEndsOn: formatDateUtc(user.currentPeriodEnd),
+      payUrl:       invoice.hosted_invoice_url || null,
+      attemptCount: typeof invoice.attempt_count === "number" ? invoice.attempt_count : null,
+    }),
+  });
+}
+
+/**
+ * customer.subscription.trial_will_end — Stripe fires this three days before
+ * a trial converts. Purely a notification: no row changes, because nothing
+ * about the subscription has changed yet.
+ */
+async function handleTrialWillEnd(env, ctx, event, send) {
+  const sub = event.data?.object;
+  if (!sub) throw new Error("event missing data.object");
+
+  const customerId = customerIdOf(sub);
+  if (!customerId) {
+    console.warn("customer.subscription.trial_will_end missing customer id", { subId: sub.id });
+    return;
+  }
+
+  const user = await getUserByCustomerId(env, customerId);
+  if (!user || !user.email) {
+    console.warn("customer.subscription.trial_will_end: no user found for customer", customerId);
+    return;
+  }
+
+  const price = firstItem(sub)?.price;
+  await send(env, ctx, {
+    to: user.email,
+    ...trialEndingSoon({
+      email:       user.email,
+      trialEndsOn: formatDateUtc(sub.trial_end),
+      amount:      price ? formatMoney(price.unit_amount, price.currency) : null,
+    }),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Stripe object readers
+//
+// Every one of these tolerates a missing field rather than throwing: a webhook
+// that 500s is a webhook Stripe retries forever, and none of these values is
+// worth blocking the rest of the update on.
+// ---------------------------------------------------------------------------
+
+/** `customer` is an id string, or an expanded object when the caller expanded it. */
+function customerIdOf(obj) {
+  return typeof obj.customer === "string" ? obj.customer : obj.customer?.id || null;
+}
+
+function firstItem(sub) {
+  return sub.items?.data?.[0] || null;
+}
+
+/**
+ * Stripe moved `current_period_end` from the subscription onto the
+ * subscription item in the 2025-03-31 API version. Read both so the handler
+ * keeps working across an API-version bump on the Stripe side, which is a
+ * setting we don't control from here.
+ */
+function subscriptionPeriodEnd(sub) {
+  if (typeof sub.current_period_end === "number") return sub.current_period_end;
+  const item = firstItem(sub);
+  if (item && typeof item.current_period_end === "number") return item.current_period_end;
+  return undefined;
+}
+
+function invoicePeriodEnd(invoice) {
+  const line = invoice.lines?.data?.[0];
+  return typeof line?.period?.end === "number" ? line.period.end : undefined;
+}
+
+/**
+ * Map a Stripe subscription onto the columns we store. Fields Stripe didn't
+ * send are left `undefined`, which updateSubscriptionByCustomerId reads as
+ * "don't touch" — so a partial event can't blank a column we already know.
+ */
+function subscriptionFields(sub) {
+  const item = firstItem(sub);
+  return {
+    // Always "paid": this records that the account bills through Stripe, not
+    // that it is currently entitled. See the header.
+    plan:             "paid",
+    subStatus:        typeof sub.status === "string" && sub.status ? sub.status : "inactive",
+    currentPeriodEnd: subscriptionPeriodEnd(sub),
+    quantity:         typeof item?.quantity === "number" ? item.quantity : undefined,
+    priceId:          item?.price?.id || undefined,
+  };
+}
+
+/**
+ * Find the email for a customer we have no row for. Prefers the expanded
+ * customer object on the event; otherwise asks Stripe. Never throws — a
+ * failure here means we skip creating the row, not that the whole event fails.
+ */
+async function resolveCustomerEmail(env, ctx, sub, customerId) {
+  if (sub.customer && typeof sub.customer === "object" && sub.customer.email) {
+    return sub.customer.email;
+  }
+  if (!env.STRIPE_SECRET_KEY) return null;
+  try {
+    const customer = await stripeFetch(env, `/customers/${encodeURIComponent(customerId)}`, { method: "GET" });
+    return customer?.email || null;
+  } catch (err) {
+    await captureMessage(env, ctx, `stripe customer lookup failed for ${customerId}: ${err.message}`, {
+      level: "warning",
+      tags: { source: "webhook", reason: "customer_lookup_failed" },
+    });
+    return null;
+  }
+}
+
+/** Unix seconds → "June 1, 2026" in UTC. Null-safe: returns null, not "Invalid Date". */
+function formatDateUtc(unixSeconds) {
+  if (typeof unixSeconds !== "number" || !Number.isFinite(unixSeconds)) return null;
+  return new Date(unixSeconds * 1000).toLocaleDateString("en-US", {
+    month: "long", day: "numeric", year: "numeric", timeZone: "UTC",
+  });
+}
+
+/**
+ * Stripe's minor units → a display string ("$29.00"). Zero-decimal currencies
+ * (JPY, KRW) are not divided by 100 — doing so would show a customer ¥2.90
+ * for a ¥290 charge.
+ */
+const ZERO_DECIMAL_CURRENCIES = new Set([
+  "bif", "clp", "djf", "gnf", "jpy", "kmf", "krw", "mga",
+  "pyg", "rwf", "ugx", "vnd", "vuv", "xaf", "xof", "xpf",
+]);
+
+function formatMoney(amountMinorUnits, currency) {
+  if (typeof amountMinorUnits !== "number" || !Number.isFinite(amountMinorUnits)) return null;
+  const code = (currency || "usd").toLowerCase();
+  const zeroDecimal = ZERO_DECIMAL_CURRENCIES.has(code);
+  const value = zeroDecimal ? amountMinorUnits : amountMinorUnits / 100;
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: code.toUpperCase(),
+      minimumFractionDigits: zeroDecimal ? 0 : 2,
+    }).format(value);
+  } catch {
+    // Unknown currency code — still show the customer a number.
+    return `${value.toFixed(zeroDecimal ? 0 : 2)} ${code.toUpperCase()}`;
   }
 }

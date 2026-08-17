@@ -34,10 +34,41 @@ export const ENTITLEMENT_REASON = Object.freeze({
   NO_USER_ROW:       "no_user_row",
   FREE_PLAN:         "free_plan",
   ACTIVE_SUBSCRIPTION: "active_subscription",
+  TRIALING:          "trialing",
   GRACE_PERIOD:      "grace_period",
   PERIOD_EXPIRED:    "period_expired",
   MISSING_PERIOD_END: "missing_period_end",
+  NOT_ENTITLING_STATUS: "not_entitling_status",
 });
+
+// `sub_status` now holds Stripe's own subscription status (written by the
+// lifecycle webhooks) rather than only the "active"/"inactive" pair the
+// checkout and cancel handlers used. The three sets below are the whole
+// mapping from that status to what we serve.
+
+/** Serve paid features outright, regardless of the paid-through date. */
+const ENTITLING_STATUSES = new Set(["active", "trialing"]);
+
+/**
+ * The customer had access and something ended or lapsed: they keep what they
+ * already paid for until `current_period_end`, then drop to free.
+ *
+ * `past_due` belongs here on purpose — that is what dunning is. Stripe retries
+ * a failed payment for roughly two weeks, and cutting access off on the first
+ * failed charge would punish an expired card far harder than a cancellation.
+ * `null` is included because rows written before `sub_status` existed carry it,
+ * and they resolved through this same grace path before.
+ */
+const GRACE_ELIGIBLE_STATUSES = new Set(["past_due", "inactive", "canceled", "unpaid", null, undefined]);
+
+/**
+ * Everything else — `incomplete`, `incomplete_expired`, `paused`. These never
+ * entitle, even though Stripe still stamps a `current_period_end` on them.
+ * `incomplete` is the dangerous one: it means the subscription exists but the
+ * first payment has not succeeded, so treating its period end as a grace
+ * window would hand out a full month to anyone who starts a checkout and
+ * abandons it at the card form.
+ */
 
 /**
  * Resolve what an account is entitled to.
@@ -83,8 +114,22 @@ export async function resolveEntitlement(env, userId, { now, ctx, request } = {}
     return { plan: "free", active: false, reason: ENTITLEMENT_REASON.FREE_PLAN, currentPeriodEnd, user };
   }
 
-  if (user.subStatus === "active") {
-    return { plan: "paid", active: true, reason: ENTITLEMENT_REASON.ACTIVE_SUBSCRIPTION, currentPeriodEnd, user };
+  if (ENTITLING_STATUSES.has(user.subStatus)) {
+    return {
+      plan: "paid",
+      active: true,
+      reason: user.subStatus === "trialing"
+        ? ENTITLEMENT_REASON.TRIALING
+        : ENTITLEMENT_REASON.ACTIVE_SUBSCRIPTION,
+      currentPeriodEnd,
+      user,
+    };
+  }
+
+  if (!GRACE_ELIGIBLE_STATUSES.has(user.subStatus)) {
+    // A status that never earned access in the first place. Fail closed
+    // without consulting the period end — see the comment on the set above.
+    return { plan: "paid", active: false, reason: ENTITLEMENT_REASON.NOT_ENTITLING_STATUS, currentPeriodEnd, user };
   }
 
   // Paid, but the subscription is no longer active: serve the rest of the

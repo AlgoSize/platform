@@ -445,7 +445,10 @@ console.log("\nWebhook miscellaneous\n");
 // 17. Webhook acks unknown event types with 200
 {
   const env = makeEnv();
-  const body = JSON.stringify({ id: "evt_x", type: "invoice.paid", data: { object: {} } });
+  // `invoice.paid` used to stand in for "a type we don't handle"; the
+  // subscription-lifecycle work made it a handled event. Swapped for one we
+  // have no reason to ever act on, so this keeps testing the default branch.
+  const body = JSON.stringify({ id: "evt_x", type: "customer.discount.created", data: { object: {} } });
   const t = Math.floor(Date.now() / 1000);
   const sig = await buildSignatureHeader(body, SECRET, t);
   const res = await stripeWebhookHandler(

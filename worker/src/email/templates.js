@@ -122,6 +122,101 @@ export function magicLinkEmail({ email, verifyUrl, ttlMinutes }) {
   return { subject, text, html };
 }
 
+/**
+ * Dunning email — sent from the invoice.payment_failed webhook.
+ *
+ * The three things a dunning email has to say, in this order, because a
+ * customer who reads only the first line still needs to know it's about them:
+ *   1. what failed (the charge, for this amount, on this account),
+ *   2. what breaks and when (access continues to `accessEndsOn`, then the
+ *      account drops to the free tier — 5 analyses a month),
+ *   3. exactly one thing to click.
+ *
+ * `payUrl` is Stripe's `hosted_invoice_url` when the event carried one — it
+ * settles the invoice without signing in, which is the shortest path back to
+ * paid. `portalUrl` is our own billing entry point, used alone when Stripe
+ * sent no hosted invoice. No guilt, no exclamation marks: the overwhelmingly
+ * common cause is a card that expired.
+ */
+export function paymentFailed({ email, amountDue, accessEndsOn, payUrl, attemptCount }) {
+  const subject = "Algosize — your payment didn't go through";
+  const amount  = amountDue ? ` of ${amountDue}` : "";
+  const retry   = attemptCount && attemptCount > 1
+    ? `This was attempt ${attemptCount}. `
+    : "";
+  const deadline = accessEndsOn
+    ? `Your Pro access stays on until ${accessEndsOn}. After that the account drops to the free tier (5 analyses per month) until a payment succeeds.`
+    : `Your Pro access stays on for the rest of the period you've already paid for. After that the account drops to the free tier (5 analyses per month) until a payment succeeds.`;
+  const link = payUrl || `${DASHBOARD_URL}#billing`;
+
+  const text = [
+    `We couldn't process the payment${amount} for your Algosize Pro`,
+    `subscription (${email}).`,
+    ``,
+    `${retry}The usual cause is an expired or replaced card — nothing is`,
+    `wrong with your account.`,
+    ``,
+    deadline,
+    ``,
+    `Update your payment method: ${link}`,
+    ``,
+    `— The Algosize team`,
+  ].join("\n");
+
+  const html = shellHtml(
+    "Your payment didn't go through",
+    `
+      <p style="margin:0 0 16px">We couldn't process the payment${escapeHtml(amount)} for your Algosize Pro subscription (<code style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#7ee0c0">${escapeHtml(email)}</code>).</p>
+      <p style="margin:0 0 16px;font-size:14px;color:#8b949e">${escapeHtml(retry)}The usual cause is an expired or replaced card — nothing is wrong with your account.</p>
+      <p style="margin:0 0 24px">${escapeHtml(deadline)}</p>
+      <p style="margin:0 0 8px">
+        <a href="${link}" style="display:inline-block;padding:12px 20px;background:#7ee0c0;color:#06281f;text-decoration:none;border-radius:8px;font-weight:600">Update your payment method →</a>
+      </p>
+    `,
+  );
+  return { subject, text, html };
+}
+
+/**
+ * Trial reminder — sent from customer.subscription.trial_will_end, which
+ * Stripe fires three days before the trial converts.
+ *
+ * Deliberately not a sales pitch: the customer already chose to trial. It says
+ * when the charge lands and how much, so the card statement is never a
+ * surprise, and it gives cancelling equal billing with continuing. A trial
+ * reminder that hides the cancel path is what generates the chargeback.
+ */
+export function trialEndingSoon({ email, trialEndsOn, amount }) {
+  const subject = "Algosize — your trial ends in 3 days";
+  const priceLine = amount
+    ? `you'll be charged ${amount} and your subscription continues`
+    : `your subscription converts to paid and continues`;
+
+  const text = [
+    `Your Algosize Pro trial (${email}) ends in 3 days${trialEndsOn ? `, on ${trialEndsOn}` : ""}.`,
+    ``,
+    `Nothing to do if you want to keep going — ${priceLine}`,
+    `automatically. Unlimited analyses carry straight on.`,
+    ``,
+    `If Pro isn't for you, cancel any time before then and you won't be`,
+    `charged. Your account stays on the free tier with 5 analyses a month:`,
+    `${DASHBOARD_URL}#billing`,
+    ``,
+    `— The Algosize team`,
+  ].join("\n");
+
+  const html = shellHtml(
+    "Your trial ends in 3 days",
+    `
+      <p style="margin:0 0 16px">Your Algosize Pro trial (<code style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#7ee0c0">${escapeHtml(email)}</code>) ends in 3 days${trialEndsOn ? `, on ${escapeHtml(trialEndsOn)}` : ""}.</p>
+      <p style="margin:0 0 16px">Nothing to do if you want to keep going — ${escapeHtml(priceLine)} automatically, and unlimited analyses carry straight on.</p>
+      <p style="margin:0 0 24px;font-size:14px;color:#8b949e">If Pro isn't for you, cancel any time before then and you won't be charged. Your account stays on the free tier with 5 analyses a month.</p>
+      <p style="margin:0"><a href="${DASHBOARD_URL}#billing" style="color:#7ee0c0">Manage your subscription →</a></p>
+    `,
+  );
+  return { subject, text, html };
+}
+
 function escapeHtml(s) {
   return String(s)
     .replace(/&/g, "&amp;")

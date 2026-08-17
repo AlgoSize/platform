@@ -40,6 +40,12 @@ function rowToUser(row) {
     // to grant a cancelled subscriber the remainder of the period they paid
     // for — see migrations/0002_entitlement.sql.
     currentPeriodEnd: typeof row.current_period_end === "number" ? row.current_period_end : null,
+    // Seat count and tier, mirrored from the Stripe subscription's first line
+    // item by the lifecycle webhooks — see migrations/0003. `quantity` is NULL
+    // on every row written before that migration; those are all single-seat,
+    // hence the default rather than passing the NULL through.
+    quantity:         typeof row.quantity === "number" ? row.quantity : 1,
+    priceId:          row.price_id || null,
     createdAt:        row.created_at,
     updatedAt:        row.updated_at,
   };
@@ -197,6 +203,62 @@ export async function setSubStatusByCustomerId(env, customerId, subStatus, curre
             SET sub_status = ?, current_period_end = ?, updated_at = ?
           WHERE stripe_customer_id = ?`,
       ).bind(subStatus, currentPeriodEnd, now, customerId).run();
+
+  if (!result.meta || !result.meta.changes) return null;
+  return getUserByCustomerId(env, customerId);
+}
+
+// Columns the subscription-lifecycle webhooks are allowed to write, mapped
+// from the camelCase field names callers use. The UPDATE below interpolates
+// these column names into SQL, so the allowlist is what keeps that safe —
+// values are always bound, never interpolated. Do not build this map from
+// caller input.
+const SUBSCRIPTION_COLUMNS = Object.freeze({
+  plan:             "plan",
+  subStatus:        "sub_status",
+  currentPeriodEnd: "current_period_end",
+  quantity:         "quantity",
+  priceId:          "price_id",
+});
+
+/**
+ * Write whichever subscription fields the caller supplies, leaving the rest
+ * alone. Used by customer.subscription.created/.updated, invoice.paid and
+ * invoice.payment_failed, which each know a different subset of the truth:
+ * an invoice knows the status but not the seat count, a subscription update
+ * knows both.
+ *
+ * Omitting a field (leaving it `undefined`) keeps the stored value; passing
+ * `null` explicitly clears it. That distinction matters — a renewal invoice
+ * must not wipe the price id just because it doesn't carry one.
+ *
+ * Returns the refreshed user, or null when no row matched the customer id.
+ * A null return is the caller's signal that we've received a subscription for
+ * a customer we've never seen, which is a real ordering case (a subscription
+ * created in the Stripe dashboard, or .created arriving before
+ * checkout.session.completed) rather than an error.
+ */
+export async function updateSubscriptionByCustomerId(env, customerId, fields = {}) {
+  if (!customerId) return null;
+
+  const sets = [];
+  const vals = [];
+  for (const [field, column] of Object.entries(SUBSCRIPTION_COLUMNS)) {
+    if (fields[field] === undefined) continue;
+    sets.push(`${column} = ?`);
+    vals.push(fields[field]);
+  }
+  // Nothing to write — still report whether the customer exists, so callers
+  // get the same "did we know this customer?" answer either way.
+  if (!sets.length) return getUserByCustomerId(env, customerId);
+
+  sets.push("updated_at = ?");
+  vals.push(Math.floor(Date.now() / 1000));
+
+  const result = await env.DB
+    .prepare(`UPDATE users SET ${sets.join(", ")} WHERE stripe_customer_id = ?`)
+    .bind(...vals, customerId)
+    .run();
 
   if (!result.meta || !result.meta.changes) return null;
   return getUserByCustomerId(env, customerId);

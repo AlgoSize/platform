@@ -1,0 +1,37 @@
+-- Records the two subscription facts we previously threw away: which price
+-- the customer is on, and how many seats they bought.
+--
+-- Before this, the only Stripe events we handled were
+-- checkout.session.completed and customer.subscription.deleted, so a tier
+-- change or a seat-count change made in the Stripe Customer Portal never
+-- reached our database at all — the customer paid for 20 seats and we kept
+-- serving them the plan they signed up with. handlers/webhook.js now handles
+-- customer.subscription.created/.updated and writes both columns.
+--
+-- quantity  Seat count from the subscription's first line item
+--           (`items.data[0].quantity`). NULL for rows written before this
+--           migration or by a flow that carries no line item; readers should
+--           treat NULL as 1 seat, which is what every existing row is.
+--
+-- price_id  Stripe price id from `items.data[0].price.id`, e.g.
+--           "price_1AbCdEf...". This is what identifies the tier — compare it
+--           against STRIPE_PRICE_ID (and any future tier ids) rather than
+--           inferring the plan from the amount, which changes with currency
+--           and discounts.
+--
+-- Deliberately NOT stored: amount, currency, interval. They are all
+-- derivable from the price id via the Stripe API and would go stale here the
+-- moment pricing changes. The price id is the stable key.
+--
+-- Apply with:
+--   wrangler d1 execute algosize --file=migrations/0003_subscription_details.sql --remote
+--
+-- Both columns are nullable with no default, so this migration is safe to
+-- apply to a live table: existing rows are untouched and every reader treats
+-- NULL as "not known yet". Unlike a schema file this is NOT self-guarding
+-- (SQLite has no `ADD COLUMN IF NOT EXISTS`) — run it once. The local SQLite
+-- adapter tracks applied files in `_migrations`, so local boot stays
+-- idempotent on its own.
+
+ALTER TABLE users ADD COLUMN quantity INTEGER;
+ALTER TABLE users ADD COLUMN price_id TEXT;
