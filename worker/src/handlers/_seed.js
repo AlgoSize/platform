@@ -39,10 +39,50 @@ const SCHEMA_USERS = `
     stripe_customer_id TEXT UNIQUE,
     plan               TEXT NOT NULL DEFAULT 'free',
     sub_status         TEXT,
+    current_period_end INTEGER,
+    active_org_id      TEXT,
     created_at         INTEGER NOT NULL,
     updated_at         INTEGER NOT NULL
   )
 `;
+// Entitlement resolves through the ORGANISATION (migrations/0004), so a
+// seeded session needs an org and a membership as well as a user row.
+// Without them /api/me 500s on a missing table, and with the tables but no
+// membership the seeded "paid" session resolves to free — either way the
+// dashboard the e2e suite is asserting against is not the one users get.
+const SCHEMA_ORGS = `
+  CREATE TABLE IF NOT EXISTS organisations (
+    org_id             TEXT PRIMARY KEY,
+    name               TEXT NOT NULL,
+    stripe_customer_id TEXT UNIQUE,
+    plan               TEXT NOT NULL DEFAULT 'free',
+    sub_status         TEXT,
+    current_period_end INTEGER,
+    seats_purchased    INTEGER NOT NULL DEFAULT 1,
+    price_id           TEXT,
+    created_at         INTEGER NOT NULL,
+    updated_at         INTEGER NOT NULL
+  )
+`;
+const SCHEMA_MEMBERSHIPS = `
+  CREATE TABLE IF NOT EXISTS memberships (
+    org_id     TEXT NOT NULL,
+    user_id    TEXT NOT NULL,
+    role       TEXT NOT NULL CHECK (role IN ('owner','admin','member')),
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (org_id, user_id)
+  )
+`;
+
+// Columns added to `users` after the original inline schema above shipped.
+// A database file left over from an earlier run already has the table, so
+// CREATE TABLE IF NOT EXISTS silently skips the new columns — these bring it
+// up to date. Each is expected to fail with "duplicate column name" on a
+// fresh table that already declared it, which is not an error worth raising.
+const USERS_BACKFILL_COLUMNS = [
+  "ALTER TABLE users ADD COLUMN current_period_end INTEGER",
+  "ALTER TABLE users ADD COLUMN active_org_id TEXT",
+];
 const SCHEMA_RUNS = `
   CREATE TABLE IF NOT EXISTS runs (
     id          TEXT PRIMARY KEY,
@@ -103,6 +143,11 @@ export async function seedHandler(request, env) {
     await env.DB.exec(SCHEMA_USERS.replace(/\s+/g, " ").trim());
     await env.DB.exec(SCHEMA_RUNS.replace(/\s+/g, " ").trim());
     await env.DB.exec(SCHEMA_RUNS_INDEX.replace(/\s+/g, " ").trim());
+    await env.DB.exec(SCHEMA_ORGS.replace(/\s+/g, " ").trim());
+    await env.DB.exec(SCHEMA_MEMBERSHIPS.replace(/\s+/g, " ").trim());
+    for (const sql of USERS_BACKFILL_COLUMNS) {
+      try { await env.DB.exec(sql); } catch { /* column already present */ }
+    }
 
     const plan = user.subStatus === "active" ? "paid" : "free";
     await env.DB
@@ -125,6 +170,39 @@ export async function seedHandler(request, env) {
         user.createdAt || Math.floor(Date.now() / 1000),
         user.updatedAt || Math.floor(Date.now() / 1000),
       )
+      .run();
+
+    // The organisation the seeded user owns, carrying the plan and status
+    // entitlement actually reads. Derived from the user id the same way the
+    // 0004 backfill derives it, so re-seeding the same user is idempotent.
+    const now   = Math.floor(Date.now() / 1000);
+    const orgId = `org_${user.userId}`;
+    await env.DB
+      .prepare(
+        `INSERT INTO organisations
+           (org_id, name, stripe_customer_id, plan, sub_status, seats_purchased, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+         ON CONFLICT(org_id) DO UPDATE SET
+           plan       = excluded.plan,
+           sub_status = excluded.sub_status,
+           updated_at = excluded.updated_at`,
+      )
+      .bind(orgId, user.email.toLowerCase(), user.stripeCustomerId || null,
+            plan, user.subStatus || null, now, now)
+      .run();
+
+    await env.DB
+      .prepare(
+        `INSERT INTO memberships (org_id, user_id, role, created_at)
+         VALUES (?, ?, 'owner', ?)
+         ON CONFLICT(org_id, user_id) DO NOTHING`,
+      )
+      .bind(orgId, user.userId, now)
+      .run();
+
+    await env.DB
+      .prepare("UPDATE users SET active_org_id = ? WHERE user_id = ?")
+      .bind(orgId, user.userId)
       .run();
   }
 

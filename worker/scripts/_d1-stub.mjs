@@ -54,6 +54,21 @@ export function makeD1() {
  * (.run() calls). Used by tests that need to simulate a transient D1 blip
  * — the same role the previous USERS.put() throw served for KV.
  */
+/**
+ * An EMPTY D1 binding — no schema at all.
+ *
+ * This is what Miniflare hands the Worker under `wrangler dev`: D1 starts as
+ * an empty SQLite file, and nothing applies migrations/ to it. The e2e seed
+ * endpoint is the only thing that creates tables there, so anything it forgets
+ * is a table that exists in every test using makeD1() and in production, and
+ * is missing in exactly the environment Playwright runs against.
+ */
+export function makeEmptyD1() {
+  const db = new Database(":memory:");
+  db.pragma("foreign_keys = OFF");
+  return wrapAsD1(db);
+}
+
 export function makeFailingD1({ failOn = 1 } = {}) {
   const db = new Database(":memory:");
   db.pragma("foreign_keys = OFF");
