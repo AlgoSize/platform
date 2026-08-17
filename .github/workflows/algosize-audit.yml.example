@@ -1,0 +1,145 @@
+name: Algosize dependency audit
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  schedule:
+    # Weekly, so a dependency that becomes vulnerable between pushes is still
+    # caught. New advisories are published against code that has not changed.
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+  # Required to upload the SARIF report to the Security tab.
+  security-events: write
+  # Required for the sticky PR comment.
+  pull-requests: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Everything below is skipped when the secret is absent, and the job
+      # passes with a notice instead of failing. A workflow that goes red the
+      # moment it is pasted — before the key exists — reads as "this product
+      # is broken", and the first thing anyone does with a red required check
+      # is delete it. The same guard is why this file can live in the Algosize
+      # repo itself before the secret is provisioned.
+      - name: Check for the API key
+        id: key
+        env:
+          ALGOSIZE_API_KEY: ${{ secrets.ALGOSIZE_API_KEY }}
+        run: |
+          if [ -n "$ALGOSIZE_API_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::ALGOSIZE_API_KEY is not set — skipping the dependency audit. Add the secret to enable it."
+          fi
+
+      - name: Collect lockfiles
+        id: collect
+        if: steps.key.outputs.present == 'true'
+        run: |
+          python3 - <<'PY' > payload.json
+          import json, os, subprocess
+          NAMES = {"package-lock.json", "yarn.lock", "requirements.txt", "Gemfile.lock", "go.sum"}
+          files = subprocess.run(["git", "ls-files"], capture_output=True, text=True).stdout.split()
+          out = []
+          for p in files:
+              if os.path.basename(p) not in NAMES:
+                  continue
+              try:
+                  with open(p, encoding="utf-8") as fh:
+                      out.append({"path": p, "content": fh.read()})
+              except (OSError, UnicodeDecodeError):
+                  pass
+          print(json.dumps({
+              "repo": os.environ["GITHUB_REPOSITORY"],
+              "ref": os.environ["GITHUB_REF"],
+              "commit_sha": os.environ["GITHUB_SHA"],
+              "fail_on": "high",
+              "lockfiles": out,
+          }))
+          PY
+          echo "count=$(python3 -c 'import json;print(len(json.load(open("payload.json"))["lockfiles"]))')" >> "$GITHUB_OUTPUT"
+
+      - name: Run the Algosize audit
+        if: steps.key.outputs.present == 'true' && steps.collect.outputs.count != '0'
+        id: audit
+        run: |
+          HTTP=$(curl -sS -o response.json -w '%{http_code}' \
+            -X POST "https://algosize.com/api/ci/runs" \
+            -H "Authorization: Bearer ${{ secrets.ALGOSIZE_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            --data @payload.json)
+          if [ "$HTTP" != "200" ]; then
+            echo "::error::Algosize returned HTTP $HTTP"
+            cat response.json
+            exit 1
+          fi
+          {
+            echo "run_id=$(jq -r '.runId // empty' response.json)"
+            echo "failed=$(jq -r '.failed' response.json)"
+            echo "report_url=$(jq -r '.reportUrl // empty' response.json)"
+          } >> "$GITHUB_OUTPUT"
+          jq -r '"| Severity | Count |\n|---|---|\n| Critical | \(.summary.critical) |\n| High | \(.summary.high) |\n| Medium | \(.summary.medium) |\n| Low | \(.summary.low) |"' response.json > table.md
+
+      - name: Download the SARIF report
+        if: steps.audit.outputs.run_id != ''
+        run: |
+          curl -sS -f -o algosize.sarif \
+            -H "Authorization: Bearer ${{ secrets.ALGOSIZE_API_KEY }}" \
+            "https://algosize.com/api/runs/${{ steps.audit.outputs.run_id }}/report?format=sarif"
+
+      - name: Upload to the Security tab
+        if: steps.audit.outputs.run_id != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: algosize.sarif
+          category: algosize
+
+      - name: Comment on the pull request
+        if: github.event_name == 'pull_request' && steps.audit.outputs.run_id != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const table = fs.readFileSync('table.md', 'utf8');
+            // One sticky comment per PR, updated in place. Appending a new
+            // comment every push buries the conversation and trains people to
+            // collapse the bot.
+            const MARKER = '<!-- algosize-audit -->';
+            const body = [
+              MARKER,
+              '### Algosize dependency audit',
+              '',
+              table,
+              '',
+              '[View the full report](${{ steps.audit.outputs.report_url }})',
+            ].join('\n');
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number, per_page: 100,
+            });
+            const existing = comments.find((c) => c.body && c.body.includes(MARKER));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, body,
+              });
+            }
+
+      - name: Fail the build on new findings
+        if: steps.audit.outputs.failed == 'true'
+        run: |
+          echo "::error::Algosize found advisories at or above the 'high' threshold. See ${{ steps.audit.outputs.report_url }}"
+          exit 1

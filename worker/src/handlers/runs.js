@@ -24,6 +24,9 @@
 // the D1 write. If D1 is unreachable we log and move on; history is a
 // nice-to-have, not part of the analyzer's correctness contract.
 
+import { getActiveOrg } from "./_orgs.js";
+import { toSarif } from "../analyzers/sarif.js";
+
 const json = (body, status = 200) =>
   new Response(JSON.stringify(body), {
     status,
@@ -122,14 +125,20 @@ function safeInput(input) {
  * instead of throwing, so the caller's `ctx.waitUntil` never surfaces an
  * error to the user.
  */
-export async function persistRun(env, { userId, analyzer, input, result, ms }) {
-  if (!env || !env.DB || !userId || !analyzer) return null;
+export async function persistRun(env, { userId, orgId = null, analyzer, input, result, ms, source = null }) {
+  // A run needs an owner of SOME kind. A dashboard run has a user; a CI run
+  // (handlers/ci.js) has only an org, because an API key authenticates as the
+  // organisation and there is no human behind it.
+  if (!env || !env.DB || !analyzer) return null;
+  if (!userId && !orgId) return null;
   const id = newRunId();
   const safe = safeInput(input);
   const safeResult = result ?? null;
   const record = {
     id,
-    userId,
+    userId: userId || null,
+    orgId,
+    source,
     analyzer,
     input: safe,
     result: safeResult,
@@ -141,11 +150,13 @@ export async function persistRun(env, { userId, analyzer, input, result, ms }) {
   try {
     await env.DB.prepare(
       `INSERT INTO runs
-         (id, user_id, analyzer, input_json, result_json, ms, headline, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, user_id, org_id, source, analyzer, input_json, result_json, ms, headline, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(
       id,
-      userId,
+      userId || null,
+      orgId,
+      source,
       analyzer,
       safe === null ? null : JSON.stringify(safe),
       safeResult === null ? null : JSON.stringify(safeResult),
@@ -199,10 +210,20 @@ function decodeCursor(cursor) {
  * Items older than RUN_TTL_SECONDS are filtered out at read time — same
  * user-visible behavior as the old KV TTL, just enforced by a WHERE clause.
  */
-export async function listRuns(env, userId, { limit = 20, cursor = null } = {}) {
-  if (!env || !env.DB || !userId) return { items: [], nextCursor: null };
+export async function listRuns(env, scope, { limit = 20, cursor = null } = {}) {
+  // Back-compat: callers that pass a bare user id keep working.
+  const { userId = null, orgId = null } = typeof scope === "string" ? { userId: scope } : (scope || {});
+  if (!env || !env.DB || (!userId && !orgId)) return { items: [], nextCursor: null };
   const cap = Math.min(MAX_INDEX_ENTRIES, Math.max(1, limit | 0));
   const cutoff = Date.now() - RUN_TTL_SECONDS * 1000;
+
+  // Scope by org when we have one (migrations/0007) — that is what makes a CI
+  // run, which has no user behind it, visible to the team it belongs to. The
+  // user_id arm is kept as an OR rather than replaced so a row the backfill
+  // could not resolve to an org stays visible to the person who created it
+  // instead of silently vanishing from their history.
+  const scopeSql  = orgId && userId ? "(org_id = ? OR user_id = ?)" : orgId ? "org_id = ?" : "user_id = ?";
+  const scopeArgs = orgId && userId ? [orgId, userId] : orgId ? [orgId] : [userId];
 
   // Fetch (cap+1) rows to determine whether there's a next page.
   let result;
@@ -212,23 +233,23 @@ export async function listRuns(env, userId, { limit = 20, cursor = null } = {}) 
     // Strictly-after the cursor in DESC order: row.created_at < c.ts, OR
     // (== c.ts AND id < c.id). The compound index makes this cheap.
     result = await env.DB.prepare(
-      `SELECT id, analyzer, headline, ms, created_at, input_json
+      `SELECT id, analyzer, headline, ms, created_at, input_json, source
          FROM runs
-        WHERE user_id = ?
+        WHERE ${scopeSql}
           AND created_at > ?
           AND (created_at < ? OR (created_at = ? AND id < ?))
         ORDER BY created_at DESC, id DESC
         LIMIT ?`,
-    ).bind(userId, cutoff, c.ts, c.ts, c.id, cap + 1).all();
+    ).bind(...scopeArgs, cutoff, c.ts, c.ts, c.id, cap + 1).all();
   } else {
     result = await env.DB.prepare(
-      `SELECT id, analyzer, headline, ms, created_at, input_json
+      `SELECT id, analyzer, headline, ms, created_at, input_json, source
          FROM runs
-        WHERE user_id = ?
+        WHERE ${scopeSql}
           AND created_at > ?
         ORDER BY created_at DESC, id DESC
         LIMIT ?`,
-    ).bind(userId, cutoff, cap + 1).all();
+    ).bind(...scopeArgs, cutoff, cap + 1).all();
   }
 
   const rows = result.results || [];
@@ -242,6 +263,10 @@ export async function listRuns(env, userId, { limit = 20, cursor = null } = {}) 
       headline:  r.headline || "",
       ms:        r.ms ?? null,
       createdAt: r.created_at,
+      // "ci" for runs submitted by the ingestion endpoint, null for runs
+      // started from the dashboard — so the UI can badge and filter them
+      // (D-3) without inspecting the payload.
+      source:    r.source || null,
       // Re-run depends on the input still being there. Disabled for CUR
       // uploads (input was too big to keep) so the dashboard can grey out
       // the button without having to fetch the full record first.
@@ -255,15 +280,22 @@ export async function listRuns(env, userId, { limit = 20, cursor = null } = {}) 
   return { items, nextCursor };
 }
 
-/** Fetch a full run record by id, scoped to the requesting user. */
-export async function getRun(env, userId, id) {
-  if (!env || !env.DB || !userId || !id) return null;
+/** Fetch a full run record by id, scoped to the requesting org (or user). */
+export async function getRun(env, scope, id) {
+  const { userId = null, orgId = null } = typeof scope === "string" ? { userId: scope } : (scope || {});
+  if (!env || !env.DB || !id || (!userId && !orgId)) return null;
   const cutoff = Date.now() - RUN_TTL_SECONDS * 1000;
+
+  // Same scoping rule as listRuns — see the comment there for why the
+  // user_id arm survives alongside org_id.
+  const scopeSql  = orgId && userId ? "(org_id = ? OR user_id = ?)" : orgId ? "org_id = ?" : "user_id = ?";
+  const scopeArgs = orgId && userId ? [orgId, userId] : orgId ? [orgId] : [userId];
+
   const row = await env.DB.prepare(
-    `SELECT id, user_id, analyzer, input_json, result_json, ms, headline, created_at
+    `SELECT id, user_id, org_id, source, analyzer, input_json, result_json, ms, headline, created_at
        FROM runs
-      WHERE id = ? AND user_id = ? AND created_at > ?`,
-  ).bind(id, userId, cutoff).first();
+      WHERE id = ? AND ${scopeSql} AND created_at > ?`,
+  ).bind(id, ...scopeArgs, cutoff).first();
   if (!row) return null;
   let input = null, result = null;
   try { input  = row.input_json  ? JSON.parse(row.input_json)  : null; } catch {}
@@ -271,6 +303,8 @@ export async function getRun(env, userId, id) {
   return {
     id:        row.id,
     userId:    row.user_id,
+    orgId:     row.org_id || null,
+    source:    row.source || null,
     analyzer:  row.analyzer,
     input,
     result,
@@ -280,30 +314,97 @@ export async function getRun(env, userId, id) {
   };
 }
 
+/**
+ * Resolve the run scope for a request under either credential.
+ *
+ * A cookie session has a user (and, through them, an org); an API key has only
+ * an org. Both read the same history, which is the whole point of CI runs
+ * landing in the dashboard.
+ */
+export async function runScopeFor(request, env) {
+  if (request.org && request.org.orgId) return { orgId: request.org.orgId, userId: null };
+  const userId = request.user && request.user.userId;
+  if (!userId) return null;
+  const active = await getActiveOrg(env, userId);
+  return { userId, orgId: active ? active.org.orgId : null };
+}
+
 // ---------------------------------------------------------------------------
 // HTTP handlers — gated by requireAuth in the router
 // ---------------------------------------------------------------------------
 
 export async function listRunsHandler(request, env) {
-  const userId = request.user && request.user.userId;
-  if (!userId) return json({ error: "unauthorized" }, 401);
+  const scope = await runScopeFor(request, env);
+  if (!scope) return json({ error: "unauthorized" }, 401);
 
   const url = new URL(request.url);
   const rawLimit = parseInt(url.searchParams.get("limit") || "20", 10);
   const limit = Number.isFinite(rawLimit) ? Math.min(50, Math.max(1, rawLimit)) : 20;
   const cursor = url.searchParams.get("cursor") || null;
 
-  const result = await listRuns(env, userId, { limit, cursor });
+  const result = await listRuns(env, scope, { limit, cursor });
   return json(result, 200);
 }
 
 export async function getRunHandler(request, env) {
-  const userId = request.user && request.user.userId;
-  if (!userId) return json({ error: "unauthorized" }, 401);
+  const scope = await runScopeFor(request, env);
+  if (!scope) return json({ error: "unauthorized" }, 401);
   // itty-router 5 puts route params on request.params.
   const id = request.params && request.params.id;
   if (!id) return json({ error: "missing_id", message: "run id required" }, 400);
-  const run = await getRun(env, userId, id);
+  const run = await getRun(env, scope, id);
   if (!run) return json({ error: "not_found", message: "no such run" }, 404);
   return json(run, 200);
+}
+
+/**
+ * GET /api/runs/:id/report?format=sarif|json
+ *
+ * SARIF 2.1.0 so findings land in the repo's GitHub Security tab — the
+ * workflow in .github/workflows/algosize-audit.yml.example downloads this and
+ * hands it to github/codeql-action/upload-sarif.
+ *
+ * Rendered ON DEMAND from the stored result rather than served from R2. P-6
+ * is what introduces the R2 bucket and the HTML/PDF artefacts; adding an R2
+ * binding here would mean a resource that has to be provisioned before the
+ * next deploy succeeds, for no benefit yet — the run row already holds
+ * everything SARIF needs. When P-6 lands it can cache into R2 behind this
+ * same URL without changing a single caller.
+ */
+export async function getRunReportHandler(request, env) {
+  const scope = await runScopeFor(request, env);
+  if (!scope) return json({ error: "unauthorized" }, 401);
+
+  const id = request.params && request.params.id;
+  if (!id) return json({ error: "missing_id", message: "run id required" }, 400);
+
+  const run = await getRun(env, scope, id);
+  if (!run) return json({ error: "not_found", message: "no such run" }, 404);
+
+  const url = new URL(request.url);
+  const format = (url.searchParams.get("format") || "json").toLowerCase();
+
+  if (format === "json") return json(run.result ?? {}, 200);
+
+  if (format === "sarif") {
+    if (run.analyzer !== "vuln") {
+      return json({
+        error: "unsupported_format",
+        message: `SARIF is only produced for dependency audits; this run is a "${run.analyzer}" run.`,
+      }, 400);
+    }
+    const sarif = toSarif(run.result, { runId: run.id, siteOrigin: env.SITE_ORIGIN || "" });
+    return new Response(JSON.stringify(sarif, null, 2), {
+      status: 200,
+      headers: {
+        "content-type": "application/sarif+json",
+        "content-disposition": `attachment; filename="algosize-${run.id}.sarif"`,
+      },
+    });
+  }
+
+  return json({
+    error: "unsupported_format",
+    message: 'Supported formats: "sarif", "json". HTML and CycloneDX arrive with the report work (P-6).',
+  }, 400);
 }

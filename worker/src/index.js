@@ -41,7 +41,8 @@ import {
 import { sweepDueMonitors, handleMonitorQueue } from "./monitors/run.js";
 import { logoutHandler } from "./handlers/logout.js";
 import { meHandler } from "./handlers/me.js";
-import { listRunsHandler, getRunHandler } from "./handlers/runs.js";
+import { listRunsHandler, getRunHandler, getRunReportHandler } from "./handlers/runs.js";
+import { ciRunHandler, ciSnippetHandler } from "./handlers/ci.js";
 import { billingPortalHandler } from "./handlers/billing.js";
 import { requestMagicLinkHandler, verifyMagicLinkHandler } from "./handlers/auth_magic.js";
 import { googleStartHandler, googleCallbackHandler } from "./handlers/auth_google.js";
@@ -136,8 +137,22 @@ router.post("/api/logout",          requireAuth, logoutHandler);
 router.get( "/api/me",              requireAuth, meHandler);
 
 // ---- Run history (Task #17) — list + read past analyzer runs --------------
+// Scoped to the ORG since migrations/0007, so a CI run — which has no user
+// behind it — is visible to the team it belongs to. The report route is
+// registered before /:id purely for readability; the paths don't overlap.
 router.get( "/api/runs",            requireAuth, listRunsHandler);
+router.get( "/api/runs/:id/report", requireAuth, getRunReportHandler);
 router.get( "/api/runs/:id",        requireAuth, getRunHandler);
+
+// ---- CI ingestion (Task #P-9) — a build pipeline posting an audit --------
+// /runs is API-key only (enforced inside the handler, not here — requireAuth
+// deliberately accepts both credentials and the handler is where the stricter
+// rule belongs). Quota-wrapped like every other analyzer: a CI run is a run,
+// and leaving it unmetered would make the free tier unlimited for anyone
+// willing to call it from a build.
+router.post("/api/ci/runs",    analyzeRateLimit, requireAuth, apiKeyAnalyzeRateLimit, enforceQuota(ciRunHandler));
+// The setup snippet is dashboard-facing, so either credential may read it.
+router.get( "/api/ci/snippet", requireAuth, ciSnippetHandler);
 
 // ---- Stripe Customer Portal (Task #18) — manage card / cancel / invoices --
 router.post("/api/billing/portal",  requireAuth, billingPortalHandler);

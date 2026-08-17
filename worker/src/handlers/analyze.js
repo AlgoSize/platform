@@ -411,6 +411,32 @@ export async function runLockfileAudit(body, env, request, ctx) {
     }, 404);
   }
 
+  // The parse → OSV → summarise core is shared with the CI ingestion endpoint
+  // (handlers/ci.js), which submits lockfile CONTENT instead of a repo URL.
+  // Same computation either way: CI supplies inputs and the Worker computes
+  // the report, so a CI verdict and a dashboard verdict on the same lockfile
+  // can never disagree.
+  const audit = await auditManifests(manifests, fetchImpl, { env, ctx, request, userId });
+  if (!audit.ok) return json(audit.body, audit.status);
+
+  return json({
+    repoUrl: `https://github.com/${repo.owner}/${repo.repo}`,
+    ...audit.result,
+  }, 200);
+}
+
+/**
+ * Parse manifests, query OSV, and build the audit verdict.
+ *
+ * Returns `{ ok: true, result }` or `{ ok: false, status, body }` rather than a
+ * Response, because two callers need different envelopes around the same
+ * answer: the HTTP analyzer wraps it with the repo URL it fetched from, and the
+ * CI endpoint wraps it with the commit it was computed for.
+ *
+ * `manifests` are `{ filename, content }` pairs — already fetched or already
+ * submitted; this function performs no IO of its own beyond the OSV lookup.
+ */
+export async function auditManifests(manifests, fetchImpl, { env, ctx, request, userId } = {}) {
   // Parse each manifest. A single bad lockfile fails the whole audit — same
   // posture as the CUR analyzer (we want the user to fix obvious garbage
   // rather than getting a half-correct CVE list).
@@ -425,11 +451,11 @@ export async function runLockfileAudit(body, env, request, ctx) {
     try { parsed = parseLockfile(m.filename, m.content); }
     catch (err) {
       if (err && err.lockfileError) {
-        return json({
+        return { ok: false, status: 400, body: {
           error: "invalid_lockfile",
           message: `${m.filename}: ${err.message}`,
           helpUrl: VULN_HELP_URL,
-        }, 400);
+        } };
       }
       throw err;
     }
@@ -471,17 +497,16 @@ export async function runLockfileAudit(body, env, request, ctx) {
           tags: { source: "analyzer", analyzer: "analyze/vuln", subpath: "osv", upstream: "osv.dev" },
         });
       } catch { /* never let observability errors mask the real one */ }
-      return json({
+      return { ok: false, status: 502, body: {
         error: "osv_unavailable",
         message: "Couldn't reach OSV.dev to look up advisories. Try again in a moment.",
         helpUrl: VULN_HELP_URL,
-      }, 502);
+      } };
     }
   }
 
   const fixCommand = pickFixCommand(summary);
-  return json({
-    repoUrl: `https://github.com/${repo.owner}/${repo.repo}`,
+  return { ok: true, result: {
     scanned: {
       manifests: summary,
       totalPackages: allPackages.length,
@@ -494,7 +519,7 @@ export async function runLockfileAudit(body, env, request, ctx) {
     topAdvisories: advisories.slice(0, 10),
     fixCommand,
     summary: buildAuditSummary({ advisories, fixCommand, partial }),
-  }, 200);
+  } };
 }
 
 // ---------------------------------------------------------------------------

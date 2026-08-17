@@ -142,11 +142,15 @@ console.log("\nlistRuns() — pagination + filters expired\n");
   // Default page size is 20.
   const page1 = await listRuns(env, userId, { limit: 20 });
   expect(page1.items.length === 20, "first page returns 20 items");
-  // List view strips heavy fields — `result` and `input` should NOT be in the
-  // per-item shape (only id, analyzer, headline, ms, createdAt, hasInput).
+  // List view strips heavy fields — `result` and `input` must NOT be in the
+  // per-item shape. That is the invariant; the exact key list below is how it
+  // is enforced, and it also catches a new heavy field being added by accident.
+  // `source` joined the shape with migrations/0007 (CI vs dashboard runs).
   const sampleKeys = Object.keys(page1.items[0]).sort().join(",");
-  expect(sampleKeys === "analyzer,createdAt,hasInput,headline,id,ms",
-         `list-item shape is the 6-field summary (got: ${sampleKeys})`);
+  expect(!("result" in page1.items[0]) && !("input" in page1.items[0]),
+         "list items carry no heavy fields");
+  expect(sampleKeys === "analyzer,createdAt,hasInput,headline,id,ms,source",
+         `list-item shape is the summary set (got: ${sampleKeys})`);
   expect(page1.nextCursor && typeof page1.nextCursor === "string", "first page returns nextCursor");
 
   const page2 = await listRuns(env, userId, { limit: 20, cursor: page1.nextCursor });
