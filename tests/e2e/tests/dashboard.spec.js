@@ -74,7 +74,7 @@ test.describe("dashboard happy path", () => {
     expect(meBody.email).toBe(E2E_EMAIL);
     expect(meBody.subStatus).toBe("active");
 
-    await expect(page.locator("h1")).toHaveText(/Three analyzers, one workspace\./);
+    await expect(page.locator("h1")).toHaveText(/Audit, monitor, hand over the report\./);
     await expect(page.locator("#panel-cost")).toBeVisible();
     await expect(page.locator("#panel-vuln")).toBeVisible();
     await expect(page.locator("#panel-algo")).toBeVisible();

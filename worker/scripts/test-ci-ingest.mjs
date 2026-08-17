@@ -503,9 +503,46 @@ console.log("\nexisting history behaviour is preserved\n");
   const seen = await listRuns(env, { userId: "usr_legacy", orgId: "org_usr_legacy" }, { limit: 10 });
   expect(seen.items.length === 1, "a run with no org_id is still visible to the user who created it");
   expect(seen.items[0].source === null, "and is not badged as CI");
+  expect(seen.items[0].repo === null && seen.items[0].commitSha === null,
+    "and carries no CI provenance fields");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\nfeed provenance and the ?source= filter (D-3)\n");
+// ---------------------------------------------------------------------------
+
+{
+  const env = makeEnv({ FETCH: makeOsvFetch([]) });
+  const orgId = await seedOrg(env, { userId: "usr_feed", email: "feed@example.com" });
+  const key = await keyFor(env, orgId);
+
+  // One CI run with provenance, one dashboard run without.
+  const req = ciRequest(payload(), { key });
+  const worker = (await import("../src/index.js")).default;
+  const res = await worker.fetch(req, env, { waitUntil() {} });
+  expect(res.status === 200, `CI run ingested for the feed test (got ${res.status})`);
+  await persistRun(env, {
+    userId: "usr_feed", orgId, analyzer: "vuln",
+    input: { repoUrl: "https://github.com/acme/x" }, result: { counts: {}, advisories: [] },
+  });
+
+  const scope = { userId: "usr_feed", orgId };
+  const all = await listRuns(env, scope, { limit: 10 });
+  expect(all.items.length === 2, "unfiltered feed lists both runs");
+
+  const ciOnly = await listRuns(env, scope, { limit: 10, source: "ci" });
+  expect(ciOnly.items.length === 1 && ciOnly.items[0].source === "ci",
+    "source:'ci' filters to CI runs server-side");
+  expect(ciOnly.items[0].repo === "acme/widgets" && ciOnly.items[0].commitSha === "abc123def456",
+    `CI list items carry repo + commitSha from the stored input (got ${ciOnly.items[0].repo} @ ${ciOnly.items[0].commitSha})`);
+
+  const manualOnly = await listRuns(env, scope, { limit: 10, source: "manual" });
+  expect(manualOnly.items.length === 1 && manualOnly.items[0].source === null,
+    "source:'manual' filters to dashboard runs (NULL source)");
 
   // Bare-string scope still works, so nothing that called listRuns(env, userId) broke.
-  const byString = await listRuns(env, "usr_legacy", { limit: 10 });
+  // Scoped by user alone it sees only the dashboard run — the CI run has no user.
+  const byString = await listRuns(env, "usr_feed", { limit: 10 });
   expect(byString.items.length === 1, "listRuns(env, userId) still works for existing callers");
 }
 

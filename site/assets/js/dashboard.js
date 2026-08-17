@@ -629,39 +629,79 @@
     return new Date(ts).toISOString().slice(0, 10);
   }
 
+  // Current feed filter (D-3): "all" | "ci" | "manual". Filtering is
+  // server-side (?source=) so a busy pipeline can't push every manual run
+  // off the twenty-item first page.
+  var runsFilter = "all";
+
   function renderRunsList(items) {
     var listEl = $("#runs-list");
     if (!listEl) return;
     while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
 
     if (!items || items.length === 0) {
-      listEl.appendChild(emptyState("No runs yet — pick an analyzer below to get started."));
+      listEl.appendChild(emptyState(
+        runsFilter === "ci"
+          ? "No CI runs yet — wire the workflow from the Monitors & CI tab and the first build will land here."
+          : "No runs yet — pick an analyzer below to get started."));
       return;
     }
 
     var ul = el("ul", { class: "runs-items" });
     items.forEach(function (it) {
+      var isCi = it.source === "ci";
       var li = el("li", { class: "run-item run-item-" + it.analyzer });
 
       var meta = el("div", { class: "run-item-meta" });
       meta.appendChild(el("span", { class: "tag run-tag-" + it.analyzer }, it.analyzer));
+      // Provenance badge (D-3): CI runs say so, and name the commit that
+      // produced them. Dashboard entries keep exactly the shape they had.
+      if (isCi) {
+        meta.appendChild(el("span", { class: "tag tag-ci" }, "CI"));
+      }
       meta.appendChild(el("span", { class: "run-item-headline" }, it.headline || "—"));
+      var origin = isCi
+        ? (it.repo || "pipeline") + (it.commitSha ? " · " + String(it.commitSha).slice(0, 7) : "")
+        : null;
+      if (origin) meta.appendChild(el("span", { class: "run-item-origin mono" }, origin));
       meta.appendChild(el("span", { class: "run-item-time mono" }, formatRelativeTime(it.createdAt)));
       li.appendChild(meta);
 
       var actions = el("div", { class: "run-item-actions" });
-      var rerun = el("button", {
-        type: "button",
-        class: "btn btn-ghost btn-sm",
-        "data-run-action": "rerun",
-        "data-run-id": it.id,
-        "data-run-analyzer": it.analyzer,
-      }, "Re-run");
-      if (!it.hasInput) {
-        rerun.disabled = true;
-        rerun.title = "Re-run not available — input was too large to keep (e.g. CUR upload).";
+
+      // Dependency audits open as the client-ready report (D-4);
+      // architecture runs re-open as the explorer (D-5).
+      if (it.analyzer === "vuln") {
+        actions.appendChild(el("a", {
+          class: "btn btn-ghost btn-sm",
+          href: "#/report/" + encodeURIComponent(it.id),
+        }, "View report"));
       }
-      actions.appendChild(rerun);
+      if (it.analyzer === "arch") {
+        actions.appendChild(el("button", {
+          type: "button",
+          class: "btn btn-ghost btn-sm",
+          "data-run-action": "viewmap",
+          "data-run-id": it.id,
+        }, "View map"));
+      }
+
+      // A CI run's stored input is lockfile PATHS, not content — there is
+      // nothing to re-run against, so the button isn't rendered at all.
+      if (!isCi) {
+        var rerun = el("button", {
+          type: "button",
+          class: "btn btn-ghost btn-sm",
+          "data-run-action": "rerun",
+          "data-run-id": it.id,
+          "data-run-analyzer": it.analyzer,
+        }, "Re-run");
+        if (!it.hasInput) {
+          rerun.disabled = true;
+          rerun.title = "Re-run not available — input was too large to keep (e.g. CUR upload).";
+        }
+        actions.appendChild(rerun);
+      }
 
       var csv = el("button", {
         type: "button",
@@ -681,12 +721,24 @@
   function loadRuns() {
     var listEl = $("#runs-list");
     if (!listEl) return Promise.resolve();
-    return callApi("/api/runs?limit=20", null, "GET").then(function (page) {
+    var qs = "/api/runs?limit=20" + (runsFilter === "all" ? "" : "&source=" + runsFilter);
+    return callApi(qs, null, "GET").then(function (page) {
       renderRunsList((page && page.items) || []);
     }).catch(function (e) {
       while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
       listEl.appendChild(errorState(e.message || "Could not load run history"));
     });
+  }
+
+  function setRunsFilter(next) {
+    runsFilter = next;
+    var group = $("#runs-filter");
+    if (group) {
+      group.querySelectorAll("[data-runs-filter]").forEach(function (b) {
+        b.setAttribute("aria-pressed", b.dataset.runsFilter === next ? "true" : "false");
+      });
+    }
+    loadRuns();
   }
 
   // CSV builders — tabular when the result is naturally tabular, key/value
@@ -782,6 +834,148 @@
   // Header hydration — GET /api/me on load to show real email + sub status
   // -----------------------------------------------------------------------
 
+  // Billing states (D-1). One renderer, keyed off the ENTITLEMENT_REASON the
+  // resolver actually took — /api/me returns `reason`, `active` and
+  // `currentPeriodEnd` precisely so the UI never re-derives state from
+  // plan + subStatus and drifts from the analyzer gate.
+
+  function longDate(unixSec) {
+    if (typeof unixSec !== "number") return "";
+    return new Date(unixSec * 1000).toLocaleDateString("en-US", {
+      month: "long", day: "numeric", year: "numeric", timeZone: "UTC",
+    });
+  }
+  function shortDate(unixSec) {
+    if (typeof unixSec !== "number") return "";
+    return new Date(unixSec * 1000).toLocaleDateString("en-US", {
+      month: "short", day: "numeric", timeZone: "UTC",
+    });
+  }
+  function daysUntil(unixSec) {
+    if (typeof unixSec !== "number") return 0;
+    return Math.max(0, Math.ceil((unixSec * 1000 - Date.now()) / 86400000));
+  }
+
+  // Pill definitions per state. Every state is distinguishable without
+  // colour: the glyph and the words carry it; the class only tints.
+  function pillFor(me) {
+    var reason = me.reason || "";
+    var end = me.currentPeriodEnd;
+    if (reason === "active_subscription") {
+      return { cls: "dash-status--pro", glyph: "●", text: "Pro · subscription active" };
+    }
+    if (reason === "trialing") {
+      var d = daysUntil(end);
+      return { cls: "dash-status--trial", glyph: "◌",
+               text: "Pro trial · " + d + (d === 1 ? " day left" : " days left") };
+    }
+    if (reason === "grace_period") {
+      if (me.subStatus === "past_due") {
+        return { cls: "dash-status--pastdue", glyph: "▲", text: "Past due · Pro until " + shortDate(end) };
+      }
+      return { cls: "dash-status--grace", glyph: "◦", text: "Ending · Pro until " + shortDate(end) };
+    }
+    if (reason === "period_expired") {
+      return { cls: "dash-status--inactive", glyph: "○", text: "Pro ended " + shortDate(end) };
+    }
+    if (reason === "missing_period_end") {
+      return { cls: "dash-status--pastdue", glyph: "▲", text: "Unconfirmed — contact support" };
+    }
+    if (reason === "not_entitling_status") {
+      return { cls: "dash-status--inactive", glyph: "○", text: "Not active — payment incomplete" };
+    }
+    return null;   // free_plan → no status pill, the meter is the signal
+  }
+
+  // Build the one billing banner the current state calls for, or null. The
+  // copy mirrors the transactional emails word for word (templates.js), so
+  // the inbox and the dashboard can never disagree about a date.
+  function bannerFor(me) {
+    var reason = me.reason || "";
+    var until = longDate(me.currentPeriodEnd);
+
+    function banner(kind, role, title, body, actionLabel, actionFn) {
+      var box = el("div", { class: "banner banner-" + kind, role: role });
+      var textWrap = el("div", { class: "banner-text" });
+      var strong = el("strong", null);
+      strong.appendChild(el("span", { class: "banner-glyph", "aria-hidden": "true" },
+        kind === "amber" ? "▲" : kind === "teal" ? "✓" : "◦"));
+      strong.appendChild(document.createTextNode(title));
+      textWrap.appendChild(strong);
+      textWrap.appendChild(el("p", null, body));
+      box.appendChild(textWrap);
+      if (actionLabel) {
+        var btn = el("button", { type: "button", class: "btn btn-sm " + (kind === "amber" ? "btn-amber" : "btn-primary") }, actionLabel);
+        btn.addEventListener("click", function () { actionFn(btn); });
+        box.appendChild(btn);
+      }
+      return box;
+    }
+
+    if (reason === "grace_period" && me.subStatus === "past_due") {
+      // Not dismissable while the status persists — there is a task here.
+      return banner("amber", "alert",
+        "Your payment didn't go through — Pro until " + until,
+        "The usual cause is an expired or replaced card — nothing is wrong with your account. " +
+        "Your Pro access stays on until " + until + ". After that the account drops to the free tier " +
+        "(5 analyses per month) until a payment succeeds.",
+        "Update payment method →", openBillingPortal);
+    }
+    if (reason === "grace_period") {
+      return banner("grey", "status",
+        "Subscription cancelled — Pro until " + until,
+        "Pro access stays on until " + until + ". After that the account drops to the free tier " +
+        "(5 analyses per month).",
+        "Resubscribe", openBillingPortal);
+    }
+    if (reason === "period_expired") {
+      return banner("grey", "status",
+        "Your Pro access ended on " + until,
+        "The account is back on the free tier — 5 analyses per month. Resubscribing restores " +
+        "unlimited runs immediately.",
+        "Resubscribe →", startUpgradeCheckout);
+    }
+    if (reason === "missing_period_end") {
+      return banner("amber", "alert",
+        "We can't confirm your billing period",
+        "Your subscription is paid but carries no period end for us to measure against, so paid " +
+        "features are paused rather than guessed at. Email hello@algosize.com and we'll fix the " +
+        "record — or open the billing portal to check the subscription.",
+        "Open billing portal", openBillingPortal);
+    }
+    if (reason === "not_entitling_status") {
+      return banner("amber", "alert",
+        "Your subscription isn't active yet",
+        "The first payment never completed, so the subscription exists but doesn't grant access. " +
+        "Finish the payment to activate it.",
+        "Complete payment →", openBillingPortal);
+    }
+    if (reason === "trialing") {
+      var d = daysUntil(me.currentPeriodEnd);
+      return banner("teal", "status",
+        "Your Algosize Pro trial ends in " + d + (d === 1 ? " day" : " days") + ", on " + until,
+        "Nothing to do if you want to keep going — your subscription continues automatically. " +
+        "If Pro isn't for you, cancel any time before then in the billing portal and you won't be charged.",
+        "Manage subscription", openBillingPortal);
+    }
+    return null;
+  }
+
+  function renderQuotaMeter(meterEl, used, limit) {
+    if (!meterEl) return;
+    while (meterEl.firstChild) meterEl.removeChild(meterEl.firstChild);
+    var depleted = used >= limit;
+    for (var i = 0; i < limit; i++) {
+      meterEl.appendChild(el("span", {
+        class: "dash-quota-seg" + (i < used ? (depleted ? " seg-on seg-out" : " seg-on") : ""),
+      }));
+    }
+  }
+
+  // Kept so other modules (report white-label note, team screen) can read the
+  // most recent /api/me answer without a second request.
+  var lastMe = null;
+
   function hydrateHeader() {
     var emailEl   = document.getElementById("dash-user-email");
     var statusEl  = document.getElementById("dash-status");
@@ -789,63 +983,79 @@
     var billingEl = document.getElementById("billing-portal-btn");
     var quotaEl   = document.getElementById("dash-quota");
     var quotaVal  = document.getElementById("dash-quota-value");
-    if (!emailEl || !statusEl || !textEl) return;
+    var quotaMeter = document.getElementById("dash-quota-meter");
+    var bannerSlot = document.getElementById("billing-banner");
+    if (!emailEl || !statusEl || !textEl) return Promise.resolve();
 
-    callApi("/api/me", null, "GET").then(function (me) {
+    return callApi("/api/me", null, "GET").then(function (me) {
+      lastMe = me;
       // callApi already redirects to "/" on 401, so we only get here for 2xx.
       if (me && me.email) {
         emailEl.textContent = me.email;
         emailEl.hidden = false;
       }
 
-      // Task #19: render the quota pill BEFORE the subscription status
-      // pill so free users see "X / 5" prominently and paid users see
-      // "Unlimited". Falls back to hidden if the server didn't return
-      // a `plan` field (e.g. an older Worker is deployed).
-      if (quotaEl && quotaVal && me && me.plan) {
-        if (me.plan === "free") {
-          var used  = typeof me.monthlyRunsUsed  === "number" ? me.monthlyRunsUsed  : 0;
+      // Quota pill + segment meter: shown whenever entitlement is NOT
+      // active. Never keyed off plan — plan stays "paid" through
+      // period_expired and missing_period_end, and those accounts are
+      // metered like anyone else's.
+      var active = me && (me.active === true || (me.active === undefined && me.plan === "paid"));
+      if (quotaEl && quotaVal) {
+        if (!active && typeof me.monthlyRunsUsed === "number") {
+          var used  = me.monthlyRunsUsed;
           var limit = typeof me.monthlyRunsLimit === "number" ? me.monthlyRunsLimit : 5;
-          quotaVal.textContent = used + " / " + limit;
-          quotaEl.classList.toggle("dash-quota--depleted", used >= limit);
+          var depleted = used >= limit;
+          quotaVal.textContent = depleted ? used + " / " + limit + " · none left" : used + " / " + limit;
+          quotaEl.classList.toggle("dash-quota--depleted", depleted);
+          renderQuotaMeter(quotaMeter, used, limit);
           quotaEl.hidden = false;
-          // If the user is already over quota when the page loads, show
-          // the upgrade banner pre-emptively so they know why their next
-          // run will fail.
-          if (used >= limit) {
-            showQuotaBanner({
-              monthlyRunsUsed:  used,
-              monthlyRunsLimit: limit,
-            });
+          if (depleted) {
+            showQuotaBanner({ monthlyRunsUsed: used, monthlyRunsLimit: limit }, { modal: false });
           }
-        } else if (me.plan === "paid") {
+        } else if (active) {
           quotaVal.textContent = "Unlimited";
           quotaEl.classList.add("dash-quota--unlimited");
+          if (quotaMeter) quotaMeter.hidden = true;
           quotaEl.hidden = false;
         }
       }
 
-      // Subscription status pill — only meaningful for paid users (free
-      // users have subStatus === null). For free users, hide the pill so
-      // the header doesn't read "Subscription cancelled" — they never had
-      // one to cancel.
-      if (me && me.subStatus) {
-        var active = me.subStatus === "active";
-        textEl.textContent = active ? "Subscription active" : "Subscription cancelled";
-        statusEl.classList.toggle("dash-status--inactive", !active);
+      // Plan pill, one state at a time. The e2e suite and any muscle memory
+      // keyed on "Subscription active" keep working — the pro state includes
+      // the phrase.
+      var pill = me ? pillFor(me) : null;
+      statusEl.className = "dash-status" + (pill && pill.cls ? " " + pill.cls : "");
+      if (pill) {
+        textEl.textContent = pill.text;
+        var dot = statusEl.querySelector(".dash-status-dot");
+        if (dot) dot.textContent = pill.glyph;
+        statusEl.hidden = false;
+      } else if (me && me.subStatus) {
+        // Fallback for an older Worker without `reason`.
+        var isActive = me.subStatus === "active";
+        textEl.textContent = isActive ? "Subscription active" : "Subscription cancelled";
+        statusEl.classList.toggle("dash-status--inactive", !isActive);
         statusEl.hidden = false;
       }
 
-      // Show "Manage billing" only for users that ever made it through
-      // checkout (any non-null subStatus implies a Stripe customer record).
-      // Free users hide it because they have no Stripe customer to manage.
+      // The one billing banner this state calls for.
+      if (bannerSlot) {
+        while (bannerSlot.firstChild) bannerSlot.removeChild(bannerSlot.firstChild);
+        var b = me ? bannerFor(me) : null;
+        if (b) { bannerSlot.appendChild(b); bannerSlot.hidden = false; }
+        else bannerSlot.hidden = true;
+      }
+
+      // "Manage billing" for anyone with a Stripe subscription record.
       if (billingEl && me && me.subStatus) {
         billingEl.hidden = false;
       }
+      return me;
     }).catch(function () {
       // Network error or non-401 failure: leave header empty rather than show
       // misleading "active" text. The user can still use the analyzers; if
       // their session is truly dead the next analyzer call will 401 → "/".
+      return null;
     });
   }
 
@@ -855,25 +1065,82 @@
   // the existing /api/checkout flow (Task #4), same as the marketing site.
   // -----------------------------------------------------------------------
 
-  function showQuotaBanner(detail) {
+  // Date the free counter resets: first of next month, UTC — matches how
+  // quota.js buckets the KV counter by YYYY-MM.
+  function quotaResetDate() {
+    var d = new Date();
+    var next = new Date(Date.UTC(
+      d.getUTCMonth() === 11 ? d.getUTCFullYear() + 1 : d.getUTCFullYear(),
+      (d.getUTCMonth() + 1) % 12, 1));
+    return next.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" });
+  }
+
+  function showQuotaBanner(detail, opts) {
+    opts = opts || {};
     var banner = document.getElementById("quota-upgrade-banner");
     var title  = document.getElementById("quota-banner-title");
     var msg    = document.getElementById("quota-banner-msg");
-    if (!banner) return;
-    if (title && detail && typeof detail.monthlyRunsLimit === "number") {
-      title.textContent = "You've used all " + detail.monthlyRunsLimit +
-        " free analyses this month.";
+    if (banner) {
+      if (title && detail && typeof detail.monthlyRunsLimit === "number") {
+        title.textContent = "You've used all " + detail.monthlyRunsLimit +
+          " free analyses this month.";
+      }
+      if (msg) {
+        msg.textContent = "Upgrade to Pro for unlimited cost, vulnerability, " +
+          "and algorithm runs. The free counter resets on " + quotaResetDate() + ".";
+      }
+      banner.hidden = false;
     }
-    if (msg) {
-      msg.textContent = "Upgrade to Pro for unlimited cost, vulnerability, " +
-        "and algorithm runs. The free counter resets on the 1st of next month.";
-    }
-    banner.hidden = false;
-    // Scroll the banner into view so the user notices the state change
-    // without having to scroll up from the analyzer panel they were using.
-    if (typeof banner.scrollIntoView === "function") {
+
+    // The 402 modal (D-1): raised on the run attempt, not on load. Renders
+    // the API's own message verbatim — paraphrasing the refusal is how the
+    // banner and the response drift apart.
+    if (opts.modal !== false) {
+      var modalMsg   = document.getElementById("modal-quota-msg");
+      var modalReset = document.getElementById("modal-quota-reset");
+      if (modalMsg) {
+        modalMsg.textContent = (detail && detail.message) ||
+          ("You've used all " + ((detail && detail.monthlyRunsLimit) || 5) +
+           " free analyses this month. Upgrade to Pro for unlimited runs.");
+      }
+      if (modalReset) {
+        var used  = detail && typeof detail.monthlyRunsUsed  === "number" ? detail.monthlyRunsUsed  : null;
+        var limit = detail && typeof detail.monthlyRunsLimit === "number" ? detail.monthlyRunsLimit : null;
+        modalReset.textContent =
+          (used !== null && limit !== null ? used + " of " + limit + " used · " : "") +
+          "counter resets on " + quotaResetDate();
+      }
+      openModal("modal-quota");
+    } else if (banner && typeof banner.scrollIntoView === "function") {
       banner.scrollIntoView({ behavior: "smooth", block: "center" });
     }
+  }
+
+  // -----------------------------------------------------------------------
+  // Modal plumbing — shared by every dialog on the page. One scrim pattern:
+  // open sets [hidden]=false and focuses the first control; Esc and scrim
+  // clicks close, EXCEPT dialogs marked data-modal-sticky (the key-reveal —
+  // dismissing that by accident loses the secret).
+  // -----------------------------------------------------------------------
+
+  var openModalId = null;
+
+  function openModal(id) {
+    var scrim = document.getElementById(id);
+    if (!scrim) return;
+    if (openModalId && openModalId !== id) closeModal(openModalId);
+    scrim.hidden = false;
+    openModalId = id;
+    var first = scrim.querySelector("input:not([readonly]), button:not([data-modal-close]):not(.modal-x), a[href]");
+    if (!first) first = scrim.querySelector("button");
+    if (first && typeof first.focus === "function") first.focus();
+  }
+
+  function closeModal(id) {
+    var scrim = document.getElementById(id || openModalId);
+    if (!scrim) return;
+    scrim.hidden = true;
+    if (openModalId === (id || openModalId)) openModalId = null;
   }
 
   function startUpgradeCheckout(button) {
@@ -1047,10 +1314,67 @@
     if (upgradeBtn) {
       upgradeBtn.addEventListener("click", function () { startUpgradeCheckout(upgradeBtn); });
     }
+    var modalUpgradeBtn = $("#modal-quota-upgrade");
+    if (modalUpgradeBtn) {
+      modalUpgradeBtn.addEventListener("click", function () { startUpgradeCheckout(modalUpgradeBtn); });
+    }
+
+    // Modal close plumbing: any [data-modal-close], a click on the scrim
+    // itself, or Escape — except dialogs marked data-modal-sticky.
+    document.addEventListener("click", function (event) {
+      var closer = event.target.closest && event.target.closest("[data-modal-close]");
+      if (closer) {
+        var scrim = closer.closest(".modal-scrim");
+        if (scrim) closeModal(scrim.id);
+        return;
+      }
+      if (event.target.classList && event.target.classList.contains("modal-scrim") &&
+          !event.target.hasAttribute("data-modal-sticky")) {
+        closeModal(event.target.id);
+      }
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key !== "Escape" || !openModalId) return;
+      var scrim = document.getElementById(openModalId);
+      if (scrim && !scrim.hasAttribute("data-modal-sticky")) closeModal(openModalId);
+    });
+
+    // Runs feed filter (D-3).
+    var filterGroup = $("#runs-filter");
+    if (filterGroup) {
+      filterGroup.addEventListener("click", function (event) {
+        var b = event.target.closest && event.target.closest("[data-runs-filter]");
+        if (b) setRunsFilter(b.dataset.runsFilter);
+      });
+    }
 
     hydrateHeader();
     loadRuns();
   }
+
+  // -----------------------------------------------------------------------
+  // Shared core for the other dashboard modules (dash-team.js,
+  // dash-monitors.js, dash-report.js, dash-arch.js, dash-router.js). Script
+  // order in dashboard.html guarantees this exists before they run.
+  // -----------------------------------------------------------------------
+
+  window.DashCore = {
+    apiUrl: apiUrl,
+    callApi: callApi,
+    el: el,
+    setBusy: setBusy,
+    emptyState: emptyState,
+    errorState: errorState,
+    formatRelativeTime: formatRelativeTime,
+    openModal: openModal,
+    closeModal: closeModal,
+    openBillingPortal: openBillingPortal,
+    startUpgradeCheckout: startUpgradeCheckout,
+    showQuotaBanner: showQuotaBanner,
+    loadRuns: loadRuns,
+    me: function () { return lastMe; },
+    refreshMe: hydrateHeader,
+  };
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", attach);

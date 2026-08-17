@@ -213,7 +213,7 @@ function decodeCursor(cursor) {
  * Items older than RUN_TTL_SECONDS are filtered out at read time — same
  * user-visible behavior as the old KV TTL, just enforced by a WHERE clause.
  */
-export async function listRuns(env, scope, { limit = 20, cursor = null } = {}) {
+export async function listRuns(env, scope, { limit = 20, cursor = null, source = null } = {}) {
   // Back-compat: callers that pass a bare user id keep working.
   const { userId = null, orgId = null } = typeof scope === "string" ? { userId: scope } : (scope || {});
   if (!env || !env.DB || (!userId && !orgId)) return { items: [], nextCursor: null };
@@ -225,8 +225,15 @@ export async function listRuns(env, scope, { limit = 20, cursor = null } = {}) {
   // user_id arm is kept as an OR rather than replaced so a row the backfill
   // could not resolve to an org stays visible to the person who created it
   // instead of silently vanishing from their history.
-  const scopeSql  = orgId && userId ? "(org_id = ? OR user_id = ?)" : orgId ? "org_id = ?" : "user_id = ?";
+  let scopeSql  = orgId && userId ? "(org_id = ? OR user_id = ?)" : orgId ? "org_id = ?" : "user_id = ?";
   const scopeArgs = orgId && userId ? [orgId, userId] : orgId ? [orgId] : [userId];
+
+  // Provenance filter (D-3): a busy pipeline pushes every manual run off the
+  // first page, so the feed filters server-side rather than over-fetching.
+  // "manual" means a NULL source — dashboard runs predate the column and
+  // never write one.
+  if (source === "ci")     scopeSql += " AND source = 'ci'";
+  if (source === "manual") scopeSql += " AND source IS NULL";
 
   // Fetch (cap+1) rows to determine whether there's a next page.
   let result;
@@ -260,6 +267,7 @@ export async function listRuns(env, scope, { limit = 20, cursor = null } = {}) {
   const items = slice.map((r) => {
     let input;
     try { input = r.input_json ? JSON.parse(r.input_json) : null; } catch { input = null; }
+    const isCi = r.source === "ci";
     return {
       id:        r.id,
       analyzer:  r.analyzer,
@@ -270,6 +278,12 @@ export async function listRuns(env, scope, { limit = 20, cursor = null } = {}) {
       // started from the dashboard — so the UI can badge and filter them
       // (D-3) without inspecting the payload.
       source:    r.source || null,
+      // Provenance for the CI badge (D-3): which repo and commit produced
+      // this run. Pulled from the already-parsed input rather than a new
+      // column — the values were stored at ingest and never change. Null on
+      // dashboard runs, where there is no commit to name.
+      repo:      isCi && input && typeof input.repo === "string" ? input.repo : null,
+      commitSha: isCi && input && typeof input.commitSha === "string" ? input.commitSha : null,
       // Re-run depends on the input still being there. Disabled for CUR
       // uploads (input was too big to keep) so the dashboard can grey out
       // the button without having to fetch the full record first.
@@ -344,8 +358,11 @@ export async function listRunsHandler(request, env) {
   const rawLimit = parseInt(url.searchParams.get("limit") || "20", 10);
   const limit = Number.isFinite(rawLimit) ? Math.min(50, Math.max(1, rawLimit)) : 20;
   const cursor = url.searchParams.get("cursor") || null;
+  // ?source=ci|manual — anything else (including absent) means no filter.
+  const rawSource = url.searchParams.get("source");
+  const source = rawSource === "ci" || rawSource === "manual" ? rawSource : null;
 
-  const result = await listRuns(env, scope, { limit, cursor });
+  const result = await listRuns(env, scope, { limit, cursor, source });
   return json(result, 200);
 }
 

@@ -11,16 +11,26 @@ permalink: /dashboard/
       <span class="brand-mark" aria-hidden="true">[as]</span>
       <span class="brand-word">Algosize</span>
     </a>
+    <!-- Section tabs (D-2/D-3): hash-routed so deep links and the back button
+         work without a framework. dash-router.js toggles the views. -->
+    <nav class="dash-tabs" aria-label="Dashboard sections">
+      <a href="#/" class="dash-tab" data-view="workspace" aria-current="page">Workspace</a>
+      <a href="#/monitors" class="dash-tab" data-view="monitors">Monitors &amp; CI</a>
+      <a href="#/team" class="dash-tab" data-view="team">Team</a>
+    </nav>
     <div class="dash-nav-actions">
       <span class="dash-user-email mono" id="dash-user-email" hidden></span>
-      <!-- Quota pill (Task #19): "X / 5 used" for free users, "Unlimited"
-           for paid. Hydrated from /api/me on load. Hidden until we know
-           which plan the user is on so we never flash "X / 5" at a paid
-           customer. -->
+      <!-- Quota pill (Task #19 → D-1): "X / 5" with a segment meter whenever
+           entitlement is not active. Hidden until /api/me answers so we never
+           flash "X / 5" at a paid customer. -->
       <span class="dash-quota mono" id="dash-quota" hidden>
         <span class="dash-quota-label">Runs</span>
+        <span class="dash-quota-meter" id="dash-quota-meter" aria-hidden="true"></span>
         <span class="dash-quota-value" id="dash-quota-value">— / 5</span>
       </span>
+      <!-- Plan pill (D-1): one element, restyled per ENTITLEMENT_REASON by
+           dashboard.js. Text always carries the state in words — the colour
+           is the third channel, after the word and the glyph. -->
       <span class="dash-status" id="dash-status" hidden>
         <span class="dash-status-dot" aria-hidden="true"></span>
         <span id="dash-status-text">Subscription active</span>
@@ -34,179 +44,546 @@ permalink: /dashboard/
 <main class="dashboard">
   <div class="container">
 
-    <div class="dash-head">
-      <span class="eyebrow">Workspace</span>
-      <h1>Three analyzers, one workspace.</h1>
-      <p class="lede">
-        Paste your input, run the analyzer, get findings back from the Worker.
-        Your last 90 days of runs are kept under your account so you can re-run
-        or export them at any time.
-      </p>
-    </div>
+    <!-- ================= WORKSPACE (default view) ================= -->
+    <div id="view-workspace" class="dash-view">
 
-    <!-- Inline upgrade banner (Task #19) — revealed by dashboard.js when
-         any analyzer call returns 402 quota_exceeded. Sits above all
-         analyzer panels so the message can't be missed. -->
-    <div id="quota-upgrade-banner" class="quota-banner" hidden>
-      <div class="quota-banner-text">
-        <strong id="quota-banner-title">You've used all 5 free analyses this month.</strong>
-        <p id="quota-banner-msg">Upgrade to Pro for unlimited cost, vulnerability, and algorithm runs.</p>
-      </div>
-      <div class="quota-banner-actions">
-        <button id="quota-upgrade-btn" type="button" class="btn btn-primary btn-sm">Upgrade to Pro →</button>
-      </div>
-    </div>
-
-    <!-- ============= RECENT RUNS (Task #17) ============= -->
-    <section class="panel" id="panel-runs">
-      <header class="panel-head">
-        <div class="panel-heading">
-          <span class="panel-tag">History</span>
-          <h2>Recent runs</h2>
-          <p class="panel-desc">Your last 20 analyzer runs across all three tools. Re-run with the same input or download the structured result as CSV. Runs older than 90 days are pruned automatically.</p>
-        </div>
-        <div class="panel-actions">
-          <button type="button" class="btn btn-ghost btn-sm" id="runs-refresh-btn">Refresh</button>
-        </div>
-      </header>
-      <div class="panel-body">
-        <div id="runs-list" class="runs-list">
-          <div class="panel-empty">Loading recent runs…</div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ============= COST ANALYZER ============= -->
-    <section class="panel" id="panel-cost">
-      <header class="panel-head">
-        <div class="panel-heading">
-          <span class="panel-tag">Cost</span>
-          <h2>Cloud cost analyzer</h2>
-          <p class="panel-desc">Upload your AWS Cost &amp; Usage Report (CSV). We surface the top spenders and three biggest savings wins.</p>
-        </div>
-        <div class="panel-actions">
-          <button type="button" class="btn btn-ghost btn-sm" data-action="sample" data-target="cost">Load sample</button>
-          <button type="button" class="btn btn-primary btn-sm" data-action="run" data-target="cost">Run analysis →</button>
-        </div>
-      </header>
-      <div class="panel-body">
-        <!--
-          File-picker-only by design (Task #14): the original spec called for
-          replacing the JSON textarea with a file picker. Power users who
-          want to POST `application/json` services arrays can still hit
-          /api/analyze/cost directly — that path is preserved on the server
-          and covered by the existing 22 JSON tests in worker/scripts/test-cost.mjs.
-        -->
-        <label class="panel-input-label" for="input-cost-file">Input · AWS Cost &amp; Usage Report (CSV)</label>
-        <div class="file-picker">
-          <input type="file" id="input-cost-file" accept=".csv,text/csv" hidden>
-          <button type="button" class="btn btn-ghost" id="input-cost-btn">Choose CUR file…</button>
-          <span class="file-picker-name mono" id="input-cost-name">No file selected.</span>
-        </div>
-        <p class="panel-input-help">
-          Don't have one yet? Export from the AWS Billing console (Reports → Cost &amp; usage reports).
-          <a href="https://docs.aws.amazon.com/cur/latest/userguide/cur-create.html" target="_blank" rel="noopener">How →</a>
+      <div class="dash-head">
+        <span class="eyebrow">Workspace</span>
+        <h1>Audit, monitor, hand over the report.</h1>
+        <p class="lede">
+          Run the analyzers below, keep repositories under continuous watch from
+          the Monitors tab, and turn any dependency audit into a client-ready
+          report. Your last 90 days of runs are kept under your organisation.
         </p>
+      </div>
 
-        <label class="panel-input-label" for="output-cost">Results</label>
-        <div id="output-cost" class="panel-output">
-          <div class="panel-empty">Choose a CUR file (or click <em>Load sample</em>) and run an analysis.</div>
+      <!-- Billing state banner (D-1): one slot, one banner at a time, filled
+           by dashboard.js from /api/me. role=alert for the states that need
+           action (past_due), role=status otherwise. -->
+      <div id="billing-banner" hidden></div>
+
+      <!-- Inline upgrade banner (Task #19) — revealed when any analyzer call
+           returns 402 quota_exceeded. The modal carries the details; this
+           persists after the modal is dismissed. -->
+      <div id="quota-upgrade-banner" class="quota-banner" hidden>
+        <div class="quota-banner-text">
+          <strong id="quota-banner-title">You've used all 5 free analyses this month.</strong>
+          <p id="quota-banner-msg">Upgrade to Pro for unlimited cost, vulnerability, and algorithm runs.</p>
         </div>
+        <div class="quota-banner-actions">
+          <button id="quota-upgrade-btn" type="button" class="btn btn-primary btn-sm">Upgrade to Pro →</button>
+        </div>
+      </div>
 
-        <div id="chart-cost-wrap" class="panel-chart-wrap" hidden>
-          <h3 class="panel-chart-title">Top suggested savings (USD / mo)</h3>
-          <div class="panel-chart-canvas">
-            <canvas id="chart-cost"></canvas>
+      <!-- ============= RECENT RUNS (Task #17 → D-3 feed) ============= -->
+      <section class="panel" id="panel-runs">
+        <header class="panel-head">
+          <div class="panel-heading">
+            <span class="panel-tag">History</span>
+            <h2>Recent runs</h2>
+            <p class="panel-desc">CI and dashboard runs share one feed — they answer the same question. CI entries carry the repo and commit that produced them; dependency audits open as a client-ready report.</p>
+          </div>
+          <div class="panel-actions">
+            <div class="seg-group" role="group" aria-label="Filter runs by source" id="runs-filter">
+              <button type="button" class="seg-btn" data-runs-filter="all" aria-pressed="true">All</button>
+              <button type="button" class="seg-btn" data-runs-filter="ci" aria-pressed="false">CI</button>
+              <button type="button" class="seg-btn" data-runs-filter="manual" aria-pressed="false">Manual</button>
+            </div>
+            <button type="button" class="btn btn-ghost btn-sm" id="runs-refresh-btn">Refresh</button>
+          </div>
+        </header>
+        <div class="panel-body">
+          <div id="runs-list" class="runs-list">
+            <div class="panel-empty">Loading recent runs…</div>
           </div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <!-- ============= VULNERABILITY SCANNER ============= -->
-    <section class="panel" id="panel-vuln">
-      <header class="panel-head">
-        <div class="panel-heading">
-          <span class="panel-tag">Vuln</span>
-          <h2>Vulnerability scanner</h2>
-          <p class="panel-desc">Paste a public GitHub repo URL. We pull its lockfiles and look up known CVEs against OSV.dev.</p>
+      <!-- ============= COST ANALYZER ============= -->
+      <section class="panel" id="panel-cost">
+        <header class="panel-head">
+          <div class="panel-heading">
+            <span class="panel-tag">Cost</span>
+            <h2>Cloud cost analyzer</h2>
+            <p class="panel-desc">Upload your AWS Cost &amp; Usage Report (CSV). We surface the top spenders and three biggest savings wins.</p>
+          </div>
+          <div class="panel-actions">
+            <button type="button" class="btn btn-ghost btn-sm" data-action="sample" data-target="cost">Load sample</button>
+            <button type="button" class="btn btn-primary btn-sm" data-action="run" data-target="cost">Run analysis →</button>
+          </div>
+        </header>
+        <div class="panel-body">
+          <label class="panel-input-label" for="input-cost-file">Input · AWS Cost &amp; Usage Report (CSV)</label>
+          <div class="file-picker">
+            <input type="file" id="input-cost-file" accept=".csv,text/csv" hidden>
+            <button type="button" class="btn btn-ghost" id="input-cost-btn">Choose CUR file…</button>
+            <span class="file-picker-name mono" id="input-cost-name">No file selected.</span>
+          </div>
+          <p class="panel-input-help">
+            Don't have one yet? Export from the AWS Billing console (Reports → Cost &amp; usage reports).
+            <a href="https://docs.aws.amazon.com/cur/latest/userguide/cur-create.html" target="_blank" rel="noopener">How →</a>
+          </p>
+
+          <label class="panel-input-label" for="output-cost">Results</label>
+          <div id="output-cost" class="panel-output">
+            <div class="panel-empty">Choose a CUR file (or click <em>Load sample</em>) and run an analysis.</div>
+          </div>
+
+          <div id="chart-cost-wrap" class="panel-chart-wrap" hidden>
+            <h3 class="panel-chart-title">Top suggested savings (USD / mo)</h3>
+            <div class="panel-chart-canvas">
+              <canvas id="chart-cost"></canvas>
+            </div>
+          </div>
         </div>
-        <div class="panel-actions">
-          <button type="button" class="btn btn-ghost btn-sm" data-action="sample" data-target="vuln">Load sample</button>
-          <button type="button" class="btn btn-primary btn-sm" data-action="run" data-target="vuln">Run scan →</button>
+      </section>
+
+      <!-- ============= VULNERABILITY SCANNER ============= -->
+      <section class="panel" id="panel-vuln">
+        <header class="panel-head">
+          <div class="panel-heading">
+            <span class="panel-tag">Vuln</span>
+            <h2>Vulnerability scanner</h2>
+            <p class="panel-desc">Paste a public GitHub repo URL. We pull its lockfiles and look up known CVEs against OSV.dev.</p>
+          </div>
+          <div class="panel-actions">
+            <button type="button" class="btn btn-ghost btn-sm" data-action="sample" data-target="vuln">Load sample</button>
+            <button type="button" class="btn btn-primary btn-sm" data-action="run" data-target="vuln">Run scan →</button>
+          </div>
+        </header>
+        <div class="panel-body">
+          <label class="panel-input-label" for="input-vuln">Input · public GitHub repo URL</label>
+          <input
+            id="input-vuln"
+            class="panel-input mono"
+            type="url"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="https://github.com/owner/repo">
+          <p class="panel-input-help">
+            We fetch lockfiles from the default branch (main → master) and query
+            <a href="https://osv.dev/" target="_blank" rel="noopener">OSV.dev</a>
+            for known advisories. Public repos only — no auth required.
+          </p>
+
+          <label class="panel-input-label" for="output-vuln">Findings</label>
+          <div id="output-vuln" class="panel-output">
+            <div class="panel-empty">Paste a repo URL and click <em>Run scan</em>.</div>
+          </div>
         </div>
-      </header>
-      <div class="panel-body">
-        <!--
-          Public-repos-only by design (Task #15): the lockfile fetcher pulls
-          from raw.githubusercontent.com, which only serves public repos.
-          Private-repo support requires a per-user GitHub OAuth flow with
-          token storage in KV — meaningful enough to be its own follow-up
-          (#30) rather than crammed in here. The legacy heuristic source
-          scanner ({ code: "..." } or { files: [...] }) is preserved at the
-          API layer for any external consumer that depended on it.
-        -->
-        <label class="panel-input-label" for="input-vuln">Input · public GitHub repo URL</label>
-        <input
-          id="input-vuln"
-          class="panel-input mono"
-          type="url"
-          autocomplete="off"
-          spellcheck="false"
-          placeholder="https://github.com/owner/repo">
-        <p class="panel-input-help">
-          We fetch lockfiles from the default branch (main → master) and query
-          <a href="https://osv.dev/" target="_blank" rel="noopener">OSV.dev</a>
-          for known advisories. Public repos only — no auth required.
+      </section>
+
+      <!-- ============= ALGORITHM OPTIMIZER ============= -->
+      <section class="panel" id="panel-algo">
+        <header class="panel-head">
+          <div class="panel-heading">
+            <span class="panel-tag">Algo</span>
+            <h2>Algorithm optimizer</h2>
+            <p class="panel-desc">Paste a JS function plus a sample input. We run it in an isolated sandbox, infer the Big-O at three input sizes, and ask GPT for a refactor.</p>
+          </div>
+          <div class="panel-actions">
+            <button type="button" class="btn btn-ghost btn-sm" data-action="sample" data-target="algo">Load sample</button>
+            <button type="button" class="btn btn-primary btn-sm" data-action="run" data-target="algo">Optimize →</button>
+          </div>
+        </header>
+        <div class="panel-body">
+          <label class="panel-input-label" for="input-algo">Function · JavaScript</label>
+          <textarea
+            id="input-algo"
+            class="panel-input mono"
+            rows="12"
+            spellcheck="false"
+            autocomplete="off"
+            placeholder="function search(arr, x) { /* … */ }"></textarea>
+
+          <label class="panel-input-label" for="input-algo-sample">Sample input · JSON</label>
+          <textarea
+            id="input-algo-sample"
+            class="panel-input mono"
+            rows="3"
+            spellcheck="false"
+            autocomplete="off"
+            placeholder="[1, 2, 3, 1]"></textarea>
+
+          <label class="panel-input-label" for="output-algo">Result</label>
+          <div id="output-algo" class="panel-output">
+            <div class="panel-empty">Run the optimizer to measure the function and get a refactor.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============= ARCHITECTURE X-RAY (P-10 → D-5) ============= -->
+      <section class="panel" id="panel-arch">
+        <header class="panel-head">
+          <div class="panel-heading">
+            <span class="panel-tag">Arch</span>
+            <h2>Architecture X-ray</h2>
+            <p class="panel-desc">Submit your manifests and configs (docker-compose, wrangler.toml, package.json, source entry points). We build the service graph and score it through speed, cost and security lenses — every finding cites the file and line it came from.</p>
+          </div>
+          <div class="panel-actions">
+            <button type="button" class="btn btn-ghost btn-sm" id="arch-sample-btn">Load sample</button>
+            <button type="button" class="btn btn-primary btn-sm" id="arch-run-btn">Analyze →</button>
+          </div>
+        </header>
+        <div class="panel-body">
+          <label class="panel-input-label" for="input-arch-files">Input · manifests, configs and source</label>
+          <div class="file-picker">
+            <input type="file" id="input-arch-files" multiple hidden>
+            <button type="button" class="btn btn-ghost" id="input-arch-btn">Choose files…</button>
+            <span class="file-picker-name mono" id="input-arch-names">No files selected.</span>
+          </div>
+          <p class="panel-input-help">
+            Manifests and configs carry most of the signal — compose files,
+            IaC, lockfile-adjacent package manifests. Skip build output and
+            vendored dependencies.
+          </p>
+
+          <label class="panel-input-label" for="output-arch">System map</label>
+          <div id="output-arch" class="panel-output">
+            <div class="panel-empty">Choose files (or click <em>Load sample</em>) and run the analysis.</div>
+          </div>
+        </div>
+      </section>
+
+    </div><!-- /view-workspace -->
+
+    <!-- ================= MONITORS & CI (D-3) ================= -->
+    <div id="view-monitors" class="dash-view" hidden>
+      <div class="dash-head">
+        <span class="eyebrow">Monitors &amp; CI</span>
+        <h2 class="dash-view-title">Repositories under continuous watch.</h2>
+        <p class="lede">
+          Advisories get published against code that hasn't changed. A monitor
+          re-scans on a schedule and emails only what's new; the CI hook runs
+          the same audit on every pull request.
         </p>
+      </div>
 
-        <label class="panel-input-label" for="output-vuln">Findings</label>
-        <div id="output-vuln" class="panel-output">
-          <div class="panel-empty">Paste a repo URL and click <em>Run scan</em>.</div>
+      <section class="panel" id="panel-monitors">
+        <header class="panel-head">
+          <div class="panel-heading">
+            <span class="panel-tag">Monitors</span>
+            <h2>Scheduled scans</h2>
+            <p class="panel-desc">Daily or weekly re-scans against the repo's default branch (or one you name). Alert emails carry only what's new since the previous run.</p>
+          </div>
+          <div class="panel-actions">
+            <span class="usage-meter" id="monitor-meter" hidden>
+              <span class="usage-meter-text mono" id="monitor-meter-text"></span>
+              <span class="usage-meter-bar" aria-hidden="true"><span class="usage-meter-fill" id="monitor-meter-fill"></span></span>
+            </span>
+            <button type="button" class="btn btn-primary btn-sm" id="monitor-add-btn" hidden>Add monitor</button>
+          </div>
+        </header>
+        <div class="panel-body">
+          <div id="monitor-limit-note" class="banner banner-amber" hidden></div>
+          <div id="monitors-list"><div class="panel-empty">Loading monitors…</div></div>
+
+          <!-- New-monitor form, revealed by the Add button. -->
+          <form id="monitor-form" class="stack-form" hidden novalidate>
+            <h3 class="result-section-title">New monitor</h3>
+            <label class="panel-input-label" for="monitor-repo">GitHub repository URL</label>
+            <input id="monitor-repo" class="panel-input mono" type="url" spellcheck="false"
+                   placeholder="https://github.com/owner/repo" autocomplete="off">
+            <p class="field-msg" id="monitor-repo-msg" hidden></p>
+
+            <label class="panel-input-label" for="monitor-branch">Branch <span class="field-optional">optional — defaults to the repo's default branch</span></label>
+            <input id="monitor-branch" class="panel-input mono" type="text" spellcheck="false"
+                   placeholder="main" autocomplete="off">
+            <p class="field-msg" id="monitor-branch-msg" hidden></p>
+
+            <span class="panel-input-label" id="monitor-schedule-label">Schedule</span>
+            <div class="choice-row" role="radiogroup" aria-labelledby="monitor-schedule-label">
+              <button type="button" class="choice-btn" data-schedule="daily" role="radio" aria-checked="true">
+                <span class="choice-title">Daily</span><span class="choice-hint">03:00 UTC</span>
+              </button>
+              <button type="button" class="choice-btn" data-schedule="weekly" role="radio" aria-checked="false">
+                <span class="choice-title">Weekly</span><span class="choice-hint">every 7 days</span>
+              </button>
+            </div>
+
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary" id="monitor-submit">Start monitoring</button>
+              <button type="button" class="btn btn-ghost" id="monitor-cancel">Cancel</button>
+              <span class="field-msg mono" id="monitor-form-note">First scheduled run within a day; the baseline email lists the current state.</span>
+            </div>
+            <p class="field-msg field-msg-error" id="monitor-form-error" hidden></p>
+          </form>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-ci">
+        <header class="panel-head">
+          <div class="panel-heading">
+            <span class="panel-tag">CI</span>
+            <h2>Audit every pull request</h2>
+            <p class="panel-desc">Three steps: a key, a secret, a workflow file. Findings land in the PR as a sticky comment, in the Security tab as SARIF, and here in the runs feed.</p>
+          </div>
+        </header>
+        <div class="panel-body">
+          <ol class="wizard" id="ci-wizard">
+            <li class="wizard-step">
+              <div class="wizard-step-head">
+                <span class="wizard-n" aria-hidden="true">1</span>
+                <h3>Create an API key</h3>
+              </div>
+              <p class="wizard-copy">A key authenticates your pipeline as this organisation — no browser session, no cookie. Owners and admins mint them on the <a href="#/team">Team screen</a>; the full key is shown exactly once.</p>
+            </li>
+            <li class="wizard-step">
+              <div class="wizard-step-head">
+                <span class="wizard-n" aria-hidden="true">2</span>
+                <h3>Add it as a repository secret</h3>
+              </div>
+              <p class="wizard-copy">Name it <code>ALGOSIZE_API_KEY</code> — the workflow reads exactly that name, and skips itself with a notice (never a red build) until the secret exists.</p>
+              <div class="snippet-row">
+                <pre class="result-snippet" id="ci-gh-cli">gh secret set ALGOSIZE_API_KEY --body '&lt;paste the key&gt;'</pre>
+                <button type="button" class="btn btn-ghost btn-sm" data-copy-target="ci-gh-cli">Copy</button>
+              </div>
+            </li>
+            <li class="wizard-step">
+              <div class="wizard-step-head">
+                <span class="wizard-n" aria-hidden="true">3</span>
+                <h3>Commit the workflow file</h3>
+              </div>
+              <p class="wizard-copy">Save as <code class="mono" id="ci-snippet-filename">.github/workflows/algosize-audit.yml</code>. It runs on every PR, on pushes to main, and weekly — new advisories are published against code that hasn't changed.</p>
+              <div class="snippet-row snippet-row-tall">
+                <pre class="result-snippet" id="ci-snippet-yaml">Loading workflow…</pre>
+                <button type="button" class="btn btn-ghost btn-sm" data-copy-target="ci-snippet-yaml">Copy</button>
+              </div>
+            </li>
+          </ol>
+
+          <!-- Waiting / connected row: flips in place when a CI run exists. -->
+          <div class="ci-status" id="ci-status">
+            <span class="ci-status-dot" id="ci-status-dot" aria-hidden="true"></span>
+            <span class="ci-status-text" id="ci-status-text">Checking for a first CI run…</span>
+            <button type="button" class="btn btn-ghost btn-sm" id="ci-status-refresh">Check again</button>
+          </div>
+        </div>
+      </section>
+    </div><!-- /view-monitors -->
+
+    <!-- ================= TEAM (D-2) ================= -->
+    <div id="view-team" class="dash-view" hidden>
+      <div class="dash-head">
+        <span class="eyebrow">Team</span>
+        <h2 class="dash-view-title">Seats, members and keys.</h2>
+        <p class="lede">
+          Everything here belongs to the organisation — the subscription, the
+          seats, the API keys, the report branding. An action your role can't
+          take isn't rendered disabled; it isn't rendered.
+        </p>
+      </div>
+
+      <section class="panel" id="panel-org">
+        <header class="panel-head">
+          <div class="panel-heading">
+            <span class="panel-tag">Organisation</span>
+            <h2 id="org-name">—</h2>
+            <p class="panel-desc" id="org-desc">Loading organisation…</p>
+          </div>
+          <div class="panel-actions">
+            <span class="usage-meter" id="seat-meter" hidden>
+              <span class="usage-meter-text mono" id="seat-meter-text"></span>
+              <span class="usage-meter-bar" aria-hidden="true"><span class="usage-meter-fill" id="seat-meter-fill"></span></span>
+            </span>
+            <button type="button" class="btn btn-primary btn-sm" id="invite-open-btn" hidden>Invite member</button>
+          </div>
+        </header>
+        <div class="panel-body">
+          <div id="members-table-wrap"><div class="panel-empty">Loading members…</div></div>
+          <div id="pending-invites-wrap" hidden></div>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-keys">
+        <header class="panel-head">
+          <div class="panel-heading">
+            <span class="panel-tag">API keys</span>
+            <h2>Machine access</h2>
+            <p class="panel-desc">Keys authenticate as the organisation — CI can post a lockfile audit without a browser session. Only the prefix is stored; the secret is hashed and can never be shown again.</p>
+          </div>
+          <div class="panel-actions">
+            <button type="button" class="btn btn-primary btn-sm" id="key-create-btn" hidden>Create key</button>
+          </div>
+        </header>
+        <div class="panel-body">
+          <div id="keys-list"><div class="panel-empty">Loading keys…</div></div>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-branding">
+        <header class="panel-head">
+          <div class="panel-heading">
+            <span class="panel-tag">Reports</span>
+            <h2>Report branding</h2>
+            <p class="panel-desc">On the Firm plan, reports you hand to clients carry your name and logo instead of ours. New reports use the branding; reports already generated keep the branding they were made with.</p>
+          </div>
+        </header>
+        <div class="panel-body" id="branding-body">
+          <div class="panel-empty">Loading…</div>
+        </div>
+      </section>
+    </div><!-- /view-team -->
+
+    <!-- ================= REPORT (D-4) ================= -->
+    <div id="view-report" class="dash-view" hidden>
+      <div class="report-topbar">
+        <button type="button" class="btn btn-ghost btn-sm" id="report-back-btn">← Back to runs</button>
+        <div class="report-topbar-actions" id="report-actions" hidden>
+          <a class="btn btn-ghost btn-sm" id="report-open-html" href="#" target="_blank" rel="noopener">Open HTML report</a>
+          <a class="btn btn-ghost btn-sm" id="report-dl-sarif" href="#">SARIF</a>
+          <a class="btn btn-ghost btn-sm" id="report-dl-cdx" href="#">CycloneDX</a>
+          <button type="button" class="btn btn-primary btn-sm" id="report-share-btn">Share</button>
         </div>
       </div>
-    </section>
-
-    <!-- ============= ALGORITHM OPTIMIZER ============= -->
-    <section class="panel" id="panel-algo">
-      <header class="panel-head">
-        <div class="panel-heading">
-          <span class="panel-tag">Algo</span>
-          <h2>Algorithm optimizer</h2>
-          <p class="panel-desc">Paste a JS function plus a sample input. We run it in an isolated sandbox, infer the Big-O at three input sizes, and ask GPT for a refactor.</p>
-        </div>
-        <div class="panel-actions">
-          <button type="button" class="btn btn-ghost btn-sm" data-action="sample" data-target="algo">Load sample</button>
-          <button type="button" class="btn btn-primary btn-sm" data-action="run" data-target="algo">Optimize →</button>
-        </div>
-      </header>
-      <div class="panel-body">
-        <label class="panel-input-label" for="input-algo">Function · JavaScript</label>
-        <textarea
-          id="input-algo"
-          class="panel-input mono"
-          rows="12"
-          spellcheck="false"
-          autocomplete="off"
-          placeholder="function search(arr, x) { /* … */ }"></textarea>
-
-        <label class="panel-input-label" for="input-algo-sample">Sample input · JSON</label>
-        <textarea
-          id="input-algo-sample"
-          class="panel-input mono"
-          rows="3"
-          spellcheck="false"
-          autocomplete="off"
-          placeholder="[1, 2, 3, 1]"></textarea>
-
-        <label class="panel-input-label" for="output-algo">Result</label>
-        <div id="output-algo" class="panel-output">
-          <div class="panel-empty">Run the optimizer to measure the function and get a refactor.</div>
-        </div>
-      </div>
-    </section>
+      <div id="report-body"><div class="panel-empty">Loading report…</div></div>
+    </div><!-- /view-report -->
 
   </div>
 </main>
+
+<!-- ================= MODALS ================= -->
+
+<!-- Quota 402 (D-1): the API's message verbatim, used/limit, reset date. -->
+<div class="modal-scrim" id="modal-quota" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-quota-title">
+    <div class="modal-head">
+      <span class="modal-kicker mono">402 · quota_exceeded</span>
+      <button type="button" class="modal-x" data-modal-close aria-label="Close">×</button>
+    </div>
+    <h3 id="modal-quota-title">Out of free runs</h3>
+    <p id="modal-quota-msg" class="modal-copy"></p>
+    <p class="modal-note mono" id="modal-quota-reset"></p>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-primary" id="modal-quota-upgrade">Upgrade to Pro →</button>
+      <button type="button" class="btn btn-ghost" data-modal-close>Not now</button>
+    </div>
+  </div>
+</div>
+
+<!-- Invite member (D-2). -->
+<div class="modal-scrim" id="modal-invite" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-invite-title">
+    <div class="modal-head">
+      <span class="modal-kicker mono">POST /api/org/invite</span>
+      <button type="button" class="modal-x" data-modal-close aria-label="Close">×</button>
+    </div>
+    <h3 id="modal-invite-title">Invite to <span id="modal-invite-org">your organisation</span></h3>
+    <label class="panel-input-label" for="invite-email">Email</label>
+    <input id="invite-email" class="panel-input mono" type="email" placeholder="name@company.com" autocomplete="off">
+    <span class="panel-input-label" id="invite-role-label">Role</span>
+    <div class="choice-row" role="radiogroup" aria-labelledby="invite-role-label" id="invite-role-row">
+      <button type="button" class="choice-btn" data-role="member" role="radio" aria-checked="true">
+        <span class="choice-title">Member</span><span class="choice-hint">Runs analyzers, manages monitors</span>
+      </button>
+      <button type="button" class="choice-btn" data-role="admin" role="radio" aria-checked="false" id="invite-role-admin">
+        <span class="choice-title">Admin</span><span class="choice-hint">Also invites people and manages keys</span>
+      </button>
+    </div>
+    <p class="field-msg field-msg-error" id="invite-error" hidden></p>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-primary" id="invite-send-btn">Send invite</button>
+      <button type="button" class="btn btn-ghost" data-modal-close>Cancel</button>
+    </div>
+    <p class="modal-note mono">The invite holds a seat as soon as it's sent, and expires after 7 days.</p>
+  </div>
+</div>
+
+<!-- Seat limit 402 (D-2). -->
+<div class="modal-scrim" id="modal-seatlimit" hidden>
+  <div class="modal modal-amber" role="dialog" aria-modal="true" aria-labelledby="modal-seatlimit-title">
+    <div class="modal-head">
+      <span class="modal-kicker mono">402 · seat_limit_reached</span>
+      <button type="button" class="modal-x" data-modal-close aria-label="Close">×</button>
+    </div>
+    <h3 id="modal-seatlimit-title"><span aria-hidden="true" class="glyph-amber">▲</span> All seats are in use</h3>
+    <p class="modal-copy" id="modal-seatlimit-msg"></p>
+    <div class="modal-factbox">
+      <div class="modal-factrow">
+        <span class="mono modal-factlabel">Seats</span>
+        <span class="mono modal-factvalue" id="modal-seatlimit-count"></span>
+      </div>
+      <span class="usage-meter-bar" aria-hidden="true"><span class="usage-meter-fill usage-meter-fill-amber" style="width:100%"></span></span>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-amber" id="modal-seatlimit-portal">Add seats →</button>
+      <button type="button" class="btn btn-ghost" data-modal-close>Cancel</button>
+    </div>
+    <p class="modal-note mono">Add seats opens the billing portal — a portal session can't be minted client-side, so the 402 body carries no link.</p>
+  </div>
+</div>
+
+<!-- Key created — reveal once (D-2). No × and no Esc: dismissing by accident
+     loses the secret. "Done" is the only way out. -->
+<div class="modal-scrim" id="modal-keyreveal" data-modal-sticky hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-keyreveal-title">
+    <span class="modal-kicker mono">Key created</span>
+    <h3 id="modal-keyreveal-title">Copy your key now</h3>
+    <label class="panel-input-label" for="keyreveal-value" id="keyreveal-name">New key</label>
+    <div class="snippet-row">
+      <input id="keyreveal-value" class="panel-input mono" readonly value="">
+      <button type="button" class="btn btn-ghost" id="keyreveal-copy">Copy</button>
+    </div>
+    <p class="modal-copy modal-copy-amber"><span aria-hidden="true" class="glyph-amber">▲</span> You won't see this again. We store a hash and the prefix — if it's lost, revoke it and create another.</p>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-primary" id="keyreveal-done">Done — I've stored it</button>
+    </div>
+  </div>
+</div>
+
+<!-- Revoke key confirm (D-2). -->
+<div class="modal-scrim" id="modal-keyrevoke" hidden>
+  <div class="modal modal-red" role="alertdialog" aria-modal="true" aria-labelledby="modal-keyrevoke-title" aria-describedby="modal-keyrevoke-body">
+    <div class="modal-head">
+      <span class="modal-kicker mono modal-kicker-red">Revoke key</span>
+      <button type="button" class="modal-x" data-modal-close aria-label="Close">×</button>
+    </div>
+    <h3 id="modal-keyrevoke-title">Revoke <span id="modal-keyrevoke-name"></span>?</h3>
+    <p class="modal-copy" id="modal-keyrevoke-body">CI runs using this key will 401 on their next request. This can't be undone — create a new key and update the pipeline secret before you revoke, or expect a red build.</p>
+    <div class="modal-factbox mono" id="modal-keyrevoke-facts"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-red" id="modal-keyrevoke-confirm">Revoke key</button>
+      <button type="button" class="btn btn-ghost" data-modal-close>Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Share report (D-4). -->
+<div class="modal-scrim" id="modal-share" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-share-title">
+    <div class="modal-head">
+      <span class="modal-kicker mono">POST /api/runs/:id/share</span>
+      <button type="button" class="modal-x" data-modal-close aria-label="Close">×</button>
+    </div>
+    <h3 id="modal-share-title">Share this report</h3>
+    <p class="modal-copy">Anyone with the link can read this one report until it expires — no account, no session. It grants nothing else.</p>
+    <div id="share-create-stage">
+      <span class="panel-input-label" id="share-expiry-label">Link expires in</span>
+      <div class="choice-row" role="radiogroup" aria-labelledby="share-expiry-label" id="share-expiry-row">
+        <button type="button" class="choice-btn" data-days="7" role="radio" aria-checked="true"><span class="choice-title">7 days</span><span class="choice-hint">default</span></button>
+        <button type="button" class="choice-btn" data-days="30" role="radio" aria-checked="false"><span class="choice-title">30 days</span><span class="choice-hint"></span></button>
+        <button type="button" class="choice-btn" data-days="90" role="radio" aria-checked="false"><span class="choice-title">90 days</span><span class="choice-hint">maximum</span></button>
+      </div>
+      <p class="field-msg field-msg-error" id="share-error" hidden></p>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-primary" id="share-create-btn">Create link</button>
+        <button type="button" class="btn btn-ghost" data-modal-close>Cancel</button>
+      </div>
+    </div>
+    <div id="share-result-stage" hidden>
+      <label class="panel-input-label" for="share-url">Read-only link</label>
+      <div class="snippet-row">
+        <input id="share-url" class="panel-input mono" readonly value="">
+        <button type="button" class="btn btn-ghost" id="share-copy-btn">Copy</button>
+      </div>
+      <p class="modal-note mono" id="share-expiry-note"></p>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="share-revoke-btn">Revoke this link</button>
+        <button type="button" class="btn btn-primary" data-modal-close>Done</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <footer class="footer">
   <div class="container">
@@ -228,4 +605,11 @@ permalink: /dashboard/
   crossorigin="anonymous"
   referrerpolicy="no-referrer"
   defer></script>
+<!-- Load order matters: dashboard.js defines window.DashCore, which every
+     dash-*.js file below builds on. `defer` preserves document order. -->
 <script src="{{ '/assets/js/dashboard.js' | relative_url }}" defer></script>
+<script src="{{ '/assets/js/dash-team.js' | relative_url }}" defer></script>
+<script src="{{ '/assets/js/dash-monitors.js' | relative_url }}" defer></script>
+<script src="{{ '/assets/js/dash-report.js' | relative_url }}" defer></script>
+<script src="{{ '/assets/js/dash-arch.js' | relative_url }}" defer></script>
+<script src="{{ '/assets/js/dash-router.js' | relative_url }}" defer></script>
