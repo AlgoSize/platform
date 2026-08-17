@@ -1,7 +1,8 @@
 title: Algosize
 description: >-
-  Algosize helps engineering teams cut cloud spend, find vulnerabilities,
-  and optimize critical algorithms.
+  Continuous dependency and secret auditing. Every advisory arrives with the
+  CVSS vector it was scored from, the version that fixes it, and the command
+  that gets you there.
 url: "https://algosize.com"
 baseurl: ""
 

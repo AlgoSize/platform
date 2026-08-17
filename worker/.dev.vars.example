@@ -14,6 +14,25 @@ STRIPE_SECRET_KEY=sk_test_replace_me
 STRIPE_WEBHOOK_SECRET=whsec_replace_me
 STRIPE_PRICE_ID=price_replace_me
 
+# Tiered pricing — one price per (plan × interval), matching the three tiers
+# on the pricing page. A tier with no price set here is REFUSED by
+# POST /api/checkout with 503 plan_not_available; it never falls back to
+# another price, so an unconfigured tier can't silently bill the wrong
+# amount. Leave them unset until the prices exist in Stripe.
+#
+# The optional _SEAT companion is for a tier that charges a base fee plus a
+# per-seat fee (Practice: $149 + $39/seat). Base is billed at quantity 1 and
+# the seat price carries the seat count.
+#
+# STRIPE_PRICE_SOLO_MONTHLY=price_replace_me
+# STRIPE_PRICE_SOLO_ANNUAL=price_replace_me
+# STRIPE_PRICE_PRACTICE_MONTHLY=price_replace_me
+# STRIPE_PRICE_PRACTICE_MONTHLY_SEAT=price_replace_me
+# STRIPE_PRICE_PRACTICE_ANNUAL=price_replace_me
+# STRIPE_PRICE_PRACTICE_ANNUAL_SEAT=price_replace_me
+# STRIPE_PRICE_FIRM_MONTHLY=price_replace_me
+# STRIPE_PRICE_FIRM_ANNUAL=price_replace_me
+
 # Google Workspace — transactional email via Gmail API (Task #56).
 # Leave UNSET locally to disable email sends; sendTransactional will
 # no-op with a single warn-level log line. To exercise the real send

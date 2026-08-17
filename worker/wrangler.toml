@@ -288,7 +288,19 @@ dead_letter_queue = "algosize-scans-staging-dlq"
 #   JWT_SECRET             32+ random bytes; HMAC-SHA-256 key for sessions
 #   STRIPE_SECRET_KEY      Stripe API key (sk_test_... / sk_live_...)
 #   STRIPE_WEBHOOK_SECRET  Endpoint secret for /api/stripe/webhook
-#   STRIPE_PRICE_ID        Price ID for the monthly subscription plan
+#   STRIPE_PRICE_ID        Price ID for the legacy single monthly plan. Still
+#                          used by any checkout that names no tier.
+#   STRIPE_PRICE_<PLAN>_<INTERVAL>
+#                          One price per tier on the pricing page, e.g.
+#                          STRIPE_PRICE_SOLO_MONTHLY, STRIPE_PRICE_FIRM_ANNUAL.
+#                          PLAN is SOLO|PRACTICE|FIRM, INTERVAL is
+#                          MONTHLY|ANNUAL. An optional _SEAT suffix adds a
+#                          per-seat line item on top of the base fee
+#                          (STRIPE_PRICE_PRACTICE_MONTHLY_SEAT). A tier with no
+#                          price set is refused by POST /api/checkout with 503
+#                          plan_not_available — it never falls back to another
+#                          price, so an unconfigured tier cannot bill the wrong
+#                          amount.
 #   OPENAI_API_KEY         OpenAI API key for the algorithm optimizer's LLM
 #                          refactor suggestions (Task #16). When unset the
 #                          analyzer still returns timing + Big-O — the
