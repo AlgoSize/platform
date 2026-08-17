@@ -22,7 +22,7 @@
 // show it.
 
 import { getUserById } from "./handlers/_users.js";
-import { getActiveOrg } from "./handlers/_orgs.js";
+import { getActiveOrg, getOrgById } from "./handlers/_orgs.js";
 import { captureException } from "./observability.js";
 
 /**
@@ -34,6 +34,8 @@ export const ENTITLEMENT_REASON = Object.freeze({
   NO_USER_ID:        "no_user_id",
   NO_USER_ROW:       "no_user_row",
   NO_ORG:            "no_org",
+  NO_ORG_ID:         "no_org_id",
+  ORG_NOT_FOUND:     "org_not_found",
   FREE_PLAN:         "free_plan",
   ACTIVE_SUBSCRIPTION: "active_subscription",
   TRIALING:          "trialing",
@@ -97,7 +99,6 @@ const GRACE_ELIGIBLE_STATUSES = new Set(["past_due", "inactive", "canceled", "un
  * observability only.
  */
 export async function resolveEntitlement(env, userId, { now, ctx, request } = {}) {
-  const nowSec = typeof now === "number" ? now : Math.floor(Date.now() / 1000);
   const deny = (reason, extra = {}) => ({
     plan: "free", active: false, reason, currentPeriodEnd: null, user: null, org: null, role: null, ...extra,
   });
@@ -134,7 +135,51 @@ export async function resolveEntitlement(env, userId, { now, ctx, request } = {}
     return deny(ENTITLEMENT_REASON.NO_ORG, { user });
   }
 
-  const { org, role } = active;
+  return applyOrgRules(active.org, { now, user, role: active.role });
+}
+
+/**
+ * Resolve entitlement directly from an org id, with no user in the picture.
+ *
+ * Used by API-key auth (Task #P-4): a key authenticates AS the organisation,
+ * not as any one member, so there is no userId to resolve through — see
+ * requireAuth in src/auth.js. This calls the exact same rule set as
+ * resolveEntitlement via applyOrgRules, so a key and a cookie session can
+ * never disagree about whether the same org is paid.
+ *
+ * Returns the same shape as resolveEntitlement, with `user` and `role`
+ * always null (there is no member in this call, so no role to report).
+ */
+export async function resolveEntitlementForOrg(env, orgId, { now, ctx, request } = {}) {
+  const deny = (reason, extra = {}) => ({
+    plan: "free", active: false, reason, currentPeriodEnd: null, user: null, org: null, role: null, ...extra,
+  });
+
+  if (!orgId) return deny(ENTITLEMENT_REASON.NO_ORG_ID);
+
+  const org = await getOrgById(env, orgId);
+  if (!org) {
+    // An API key pointing at an org that no longer exists — shouldn't happen
+    // (nothing deletes orgs), but a key row outliving its org is exactly the
+    // kind of drift the users-table version of this bug used to hide.
+    await captureException(
+      env, ctx,
+      new Error(`entitlement: no organisation row for orgId ${orgId}`),
+      { request, tags: { source: "entitlement", reason: ENTITLEMENT_REASON.ORG_NOT_FOUND } },
+    );
+    return deny(ENTITLEMENT_REASON.ORG_NOT_FOUND);
+  }
+
+  return applyOrgRules(org, { now });
+}
+
+/**
+ * The one rule set both entry points above call — see the ENTITLING /
+ * GRACE_ELIGIBLE / (implicit) never-entitling sets above for what each
+ * status means and why.
+ */
+function applyOrgRules(org, { now, user = null, role = null } = {}) {
+  const nowSec = typeof now === "number" ? now : Math.floor(Date.now() / 1000);
   const currentPeriodEnd = org.currentPeriodEnd;
   const base = { currentPeriodEnd, user, org, role };
 

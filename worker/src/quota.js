@@ -26,7 +26,8 @@ const QUOTA_TTL_SECONDS  = 60 * 60 * 24 * 35;  // 35 days — see comment above
 // templates.js ("you have 1 run left") stays accurate as the limit changes.
 const QUOTA_WARN_AT_RUNS = FREE_MONTHLY_LIMIT - 1;
 
-import { resolveEntitlement } from "./entitlement.js";
+import { resolveEntitlement, resolveEntitlementForOrg } from "./entitlement.js";
+import { getOrgBillingEmail } from "./handlers/_orgs.js";
 import { sendTransactional as defaultSendTransactional } from "./email/transactional.js";
 import { quotaWarning } from "./email/templates.js";
 
@@ -117,6 +118,12 @@ export async function incrementMonthlyUsage(env, userId, now = new Date()) {
  *
  * `sendFn` is overridable for tests (default: real Workspace sender).
  *
+ * `user` only needs `.userId` (for the sentinel key) and `.email` — for a
+ * cookie session that's the member's own row; for an API-key request (Task
+ * #P-4, no member behind the call) `enforceQuota` builds an org-billing
+ * stand-in shaped the same way, so this function doesn't need to know which
+ * kind of credential triggered the warning.
+ *
  * Never throws — all failures are funnelled through `sendTransactional`'s
  * own captureException pipeline. Returns the same shape sendTransactional
  * returns, plus our own gating reasons (`not_threshold`, `already_warned`,
@@ -182,26 +189,37 @@ function jsonResponse(body, status = 200) {
  *
  * `now` is injectable for tests that need to assert month-boundary
  * behavior without time-travelling the system clock.
+ *
+ * Callers reach this wrapper through either credential requireAuth accepts:
+ * a cookie/JWT session (`request.user.userId`) or an API key (Task #P-4,
+ * `request.org.orgId`, no member behind the call). Entitlement is resolved
+ * through whichever one is present — `resolveEntitlement` for a session,
+ * `resolveEntitlementForOrg` for a key — and both call the same rule set, so
+ * a member and a key on the same org can never see different answers. The
+ * free-tier counter is metered the same way: per user for a session, per org
+ * for a key, because a key has no member to count against and a free org's 5
+ * runs are 5 runs total, not 5 per credential it happens to call in with.
  */
 export function enforceQuota(handler, { now, sendTransactional: sendTxOverride } = {}) {
   return async function quotaWrappedHandler(request, env, ctx) {
-    const sessionUser = request.user || {};
-    if (!sessionUser.userId) {
+    const sessionUser = request.user || null;
+    const org         = request.org  || null;
+    const meterId      = sessionUser?.userId || org?.orgId;
+    if (!meterId) {
       // requireAuth would have caught this — defensive only.
       return jsonResponse({ error: "unauthorized" }, 401);
     }
 
     const ts = now ? (typeof now === "function" ? now() : now) : new Date();
+    const nowSec = Math.floor(ts.getTime() / 1000);
 
     // One source of truth for paid vs free (src/entitlement.js). This used to
     // read `(user && user.plan) || "paid"`, so a missing users row granted
     // unlimited access — and `sub_status` was never consulted at all, so a
     // cancelled customer never lost it. Both now fail closed.
-    const entitlement = await resolveEntitlement(env, sessionUser.userId, {
-      now: Math.floor(ts.getTime() / 1000),
-      ctx,
-      request,
-    });
+    const entitlement = sessionUser
+      ? await resolveEntitlement(env, sessionUser.userId, { now: nowSec, ctx, request })
+      : await resolveEntitlementForOrg(env, org.orgId, { now: nowSec, ctx, request });
     const user = entitlement.user;
 
     if (entitlement.active) {
@@ -209,7 +227,7 @@ export function enforceQuota(handler, { now, sendTransactional: sendTxOverride }
     }
 
     // Free tier — gate on the month counter.
-    const used = await getMonthlyUsage(env, sessionUser.userId, ts);
+    const used = await getMonthlyUsage(env, meterId, ts);
     if (used >= FREE_MONTHLY_LIMIT) {
       return jsonResponse(
         {
@@ -231,11 +249,17 @@ export function enforceQuota(handler, { now, sendTransactional: sendTxOverride }
       // ctx.waitUntil promise. In single-Worker dev mode (no ctx) we
       // still await so the test suite sees the new count and the spy.
       const work = (async () => {
-        const next = await incrementMonthlyUsage(env, sessionUser.userId, ts);
+        const next = await incrementMonthlyUsage(env, meterId, ts);
         // Skipped early when `next !== QUOTA_WARN_AT_RUNS`, so the typical
         // run path costs zero extra KV ops.
         if (next === QUOTA_WARN_AT_RUNS) {
-          await maybeSendQuotaWarning(env, ctx, user, next, ts, sendTxOverride);
+          // A session has the member's own row; an API key has no member —
+          // fall back to the org's billing owner. If even that has no email
+          // on file (shouldn't happen; every org has an owner), the free
+          // run itself is still granted — a missing warning is not a reason
+          // to fail the request that earned it.
+          const recipient = user || await orgBillingRecipient(env, org?.orgId);
+          if (recipient) await maybeSendQuotaWarning(env, ctx, recipient, next, ts, sendTxOverride);
         }
       })();
       if (ctx && typeof ctx.waitUntil === "function") {
@@ -246,4 +270,11 @@ export function enforceQuota(handler, { now, sendTransactional: sendTxOverride }
     }
     return response;
   };
+}
+
+/** Recipient shape maybeSendQuotaWarning expects, built from an org's billing owner. */
+async function orgBillingRecipient(env, orgId) {
+  if (!orgId) return null;
+  const email = await getOrgBillingEmail(env, orgId);
+  return email ? { userId: orgId, email } : null;
 }
