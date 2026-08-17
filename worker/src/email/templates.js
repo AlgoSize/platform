@@ -258,6 +258,79 @@ export function orgInvite({ email, orgName, inviterName, acceptUrl, expiresInDay
   return { subject, text, html };
 }
 
+/**
+ * Scheduled-monitor alert — sent when a nightly re-scan finds advisories that
+ * were NOT present the previous run.
+ *
+ * The whole design constraint is that this arrives unprompted, at 3am, on a
+ * schedule the reader set up once and forgot. So:
+ *   - the subject leads with the worst new severity and the repo, because
+ *     that is the entire triage decision most recipients will make;
+ *   - only NEW advisories appear — the diff has already removed everything
+ *     they saw last time, which is what keeps this out of the spam filter;
+ *   - each finding carries its fixed version and the fix command, so the
+ *     remediation doesn't require opening the dashboard first.
+ *
+ * `isBaseline` marks a monitor's first completed run, where "new since last
+ * time" has no meaning yet. Saying so is more honest than presenting an
+ * entire existing backlog as if it appeared overnight.
+ */
+export function monitorNewFindings({
+  repoUrl, branch, newAdvisories, groups, counts, fixCommand, isBaseline, dashboardUrl,
+}) {
+  const total = newAdvisories.length;
+  const worst = ["critical", "high", "medium", "low"].find((s) => counts[s] > 0) || "unknown";
+  const repoLabel = `${repoUrl}${branch ? ` (${branch})` : ""}`;
+
+  const subject = isBaseline
+    ? `Algosize — baseline scan of ${repoUrl}: ${total} advisor${total === 1 ? "y" : "ies"}`
+    : `Algosize — ${total} new ${worst} advisor${total === 1 ? "y" : "ies"} in ${repoUrl}`;
+
+  const lead = isBaseline
+    ? `First scheduled scan of ${repoLabel}. This is the current state — future emails will only list what's new since the previous scan.`
+    : `New advisories in ${repoLabel} since the last scan. Everything you'd already seen has been left out.`;
+
+  const textLines = [lead, ""];
+  for (const group of groups) {
+    textLines.push(`${group.severity.toUpperCase()} (${group.items.length})`);
+    for (const a of group.items) {
+      textLines.push(`  ${a.package}@${a.installedVersion} — ${a.id}`);
+      if (a.fixedIn) textLines.push(`    fixed in ${a.fixedIn}`);
+      if (a.summary) textLines.push(`    ${a.summary}`);
+    }
+    textLines.push("");
+  }
+  if (fixCommand) textLines.push(`Fix: ${fixCommand}`, "");
+  textLines.push(`Full report: ${dashboardUrl}`, "", "— The Algosize team");
+
+  const groupsHtml = groups.map((group) => `
+      <p style="margin:18px 0 6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#8b949e">${escapeHtml(group.severity)} (${group.items.length})</p>
+      ${group.items.map((a) => `
+      <div style="margin:0 0 10px;padding:10px 12px;background:#0d1117;border-left:3px solid #7ee0c0;border-radius:0 4px 4px 0">
+        <p style="margin:0 0 3px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;color:#f0f6fc">${escapeHtml(a.package)}@${escapeHtml(String(a.installedVersion))}</p>
+        <p style="margin:0 0 3px;font-size:12px;color:#8b949e">${escapeHtml(a.id)}${a.fixedIn ? ` · fixed in <span style="color:#7ee0c0">${escapeHtml(String(a.fixedIn))}</span>` : ""}</p>
+        ${a.summary ? `<p style="margin:0;font-size:13px;color:#c9d1d9">${escapeHtml(a.summary)}</p>` : ""}
+      </div>`).join("")}
+  `).join("");
+
+  const html = shellHtml(
+    isBaseline ? "Baseline scan complete" : `${total} new advisor${total === 1 ? "y" : "ies"}`,
+    `
+      <p style="margin:0 0 6px">${escapeHtml(lead)}</p>
+      ${groupsHtml}
+      ${fixCommand ? `
+      <p style="margin:18px 0 6px;font-size:13px;color:#8b949e">Start here:</p>
+      <p style="margin:0 0 20px;padding:10px 12px;background:#0d1117;border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;color:#7ee0c0">${escapeHtml(fixCommand)}</p>` : ""}
+      <p style="margin:0 0 16px">
+        <a href="${dashboardUrl}" style="display:inline-block;padding:12px 20px;background:#7ee0c0;color:#06281f;text-decoration:none;border-radius:8px;font-weight:600">View the full report →</a>
+      </p>
+      <p style="margin:16px 0 0;font-size:12px;color:#6e7681">You're getting this because a scheduled monitor is watching this repository. Pause or remove it from your dashboard.</p>
+    `,
+  );
+
+  return { subject, text: textLines.join("\n"), html };
+}
+
 function escapeHtml(s) {
   return String(s)
     .replace(/&/g, "&amp;")
