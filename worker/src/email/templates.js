@@ -217,6 +217,47 @@ export function trialEndingSoon({ email, trialEndsOn, amount }) {
   return { subject, text, html };
 }
 
+/**
+ * Organisation invite — sent from POST /api/org/invite.
+ *
+ * Names who invited them and which organisation, because an unexplained
+ * "you've been invited" from a security vendor reads as phishing. The link is
+ * single-use and the copy says so, so a forwarded mail sets expectations
+ * correctly rather than producing a confused second person.
+ */
+export function orgInvite({ email, orgName, inviterName, acceptUrl, expiresInDays }) {
+  const subject = `You've been invited to ${orgName} on Algosize`;
+  const text = [
+    `${inviterName} invited you to join ${orgName} on Algosize.`,
+    ``,
+    `Algosize audits dependencies and source for known vulnerabilities.`,
+    `Joining gives you a seat on their plan — your own runs, their reports.`,
+    ``,
+    `Accept the invite: ${acceptUrl}`,
+    ``,
+    `The link works once and expires in ${expiresInDays} days. It was sent to`,
+    `${email}, so sign in as that address to accept it.`,
+    ``,
+    `If you weren't expecting this, you can ignore the email — nothing is`,
+    `created until you accept.`,
+    ``,
+    `— The Algosize team`,
+  ].join("\n");
+
+  const html = shellHtml(
+    `You've been invited to ${escapeHtml(orgName)}`,
+    `
+      <p style="margin:0 0 16px"><strong>${escapeHtml(inviterName)}</strong> invited you to join <strong>${escapeHtml(orgName)}</strong> on Algosize — dependency and source auditing for known vulnerabilities. Joining gives you a seat on their plan.</p>
+      <p style="margin:0 0 24px">
+        <a href="${acceptUrl}" style="display:inline-block;padding:12px 20px;background:#7ee0c0;color:#06281f;text-decoration:none;border-radius:8px;font-weight:600">Accept the invite →</a>
+      </p>
+      <p style="margin:0 0 8px;font-size:13px;color:#8b949e">The link works once and expires in ${expiresInDays} days. It was sent to <code style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#7ee0c0">${escapeHtml(email)}</code> — sign in as that address to accept.</p>
+      <p style="margin:16px 0 0;font-size:13px;color:#8b949e">If you weren't expecting this, ignore the email — nothing is created until you accept.</p>
+    `,
+  );
+  return { subject, text, html };
+}
+
 function escapeHtml(s) {
   return String(s)
     .replace(/&/g, "&amp;")

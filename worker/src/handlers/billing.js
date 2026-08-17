@@ -18,7 +18,7 @@
 // re-hydrates from /api/me on next page load and reflects the new state.
 
 import { stripeFetch } from "../stripe.js";
-import { getUserById } from "./_users.js";
+import { getActiveOrg } from "./_orgs.js";
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -34,8 +34,11 @@ export async function billingPortalHandler(request, env) {
     return jsonResponse({ error: "unauthorized" }, 401);
   }
 
-  const user = await getUserById(env, sessionUser.userId);
-  if (!user || !user.stripeCustomerId) {
+  // The Stripe customer belongs to the organisation, not the user
+  // (migrations/0004) — on a seated plan several people share one customer,
+  // and the portal is that customer's.
+  const active = await getActiveOrg(env, sessionUser.userId);
+  if (!active || !active.org.stripeCustomerId) {
     return jsonResponse(
       {
         error:   "no_stripe_customer",
@@ -44,6 +47,7 @@ export async function billingPortalHandler(request, env) {
       400,
     );
   }
+  const user = { stripeCustomerId: active.org.stripeCustomerId };
 
   let session;
   try {

@@ -15,6 +15,12 @@ import { handlePreflight, withCors, corsHeaders } from "./cors.js";
 import { requireAuth } from "./auth.js";
 import { checkoutHandler, checkoutSuccessHandler } from "./handlers/checkout.js";
 import { stripeWebhookHandler } from "./handlers/webhook.js";
+import {
+  getOrgHandler,
+  inviteMemberHandler,
+  acceptInviteHandler,
+  removeMemberHandler,
+} from "./handlers/org.js";
 import { analyzeCostHandler, analyzeVulnHandler, analyzeAlgoHandler } from "./handlers/analyze.js";
 import { logoutHandler } from "./handlers/logout.js";
 import { meHandler } from "./handlers/me.js";
@@ -105,6 +111,16 @@ router.get( "/api/runs/:id",        requireAuth, getRunHandler);
 
 // ---- Stripe Customer Portal (Task #18) — manage card / cancel / invoices --
 router.post("/api/billing/portal",  requireAuth, billingPortalHandler);
+
+// ---- Organisations, seats and roles ---------------------------------------
+// Role enforcement lives inside the handlers rather than in middleware: the
+// caller's role is a property of the org they're acting as, so it can't be
+// known until that org is resolved. The invite endpoint shares the signup
+// rate-limit bucket because it, too, sends mail to an attacker-chosen address.
+router.get(   "/api/org",                  requireAuth, getOrgHandler);
+router.post(  "/api/org/invite",           signupRateLimit, requireAuth, inviteMemberHandler);
+router.post(  "/api/org/invite/accept",    requireAuth, acceptInviteHandler);
+router.delete("/api/org/members/:userId",  requireAuth, removeMemberHandler);
 
 // ---- Analytics noscript pixel (Task #26) ----------------------------------
 // Forwards a GET <img> request to Plausible's POST events API so visitors

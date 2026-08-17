@@ -13,6 +13,8 @@
 // version so handlers (webhook.js, checkout.js, billing.js, me.js,
 // signup.js) didn't need any edits during the migration.
 
+import { createOrgForUser, attachCustomerToUsersOrg } from "./_orgs.js";
+
 function newUserId() {
   // 24-char base32-ish ID. crypto.randomUUID is available in Workers + Node 20+.
   return "usr_" + crypto.randomUUID().replace(/-/g, "").slice(0, 20);
@@ -138,7 +140,20 @@ export async function upsertUserFromCheckout(env, { email, stripeCustomerId, sub
       .first();
   }
 
-  return rowToUser(row);
+  const user = rowToUser(row);
+  if (!user) return null;
+
+  // The org is the billing subject (migrations/0004), so a payment has to
+  // land on one. Doing it here rather than in each caller means no path can
+  // produce a paying user with no org — the state entitlement resolves as
+  // `no_org` and refuses.
+  await attachCustomerToUsersOrg(env, user.userId, {
+    stripeCustomerId,
+    subStatus,
+    name: user.email,
+  });
+
+  return user;
 }
 
 /**
@@ -162,6 +177,11 @@ export async function createFreeUser(env, { email }) {
     `INSERT INTO users (user_id, email, stripe_customer_id, plan, sub_status, created_at, updated_at)
      VALUES (?, ?, NULL, 'free', NULL, ?, ?)`,
   ).bind(userId, lowered, now, now).run();
+
+  // Every user owns an organisation from the moment they exist. Entitlement is
+  // resolved through the org (migrations/0004), so a user without one resolves
+  // to no_org and is refused — signup must not be able to produce that state.
+  await createOrgForUser(env, userId, { name: lowered });
 
   const user = {
     userId,

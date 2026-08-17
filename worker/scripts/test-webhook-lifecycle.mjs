@@ -19,7 +19,7 @@
 
 import { stripeWebhookHandler } from "../src/handlers/webhook.js";
 import { buildSignatureHeader } from "../src/stripe.js";
-import { getUserByCustomerId } from "../src/handlers/_users.js";
+import { getOrgByCustomerId } from "../src/handlers/_orgs.js";
 import { resolveEntitlement, ENTITLEMENT_REASON } from "../src/entitlement.js";
 import { makeD1 } from "./_d1-stub.mjs";
 
@@ -76,13 +76,30 @@ async function deliver(env, event, mailbox) {
 const NOW = Math.floor(Date.now() / 1000);
 const DAY = 86_400;
 
-/** Seed a paying customer the way checkout.session.completed would. */
-async function seedCustomer(env, { customerId, email, subStatus = "active", periodEnd = NOW + 30 * DAY }) {
+/**
+ * Seed a paying customer the way checkout.session.completed would: a user for
+ * identity, an organisation holding the Stripe customer and the subscription
+ * state, and an owner membership joining them. Billing lives on the org since
+ * migrations/0004, so seeding only a user row would leave every lifecycle
+ * handler with no org to write to.
+ */
+async function seedCustomer(env, { customerId, email, subStatus = "active", periodEnd = NOW + 30 * DAY, seats = 1 }) {
+  const userId = `usr_${customerId}`;
+  const orgId  = `org_${customerId}`;
   await env.DB.prepare(
     `INSERT INTO users (user_id, email, stripe_customer_id, plan, sub_status,
-                        current_period_end, created_at, updated_at)
-     VALUES (?, ?, ?, 'paid', ?, ?, ?, ?)`,
-  ).bind(`usr_${customerId}`, email, customerId, subStatus, periodEnd, NOW, NOW).run();
+                        active_org_id, created_at, updated_at)
+     VALUES (?, ?, NULL, 'free', NULL, ?, ?, ?)`,
+  ).bind(userId, email, orgId, NOW, NOW).run();
+  await env.DB.prepare(
+    `INSERT INTO organisations (org_id, name, stripe_customer_id, plan, sub_status,
+                                current_period_end, seats_purchased, created_at, updated_at)
+     VALUES (?, ?, ?, 'paid', ?, ?, ?, ?, ?)`,
+  ).bind(orgId, email, customerId, subStatus, periodEnd, seats, NOW, NOW).run();
+  await env.DB.prepare(
+    "INSERT INTO memberships (org_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?)",
+  ).bind(orgId, userId, NOW).run();
+  return { userId, orgId };
 }
 
 /** A Stripe subscription object with one line item. */
@@ -113,17 +130,17 @@ console.log("\ncustomer.subscription.created / .updated — the Portal reaches t
   expect(res.status === 200, "subscription.updated → 200");
   expect(body.handled === "customer.subscription.updated", "reported as handled");
 
-  const user = await getUserByCustomerId(env, "cus_SEATS");
-  expect(user.quantity === 20, `seat count reached the database (got ${user.quantity})`);
-  expect(user.priceId === "price_team_annual", `tier change reached the database (got ${user.priceId})`);
-  expect(user.subStatus === "active", "status mirrored from the subscription");
+  const org = await getOrgByCustomerId(env, "cus_SEATS");
+  expect(org.seatsPurchased === 20, `seat count reached the database (got ${org.seatsPurchased})`);
+  expect(org.priceId === "price_team_annual", `tier change reached the database (got ${org.priceId})`);
+  expect(org.subStatus === "active", "status mirrored from the subscription");
 }
 
 {
   // .created for a customer we already know — same path, and the status is
   // taken from Stripe rather than assumed.
   const env = makeEnv();
-  await seedCustomer(env, { customerId: "cus_NEW", email: "new@example.com", subStatus: "inactive" });
+  const seeded = await seedCustomer(env, { customerId: "cus_NEW", email: "new@example.com", subStatus: "inactive" });
 
   await deliver(env, {
     id: "evt_sub_created",
@@ -131,11 +148,11 @@ console.log("\ncustomer.subscription.created / .updated — the Portal reaches t
     data: { object: subscription({ customer: "cus_NEW", status: "trialing", quantity: 3, trialEnd: NOW + 14 * DAY }) },
   });
 
-  const user = await getUserByCustomerId(env, "cus_NEW");
-  expect(user.subStatus === "trialing", "trialing status stored verbatim, not flattened to active/inactive");
-  expect(user.quantity === 3, "seat count stored on .created");
+  const org = await getOrgByCustomerId(env, "cus_NEW");
+  expect(org.subStatus === "trialing", "trialing status stored verbatim, not flattened to active/inactive");
+  expect(org.seatsPurchased === 3, "seat count stored on .created");
 
-  const ent = await resolveEntitlement(env, user.userId, { now: NOW });
+  const ent = await resolveEntitlement(env, seeded.userId, { now: NOW });
   expect(ent.active === true, "a trialing subscriber is entitled");
   expect(ent.reason === ENTITLEMENT_REASON.TRIALING, `entitlement reason is trialing (got ${ent.reason})`);
 }
@@ -146,7 +163,7 @@ console.log("\ncustomer.subscription.created / .updated — the Portal reaches t
   // period end as a grace window would hand a free month to anyone who opens
   // checkout and abandons it at the card form.
   const env = makeEnv();
-  await seedCustomer(env, { customerId: "cus_INC", email: "inc@example.com", subStatus: "inactive" });
+  const seeded = await seedCustomer(env, { customerId: "cus_INC", email: "inc@example.com", subStatus: "inactive" });
 
   await deliver(env, {
     id: "evt_sub_incomplete",
@@ -154,8 +171,8 @@ console.log("\ncustomer.subscription.created / .updated — the Portal reaches t
     data: { object: subscription({ customer: "cus_INC", status: "incomplete", periodEnd: NOW + 30 * DAY }) },
   });
 
-  const user = await getUserByCustomerId(env, "cus_INC");
-  const ent  = await resolveEntitlement(env, user.userId, { now: NOW });
+  const org = await getOrgByCustomerId(env, "cus_INC");
+  const ent  = await resolveEntitlement(env, seeded.userId, { now: NOW });
   expect(ent.active === false, "an incomplete subscription is NOT entitled despite a future period end");
   expect(ent.reason === ENTITLEMENT_REASON.NOT_ENTITLING_STATUS,
          `entitlement reason is not_entitling_status (got ${ent.reason})`);
@@ -176,11 +193,11 @@ console.log("\ncustomer.subscription.created / .updated — the Portal reaches t
   });
 
   expect(res.status === 200, "subscription for an unknown customer → 200 (not a retry loop)");
-  const user = await getUserByCustomerId(env, "cus_GHOST");
-  expect(!!user, "a user row was created from the expanded customer email");
-  expect(user && user.email === "ghost@example.com", "created with the right email");
-  expect(user && user.quantity === 5, "seat count was not lost on the create path");
-  expect(user && user.priceId === "price_team_annual", "tier was not lost on the create path");
+  const org = await getOrgByCustomerId(env, "cus_GHOST");
+  expect(!!org, "a user row was created from the expanded customer email");
+  expect(org && org.name === "ghost@example.com", "created with the right email");
+  expect(org && org.seatsPurchased === 5, "seat count was not lost on the create path");
+  expect(org && org.priceId === "price_team_annual", "tier was not lost on the create path");
 }
 
 // ---------------------------------------------------------------------------
@@ -189,7 +206,7 @@ console.log("\ninvoice.paid — renewal clears past_due\n");
 
 {
   const env = makeEnv();
-  await seedCustomer(env, { customerId: "cus_PAID", email: "paid@example.com",
+  const seeded = await seedCustomer(env, { customerId: "cus_PAID", email: "paid@example.com",
                             subStatus: "past_due", periodEnd: NOW - DAY });
 
   const newPeriodEnd = NOW + 30 * DAY;
@@ -205,11 +222,11 @@ console.log("\ninvoice.paid — renewal clears past_due\n");
   expect(res.status === 200, "invoice.paid → 200");
   expect(body.handled === "invoice.paid", "invoice.paid is handled, not swallowed by the default branch");
 
-  const user = await getUserByCustomerId(env, "cus_PAID");
-  expect(user.subStatus === "active", `past_due cleared back to active (got ${user.subStatus})`);
-  expect(user.currentPeriodEnd === newPeriodEnd, "paid-through date advanced to the new period");
+  const org = await getOrgByCustomerId(env, "cus_PAID");
+  expect(org.subStatus === "active", `past_due cleared back to active (got ${org.subStatus})`);
+  expect(org.currentPeriodEnd === newPeriodEnd, "paid-through date advanced to the new period");
 
-  const ent = await resolveEntitlement(env, user.userId, { now: NOW });
+  const ent = await resolveEntitlement(env, seeded.userId, { now: NOW });
   expect(ent.active === true, "the renewed subscriber is entitled again");
 }
 
@@ -221,7 +238,7 @@ console.log("\ninvoice.payment_failed — past_due plus one dunning email\n");
   const env = makeEnv();
   const mailbox = makeMailbox();
   const periodEnd = NOW + 10 * DAY;
-  await seedCustomer(env, { customerId: "cus_FAIL", email: "fail@example.com", periodEnd });
+  const seeded = await seedCustomer(env, { customerId: "cus_FAIL", email: "fail@example.com", periodEnd });
 
   const failedInvoice = {
     id: "evt_invoice_failed",
@@ -235,8 +252,8 @@ console.log("\ninvoice.payment_failed — past_due plus one dunning email\n");
   const { res } = await deliver(env, failedInvoice, mailbox);
   expect(res.status === 200, "invoice.payment_failed → 200");
 
-  const user = await getUserByCustomerId(env, "cus_FAIL");
-  expect(user.subStatus === "past_due", `status set to past_due (got ${user.subStatus})`);
+  const org = await getOrgByCustomerId(env, "cus_FAIL");
+  expect(org.subStatus === "past_due", `status set to past_due (got ${org.subStatus})`);
 
   expect(mailbox.sent.length === 1, `exactly one dunning email sent (got ${mailbox.sent.length})`);
   const mail = mailbox.sent[0];
@@ -249,12 +266,12 @@ console.log("\ninvoice.payment_failed — past_due plus one dunning email\n");
 
   // Dunning must not cut access off on the first failure — that is what the
   // two weeks of Stripe retries are for.
-  const ent = await resolveEntitlement(env, user.userId, { now: NOW });
+  const ent = await resolveEntitlement(env, seeded.userId, { now: NOW });
   expect(ent.active === true, "past_due keeps access until the period ends (dunning, not a cliff)");
   expect(ent.reason === ENTITLEMENT_REASON.GRACE_PERIOD, `reason is grace_period (got ${ent.reason})`);
 
   // ...but it does end when the period does.
-  const later = await resolveEntitlement(env, user.userId, { now: periodEnd + 1 });
+  const later = await resolveEntitlement(env, seeded.userId, { now: periodEnd + 1 });
   expect(later.active === false, "past_due past the period end finally drops to free");
 
   // A redelivery of the SAME event must not send a second email.
@@ -291,8 +308,8 @@ console.log("\ncustomer.subscription.trial_will_end — the 3-day reminder\n");
   expect(/cancel/i.test(mail.text), "reminder tells them how to not be charged");
 
   // The subscription itself is unchanged — nothing has happened yet.
-  const user = await getUserByCustomerId(env, "cus_TRIAL");
-  expect(user.subStatus === "trialing", "trial_will_end does not change the stored status");
+  const org = await getOrgByCustomerId(env, "cus_TRIAL");
+  expect(org.subStatus === "trialing", "trial_will_end does not change the stored status");
 
   const { body: replayBody } = await deliver(env, event, mailbox);
   expect(replayBody.deduped === true, "redelivered trial_will_end is deduped");

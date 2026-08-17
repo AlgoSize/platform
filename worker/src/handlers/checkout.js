@@ -19,6 +19,10 @@ function jsonResponse(body, status = 200, extraHeaders = {}) {
   });
 }
 
+// Upper bound on seats a single Checkout Session may request. Anything larger
+// is a sales conversation, not a self-serve card payment.
+const MAX_SEATS_PER_CHECKOUT = 100;
+
 function wantsJson(request) {
   const accept = request.headers.get("Accept") || "";
   if (accept.includes("application/json")) return true;
@@ -37,11 +41,26 @@ function wantsJson(request) {
  *    straight to the Stripe Checkout URL. This is a graceful fallback.
  */
 export async function checkoutHandler(request, env) {
+  // Optional {seats} for team purchases. The endpoint is public (it's the
+  // pricing page's button), so this is buyer-declared intent, not an
+  // entitlement — they are charged for exactly what they ask for. Clamped so a
+  // typo or a scripted request can't create a 10,000-seat Checkout Session.
+  let seats = 1;
+  try {
+    const body = await request.clone().json();
+    if (body && Number.isInteger(body.seats)) {
+      seats = Math.min(Math.max(body.seats, 1), MAX_SEATS_PER_CHECKOUT);
+    }
+  } catch {
+    // No body, or a form POST — the default of one seat stands.
+  }
+
   let session;
   try {
     session = await createCheckoutSession(env, {
       successUrl: `${env.SITE_ORIGIN}/api/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
       cancelUrl:  `${env.SITE_ORIGIN}/#pricing`,
+      quantity:   seats,
     });
   } catch (err) {
     console.error("checkout: stripe error", err);

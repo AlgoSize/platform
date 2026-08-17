@@ -74,19 +74,34 @@ export async function stripeFetch(env, path, { method = "POST", body, idempotenc
  * `successUrl` MUST contain the literal `{CHECKOUT_SESSION_ID}` placeholder
  * — Stripe substitutes the real session id when redirecting the user back.
  */
-export function createCheckoutSession(env, { successUrl, cancelUrl, customerEmail }) {
+export function createCheckoutSession(env, { successUrl, cancelUrl, customerEmail, quantity, orgId } = {}) {
   if (!env.STRIPE_PRICE_ID) {
     throw new Error("STRIPE_PRICE_ID is not set. See worker/.dev.vars.example.");
   }
+
+  // Seats. This was hardcoded to "1", which is why the product could not sell
+  // a team: the subscription Stripe billed for never had more than one seat on
+  // it no matter what the buyer wanted. Defaults to 1 so every existing caller
+  // behaves exactly as before.
+  const seats = Number.isInteger(quantity) && quantity > 0 ? quantity : 1;
+
   const body = {
     mode: "subscription",
     "line_items[0][price]": env.STRIPE_PRICE_ID,
-    "line_items[0][quantity]": "1",
+    "line_items[0][quantity]": String(seats),
     success_url: successUrl,
     cancel_url: cancelUrl,
     allow_promotion_codes: "true",
   };
   if (customerEmail) body.customer_email = customerEmail;
+  if (orgId) {
+    // Both locations on purpose: client_reference_id comes back on the
+    // checkout session, and the metadata copy rides on the subscription so
+    // later subscription.updated events can be resolved to an org without
+    // guessing from the email.
+    body.client_reference_id = orgId;
+    body["subscription_data[metadata][org_id]"] = orgId;
+  }
   return stripeFetch(env, "/checkout/sessions", { method: "POST", body });
 }
 

@@ -22,6 +22,7 @@
 // show it.
 
 import { getUserById } from "./handlers/_users.js";
+import { getActiveOrg } from "./handlers/_orgs.js";
 import { captureException } from "./observability.js";
 
 /**
@@ -32,6 +33,7 @@ import { captureException } from "./observability.js";
 export const ENTITLEMENT_REASON = Object.freeze({
   NO_USER_ID:        "no_user_id",
   NO_USER_ROW:       "no_user_row",
+  NO_ORG:            "no_org",
   FREE_PLAN:         "free_plan",
   ACTIVE_SUBSCRIPTION: "active_subscription",
   TRIALING:          "trialing",
@@ -73,14 +75,22 @@ const GRACE_ELIGIBLE_STATUSES = new Set(["past_due", "inactive", "canceled", "un
 /**
  * Resolve what an account is entitled to.
  *
- * Returns `{ plan, active, reason, currentPeriodEnd, user }`:
- *   plan     "paid" | "free" — what the row claims.
+ * Entitlement belongs to the ORGANISATION, not the user (migrations/0004): a
+ * seat on a paid org is what grants access, so every member of a paid org is
+ * entitled and losing the seat ends it. The user's active org is resolved
+ * first, and its billing columns are the only ones consulted.
+ *
+ * Returns `{ plan, active, reason, currentPeriodEnd, user, org, role }`:
+ *   plan     "paid" | "free" — what the org row claims.
  *   active   boolean — whether paid features should actually be served.
  *            THIS is what callers gate on, never `plan` alone: a cancelled
  *            customer inside their grace window is plan "paid", and one past
  *            the end of it is plan "paid" with active false.
  *   reason   an ENTITLEMENT_REASON, for logs, tags and tests.
- *   user     the row we read, passed back so callers don't fetch it twice.
+ *   user     the user row, passed back so callers don't fetch it twice.
+ *   org      the organisation the decision was made against, or null.
+ *   role     the caller's role in that org ("owner" | "admin" | "member"),
+ *            so route handlers can authorise without a second query.
  *
  * `now` (unix seconds) is injectable so tests can sit either side of a period
  * boundary without touching the clock. `ctx`/`request` are threaded through to
@@ -88,10 +98,13 @@ const GRACE_ELIGIBLE_STATUSES = new Set(["past_due", "inactive", "canceled", "un
  */
 export async function resolveEntitlement(env, userId, { now, ctx, request } = {}) {
   const nowSec = typeof now === "number" ? now : Math.floor(Date.now() / 1000);
+  const deny = (reason, extra = {}) => ({
+    plan: "free", active: false, reason, currentPeriodEnd: null, user: null, org: null, role: null, ...extra,
+  });
 
   if (!userId) {
     // requireAuth should have caught this long before here.
-    return { plan: "free", active: false, reason: ENTITLEMENT_REASON.NO_USER_ID, currentPeriodEnd: null, user: null };
+    return deny(ENTITLEMENT_REASON.NO_USER_ID);
   }
 
   const user = await getUserById(env, userId);
@@ -104,32 +117,46 @@ export async function resolveEntitlement(env, userId, { now, ctx, request } = {}
       new Error(`entitlement: no users row for session userId ${userId}`),
       { request, userId, tags: { source: "entitlement", reason: ENTITLEMENT_REASON.NO_USER_ROW } },
     );
-    return { plan: "free", active: false, reason: ENTITLEMENT_REASON.NO_USER_ROW, currentPeriodEnd: null, user: null };
+    return deny(ENTITLEMENT_REASON.NO_USER_ROW);
   }
 
-  const plan = user.plan === "paid" ? "paid" : "free";
-  const currentPeriodEnd = typeof user.currentPeriodEnd === "number" ? user.currentPeriodEnd : null;
-
-  if (plan !== "paid") {
-    return { plan: "free", active: false, reason: ENTITLEMENT_REASON.FREE_PLAN, currentPeriodEnd, user };
+  // The org is the billing subject (migrations/0004). A user with no org is
+  // the same class of bug as a user with no row — the backfill gave everyone
+  // one and every signup path creates one — so it is surfaced and fails
+  // closed rather than quietly falling back to the dead users.plan column.
+  const active = await getActiveOrg(env, userId);
+  if (!active) {
+    await captureException(
+      env, ctx,
+      new Error(`entitlement: no organisation for userId ${userId}`),
+      { request, userId, tags: { source: "entitlement", reason: ENTITLEMENT_REASON.NO_ORG } },
+    );
+    return deny(ENTITLEMENT_REASON.NO_ORG, { user });
   }
 
-  if (ENTITLING_STATUSES.has(user.subStatus)) {
+  const { org, role } = active;
+  const currentPeriodEnd = org.currentPeriodEnd;
+  const base = { currentPeriodEnd, user, org, role };
+
+  if (org.plan !== "paid") {
+    return { plan: "free", active: false, reason: ENTITLEMENT_REASON.FREE_PLAN, ...base };
+  }
+
+  if (ENTITLING_STATUSES.has(org.subStatus)) {
     return {
       plan: "paid",
       active: true,
-      reason: user.subStatus === "trialing"
+      reason: org.subStatus === "trialing"
         ? ENTITLEMENT_REASON.TRIALING
         : ENTITLEMENT_REASON.ACTIVE_SUBSCRIPTION,
-      currentPeriodEnd,
-      user,
+      ...base,
     };
   }
 
-  if (!GRACE_ELIGIBLE_STATUSES.has(user.subStatus)) {
+  if (!GRACE_ELIGIBLE_STATUSES.has(org.subStatus)) {
     // A status that never earned access in the first place. Fail closed
     // without consulting the period end — see the comment on the set above.
-    return { plan: "paid", active: false, reason: ENTITLEMENT_REASON.NOT_ENTITLING_STATUS, currentPeriodEnd, user };
+    return { plan: "paid", active: false, reason: ENTITLEMENT_REASON.NOT_ENTITLING_STATUS, ...base };
   }
 
   // Paid, but the subscription is no longer active: serve the rest of the
@@ -138,10 +165,10 @@ export async function resolveEntitlement(env, userId, { now, ctx, request } = {}
     // Nothing to measure the grace window against. Fail closed — but this is
     // worth seeing, because it also describes any pre-existing paid row that
     // was written before `current_period_end` existed as a column.
-    return { plan: "paid", active: false, reason: ENTITLEMENT_REASON.MISSING_PERIOD_END, currentPeriodEnd, user };
+    return { plan: "paid", active: false, reason: ENTITLEMENT_REASON.MISSING_PERIOD_END, ...base };
   }
   if (nowSec < currentPeriodEnd) {
-    return { plan: "paid", active: true, reason: ENTITLEMENT_REASON.GRACE_PERIOD, currentPeriodEnd, user };
+    return { plan: "paid", active: true, reason: ENTITLEMENT_REASON.GRACE_PERIOD, ...base };
   }
-  return { plan: "paid", active: false, reason: ENTITLEMENT_REASON.PERIOD_EXPIRED, currentPeriodEnd, user };
+  return { plan: "paid", active: false, reason: ENTITLEMENT_REASON.PERIOD_EXPIRED, ...base };
 }

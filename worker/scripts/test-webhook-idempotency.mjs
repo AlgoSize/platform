@@ -22,7 +22,8 @@
 
 import { stripeWebhookHandler } from "../src/handlers/webhook.js";
 import { buildSignatureHeader } from "../src/stripe.js";
-import { getUserByEmail, getUserByCustomerId } from "../src/handlers/_users.js";
+import { getUserByEmail } from "../src/handlers/_users.js";
+import { getOrgByCustomerId } from "../src/handlers/_orgs.js";
 import { makeD1, makeFailingD1 } from "./_d1-stub.mjs";
 
 const SECRET     = "whsec_idempotency_test_secret_xxxxxxxxxxxxxx";  // 32+ chars
@@ -218,7 +219,9 @@ console.log("\nwebhook idempotency — independence between events\n");
   expect(bodyJsonB.handled === "customer.subscription.deleted",
     "event B fully processed (handled=customer.subscription.deleted)");
 
-  const cancelled = await getUserByCustomerId(env, "cus_SHARED");
+  // Subscription state lives on the ORGANISATION (migrations/0004): the user
+  // row carries identity, the org carries billing.
+  const cancelled = await getOrgByCustomerId(env, "cus_SHARED");
   expect(cancelled && cancelled.subStatus === "inactive",
     "event B flipped subStatus to inactive (per-event dedup, not per-customer)");
 

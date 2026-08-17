@@ -59,16 +59,29 @@ const DAY = 86_400;
 // unambiguously in the past for any real clock instead.
 const LONG_EXPIRED = 1_000_000_000;   // 2001-09-09
 
-/** Insert a users row directly so each case starts from an exact state. */
-async function seedUser(env, { userId, plan = "free", subStatus = null, periodEnd = null, email }) {
+/**
+ * Insert a user and the organisation they own, so each case starts from an
+ * exact state. Entitlement is resolved from the ORG since migrations/0004 —
+ * the plan and subscription columns go there, and the user row carries only
+ * identity. Seeding a user alone would resolve as `no_org`.
+ */
+async function seedUser(env, { userId, plan = "free", subStatus = null, periodEnd = null, email, seats = 1 }) {
+  const addr  = email || `${userId}@example.com`;
+  const orgId = `org_${userId}`;
   await env.DB.prepare(
     `INSERT INTO users (user_id, email, stripe_customer_id, plan, sub_status,
-                        current_period_end, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).bind(
-    userId, email || `${userId}@example.com`, plan === "paid" ? `cus_${userId}` : null,
-    plan, subStatus, periodEnd, NOW, NOW,
-  ).run();
+                        active_org_id, created_at, updated_at)
+     VALUES (?, ?, NULL, 'free', NULL, ?, ?, ?)`,
+  ).bind(userId, addr, orgId, NOW, NOW).run();
+  await env.DB.prepare(
+    `INSERT INTO organisations (org_id, name, stripe_customer_id, plan, sub_status,
+                                current_period_end, seats_purchased, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).bind(orgId, addr, plan === "paid" ? `cus_${userId}` : null, plan, subStatus,
+         periodEnd, seats, NOW, NOW).run();
+  await env.DB.prepare(
+    "INSERT INTO memberships (org_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?)",
+  ).bind(orgId, userId, NOW).run();
 }
 
 function authedRequest(userId, url = "https://algosize.com/api/analyze/vuln", body = { code: "const x = 1;" }) {

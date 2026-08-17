@@ -43,12 +43,13 @@
 // the endpoint with bogus event ids.
 
 import { verifyStripeSignature, stripeFetch } from "../stripe.js";
+import { upsertUserFromCheckout } from "./_users.js";
 import {
-  upsertUserFromCheckout,
-  setSubStatusByCustomerId,
-  updateSubscriptionByCustomerId,
-  getUserByCustomerId,
-} from "./_users.js";
+  getOrgByCustomerId,
+  getOrgBillingEmail,
+  updateOrgSubscriptionByCustomerId,
+  setOrgSubStatusByCustomerId,
+} from "./_orgs.js";
 import { captureException, captureMessage } from "../observability.js";
 import { sendTransactional as defaultSendTransactional } from "../email/transactional.js";
 import { paymentFailed, trialEndingSoon } from "../email/templates.js";
@@ -222,6 +223,9 @@ async function handleCheckoutCompleted(env, event) {
     return;
   }
 
+  // The user row carries identity; the ORG carries billing (migrations/0004).
+  // upsertUserFromCheckout attaches the customer to the payer's organisation,
+  // creating one if this payment is the first thing we've seen from them.
   await upsertUserFromCheckout(env, {
     email,
     stripeCustomerId: customerId,
@@ -245,9 +249,9 @@ async function handleSubscriptionDeleted(env, event) {
   // unix seconds; a missing value leaves the stored one alone.
   const periodEnd = typeof sub.current_period_end === "number" ? sub.current_period_end : null;
 
-  const updated = await setSubStatusByCustomerId(env, customerId, "inactive", periodEnd);
+  const updated = await setOrgSubStatusByCustomerId(env, customerId, "inactive", periodEnd);
   if (!updated) {
-    console.warn("customer.subscription.deleted: no user found for customer", customerId);
+    console.warn("customer.subscription.deleted: no org found for customer", customerId);
   }
 }
 
@@ -272,17 +276,17 @@ async function handleSubscriptionUpsert(env, ctx, event) {
   }
 
   const fields = subscriptionFields(sub);
-  const updated = await updateSubscriptionByCustomerId(env, customerId, fields);
+  const updated = await updateOrgSubscriptionByCustomerId(env, customerId, fields);
   if (updated) return;
 
-  // No row for this customer. Two ways to get here, both real: a subscription
+  // No org for this customer. Two ways to get here, both real: a subscription
   // created straight from the Stripe dashboard/API (never went through our
   // checkout), or `.created` overtaking `checkout.session.completed` in
-  // delivery order. Recover the email from Stripe and create the row, so the
-  // seat count and tier aren't lost until the next subscription update.
+  // delivery order. Recover the email from Stripe and attach, so the seat
+  // count and tier aren't lost until the next subscription update.
   const email = await resolveCustomerEmail(env, ctx, sub, customerId);
   if (!email) {
-    console.warn(`${event.type}: no user for customer and no email to create one`, customerId);
+    console.warn(`${event.type}: no org for customer and no email to create one`, customerId);
     return;
   }
 
@@ -291,9 +295,10 @@ async function handleSubscriptionUpsert(env, ctx, event) {
     stripeCustomerId: customerId,
     subStatus: fields.subStatus,
   });
-  // upsertUserFromCheckout writes identity and status; the subscription
-  // detail columns it doesn't know about are filled in by a second pass.
-  await updateSubscriptionByCustomerId(env, customerId, fields);
+  // That attaches the customer to an org and writes identity and status; the
+  // remaining subscription columns are filled in by a second pass, now that
+  // the customer id resolves to an org.
+  await updateOrgSubscriptionByCustomerId(env, customerId, fields);
 }
 
 /**
@@ -311,7 +316,7 @@ async function handleInvoicePaid(env, ctx, event) {
     return;
   }
 
-  const updated = await updateSubscriptionByCustomerId(env, customerId, {
+  const updated = await updateOrgSubscriptionByCustomerId(env, customerId, {
     plan:             "paid",
     subStatus:        "active",
     // `undefined` when the invoice carries no line period, which leaves the
@@ -319,7 +324,7 @@ async function handleInvoicePaid(env, ctx, event) {
     currentPeriodEnd: invoicePeriodEnd(invoice),
   });
   if (!updated) {
-    console.warn("invoice.paid: no user found for customer", customerId);
+    console.warn("invoice.paid: no org found for customer", customerId);
   }
 }
 
@@ -341,14 +346,19 @@ async function handleInvoicePaymentFailed(env, ctx, event, send) {
     return;
   }
 
-  const user = await updateSubscriptionByCustomerId(env, customerId, {
+  const org = await updateOrgSubscriptionByCustomerId(env, customerId, {
     subStatus: "past_due",
   });
-  if (!user) {
-    console.warn("invoice.payment_failed: no user found for customer", customerId);
+  if (!org) {
+    console.warn("invoice.payment_failed: no org found for customer", customerId);
     return;
   }
-  if (!user.email) return;
+
+  // Dunning goes to whoever owns the billing relationship, not to whichever
+  // member happened to trigger something — on a seated plan those are
+  // routinely different people, and only the owner can fix the card.
+  const billingEmail = await getOrgBillingEmail(env, org.orgId);
+  if (!billingEmail) return;
 
   // Awaited rather than queued on ctx.waitUntil: sendTransactional never
   // throws (it funnels its own failures to Sentry), so awaiting cannot turn a
@@ -357,11 +367,11 @@ async function handleInvoicePaymentFailed(env, ctx, event, send) {
   // event dedup above is what makes "exactly one email per failed invoice"
   // true even when Stripe redelivers.
   await send(env, ctx, {
-    to: user.email,
+    to: billingEmail,
     ...paymentFailed({
-      email:        user.email,
+      email:        billingEmail,
       amountDue:    formatMoney(invoice.amount_due, invoice.currency),
-      accessEndsOn: formatDateUtc(user.currentPeriodEnd),
+      accessEndsOn: formatDateUtc(org.currentPeriodEnd),
       payUrl:       invoice.hosted_invoice_url || null,
       attemptCount: typeof invoice.attempt_count === "number" ? invoice.attempt_count : null,
     }),
@@ -383,17 +393,18 @@ async function handleTrialWillEnd(env, ctx, event, send) {
     return;
   }
 
-  const user = await getUserByCustomerId(env, customerId);
-  if (!user || !user.email) {
-    console.warn("customer.subscription.trial_will_end: no user found for customer", customerId);
+  const org = await getOrgByCustomerId(env, customerId);
+  const billingEmail = org && await getOrgBillingEmail(env, org.orgId);
+  if (!billingEmail) {
+    console.warn("customer.subscription.trial_will_end: no org found for customer", customerId);
     return;
   }
 
   const price = firstItem(sub)?.price;
   await send(env, ctx, {
-    to: user.email,
+    to: billingEmail,
     ...trialEndingSoon({
-      email:       user.email,
+      email:       billingEmail,
       trialEndsOn: formatDateUtc(sub.trial_end),
       amount:      price ? formatMoney(price.unit_amount, price.currency) : null,
     }),
@@ -448,7 +459,9 @@ function subscriptionFields(sub) {
     plan:             "paid",
     subStatus:        typeof sub.status === "string" && sub.status ? sub.status : "inactive",
     currentPeriodEnd: subscriptionPeriodEnd(sub),
-    quantity:         typeof item?.quantity === "number" ? item.quantity : undefined,
+    // The line-item quantity IS the seat count — this is what makes a seat
+    // change made in the Customer Portal reach the invite gate.
+    seatsPurchased:   typeof item?.quantity === "number" ? item.quantity : undefined,
     priceId:          item?.price?.id || undefined,
   };
 }
