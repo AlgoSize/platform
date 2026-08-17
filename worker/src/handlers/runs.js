@@ -26,6 +26,9 @@
 
 import { getActiveOrg } from "./_orgs.js";
 import { toSarif } from "../analyzers/sarif.js";
+import { toCycloneDX } from "../analyzers/cyclonedx.js";
+import { reportHtmlFor } from "../reports/render.js";
+import { createShare, readShare, revokeShare, DEFAULT_SHARE_DAYS, MAX_SHARE_DAYS } from "../reports/share.js";
 
 const json = (body, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -357,21 +360,99 @@ export async function getRunHandler(request, env) {
   return json(run, 200);
 }
 
+// ---------------------------------------------------------------------------
+// Report rendering — shared by the authenticated route and the share link
+// ---------------------------------------------------------------------------
+
+export const REPORT_FORMATS = Object.freeze(["html", "sarif", "cyclonedx", "json"]);
+
 /**
- * GET /api/runs/:id/report?format=sarif|json
+ * Build the response for one run in one format.
  *
- * SARIF 2.1.0 so findings land in the repo's GitHub Security tab — the
- * workflow in .github/workflows/algosize-audit.yml.example downloads this and
- * hands it to github/codeql-action/upload-sarif.
- *
- * Rendered ON DEMAND from the stored result rather than served from R2. P-6
- * is what introduces the R2 bucket and the HTML/PDF artefacts; adding an R2
- * binding here would mean a resource that has to be provisioned before the
- * next deploy succeeds, for no benefit yet — the run row already holds
- * everything SARIF needs. When P-6 lands it can cache into R2 behind this
- * same URL without changing a single caller.
+ * Factored out because the authenticated route and the public share route must
+ * produce byte-identical documents — the whole promise of a share link is that
+ * the client sees what the customer saw. Two code paths would eventually
+ * disagree about something small and embarrassing, like the generated-at date.
  */
-export async function getRunReportHandler(request, env) {
+async function renderReportResponse(env, ctx, run, format) {
+  if (format === "json") return json(run.result ?? {}, 200);
+
+  // The three real report formats all describe a dependency audit. A cost or
+  // algorithm run has no advisories, no packages, and nothing to hand anyone.
+  if (format !== "json" && run.analyzer !== "vuln") {
+    return json({
+      error: "unsupported_format",
+      message: `${format.toUpperCase()} is only produced for dependency audits; this run is a "${run.analyzer}" run.`,
+    }, 400);
+  }
+
+  if (format === "html") {
+    const { html } = await reportHtmlFor(env, ctx, run);
+    return new Response(html, {
+      status: 200,
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        // Inline, not an attachment: this one is meant to be READ, and the
+        // print-to-PDF path needs it rendered in a browser tab.
+        "content-disposition": `inline; filename="algosize-report-${run.id}.html"`,
+        // The report embeds nothing but an operator-set logo. Locking the page
+        // down means a forwarded document cannot be turned into a delivery
+        // vehicle for anything else.
+        "content-security-policy":
+          "default-src 'none'; img-src https: data:; style-src 'unsafe-inline'; " +
+          "script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+      },
+    });
+  }
+
+  if (format === "sarif") {
+    const sarif = toSarif(run.result, { runId: run.id, siteOrigin: env.SITE_ORIGIN || "" });
+    return new Response(JSON.stringify(sarif, null, 2), {
+      status: 200,
+      headers: {
+        "content-type": "application/sarif+json",
+        "content-disposition": `attachment; filename="algosize-${run.id}.sarif"`,
+      },
+    });
+  }
+
+  if (format === "cyclonedx") {
+    const input = run.input || {};
+    const bom = toCycloneDX(run.result, {
+      runId: run.id,
+      siteOrigin: env.SITE_ORIGIN || "",
+      serialNumber: `urn:uuid:${crypto.randomUUID()}`,
+      timestamp: new Date(run.createdAt || Date.now()).toISOString(),
+      projectName: input.repo || (run.result && run.result.ci && run.result.ci.repo) || null,
+    });
+    return new Response(JSON.stringify(bom, null, 2), {
+      status: 200,
+      headers: {
+        "content-type": "application/vnd.cyclonedx+json; version=1.5",
+        "content-disposition": `attachment; filename="algosize-${run.id}.cdx.json"`,
+      },
+    });
+  }
+
+  return json({
+    error: "unsupported_format",
+    message: `Supported formats: ${REPORT_FORMATS.join(", ")}.`,
+  }, 400);
+}
+
+/**
+ * GET /api/runs/:id/report?format=html|sarif|cyclonedx|json
+ *
+ *   html       the client-facing report. Served from R2 when it is there,
+ *              rendered and backfilled when it is not. Print to PDF from the
+ *              browser — see the print stylesheet in reports/html.js.
+ *   sarif      SARIF 2.1.0, so findings land in the repo's Security tab.
+ *   cyclonedx  CycloneDX 1.5 SBOM, for the procurement questionnaire.
+ *   json       the raw stored result, unchanged.
+ */
+export async function getRunReportHandler(request, env, ctx) {
   const scope = await runScopeFor(request, env);
   if (!scope) return json({ error: "unauthorized" }, 401);
 
@@ -383,28 +464,139 @@ export async function getRunReportHandler(request, env) {
 
   const url = new URL(request.url);
   const format = (url.searchParams.get("format") || "json").toLowerCase();
-
-  if (format === "json") return json(run.result ?? {}, 200);
-
-  if (format === "sarif") {
-    if (run.analyzer !== "vuln") {
-      return json({
-        error: "unsupported_format",
-        message: `SARIF is only produced for dependency audits; this run is a "${run.analyzer}" run.`,
-      }, 400);
-    }
-    const sarif = toSarif(run.result, { runId: run.id, siteOrigin: env.SITE_ORIGIN || "" });
-    return new Response(JSON.stringify(sarif, null, 2), {
-      status: 200,
-      headers: {
-        "content-type": "application/sarif+json",
-        "content-disposition": `attachment; filename="algosize-${run.id}.sarif"`,
-      },
-    });
+  if (!REPORT_FORMATS.includes(format)) {
+    return json({
+      error: "unsupported_format",
+      message: `Supported formats: ${REPORT_FORMATS.join(", ")}.`,
+    }, 400);
   }
 
+  return renderReportResponse(env, ctx, run, format);
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/runs/:id/share
+// ---------------------------------------------------------------------------
+
+/**
+ * Mint a read-only share link for one run.
+ *
+ * Authenticated and org-scoped: you can only share a run you can already read,
+ * which is what stops a token being minted for someone else's audit. The link
+ * itself then needs no session at all — that is the point, since the person
+ * opening it is the customer's client.
+ */
+export async function createRunShareHandler(request, env) {
+  const scope = await runScopeFor(request, env);
+  if (!scope) return json({ error: "unauthorized" }, 401);
+
+  const id = request.params && request.params.id;
+  if (!id) return json({ error: "missing_id", message: "run id required" }, 400);
+
+  const run = await getRun(env, scope, id);
+  if (!run) return json({ error: "not_found", message: "no such run" }, 404);
+
+  let body = null;
+  try { body = await request.json(); } catch { /* no body — defaults apply */ }
+
+  const share = await createShare(env, {
+    runId: run.id,
+    // The RUN's org, not the caller's, so the link resolves to the same
+    // branding and the same data no matter who later opens it.
+    orgId: run.orgId,
+    createdBy: (request.user && request.user.userId) || null,
+    expiresInDays: body && body.expiresInDays,
+  });
+
+  if (!share) {
+    return json({ error: "share_failed", message: "Could not create a share link. Try again." }, 502);
+  }
+
+  const origin = (env.SITE_ORIGIN || "").replace(/\/$/, "");
   return json({
-    error: "unsupported_format",
-    message: 'Supported formats: "sarif", "json". HTML and CycloneDX arrive with the report work (P-6).',
-  }, 400);
+    ok: true,
+    url: `${origin}/api/share/${share.token}`,
+    token: share.token,
+    expiresAt: share.expiresAt,
+    expiresInDays: share.expiresInDays,
+    defaultExpiresInDays: DEFAULT_SHARE_DAYS,
+    maxExpiresInDays: MAX_SHARE_DAYS,
+    message: "Anyone with this link can read this one report until it expires. It grants nothing else.",
+  }, 201);
+}
+
+/** DELETE /api/runs/:id/share/:token — revoke a link early. */
+export async function revokeRunShareHandler(request, env) {
+  const scope = await runScopeFor(request, env);
+  if (!scope) return json({ error: "unauthorized" }, 401);
+
+  const token = request.params && request.params.token;
+  if (!token) return json({ error: "invalid_request", message: "No share token supplied." }, 400);
+
+  // Confirm the token belongs to a run this caller can read before deleting
+  // it, so a guessed token cannot be revoked by someone outside the org.
+  const existing = await readShare(env, token);
+  const runId = existing.share && existing.share.runId;
+  if (!runId || !(await getRun(env, scope, runId))) {
+    return json({ error: "not_found", message: "No share link with that token on this organisation." }, 404);
+  }
+
+  await revokeShare(env, token);
+  return json({ ok: true, revoked: true });
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/share/:token — public, read-only, one run
+// ---------------------------------------------------------------------------
+
+/**
+ * Serve a shared report. NO SESSION REQUIRED — that is the whole feature.
+ *
+ * The token names exactly one run id, so possession of a link grants exactly
+ * one report and nothing else: no listing, no other runs, no account access.
+ */
+export async function sharedReportHandler(request, env, ctx) {
+  const token = request.params && request.params.token;
+
+  const resolved = await readShare(env, token);
+  if (!resolved.ok) {
+    // Distinct wording, deliberately. "Expired" tells the reader to ask for a
+    // fresh link; "not found" tells them to check the one they have. 410 Gone
+    // is the honest status for something that existed and stopped.
+    if (resolved.reason === "expired") {
+      return json({
+        error: "share_expired",
+        message: "This report link has expired. Ask whoever sent it for a new one.",
+      }, 410);
+    }
+    return json({
+      error: "share_not_found",
+      message: "This report link is not valid. It may have been revoked, or the address may be incomplete.",
+    }, 404);
+  }
+
+  // Read the run by its own ids rather than through the caller — there is no
+  // caller. The token is the authorisation, and it names both.
+  const run = await getRun(env, { orgId: resolved.share.orgId, userId: null }, resolved.share.runId);
+  if (!run) {
+    return json({
+      error: "share_not_found",
+      message: "The report this link points to is no longer available.",
+    }, 404);
+  }
+
+  const url = new URL(request.url);
+  const format = (url.searchParams.get("format") || "html").toLowerCase();
+  if (!REPORT_FORMATS.includes(format)) {
+    return json({
+      error: "unsupported_format",
+      message: `Supported formats: ${REPORT_FORMATS.join(", ")}.`,
+    }, 400);
+  }
+
+  const response = await renderReportResponse(env, ctx, run, format);
+  // A shared report must never end up in a search index or a shared cache.
+  response.headers.set("x-robots-tag", "noindex, nofollow");
+  response.headers.set("cache-control", "private, no-store");
+  return response;
 }

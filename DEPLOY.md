@@ -403,6 +403,47 @@ old `RUNS` KV namespace is unreferenced. Delete it from
 Leave `USERS` KV in place — it still holds the monthly quota counters
 (`quota:<userId>:<YYYY-MM>`).
 
+#### 2.5.8 Create the reports R2 bucket (Task #P-6)
+
+The HTML report a customer hands to their own client is rendered once and
+stored in R2, keyed `reports/<orgId>/<runId>.html`. Create the bucket once
+per environment before the next deploy:
+
+```bash
+./node_modules/.bin/wrangler r2 bucket create algosize-reports
+./node_modules/.bin/wrangler r2 bucket create algosize-reports-staging
+```
+
+The `REPORTS` binding is already declared in `wrangler.toml` for the default,
+production and staging environments.
+
+**This one is not deploy-blocking.** Every read and write goes through
+`src/reports/store.js`, which no-ops when the binding is absent, and the
+report route falls back to rendering on demand — same bytes, one render per
+request instead of per run. So a deploy without the bucket works; it is just
+slower for anyone opening a shared link. Create it when convenient, not
+urgently.
+
+Objects are written with `cache-control: private, max-age=31536000, immutable`
+and are never rewritten: a report describes one run at one instant, and a
+document a customer has already forwarded must not silently change under them.
+Deleting everything for one customer is a prefix delete on `reports/<orgId>/`.
+
+#### 2.5.9 Apply migration 0008 (white-label branding)
+
+Adds two nullable columns to `organisations` for the top-tier white-label
+report branding:
+
+```bash
+./node_modules/.bin/wrangler d1 execute algosize --env production --remote \
+  --file=worker/migrations/0008_org_branding.sql
+```
+
+Whether an org may USE those columns is resolved at render time from the live
+entitlement and price id — the columns are storage, not permission — so a
+lapsed Firm subscription stops white-labelling on its next report without
+anyone clearing the row.
+
 ### 2.6 Deploy
 
 > **CI handles this on every push (Task #24).** Once

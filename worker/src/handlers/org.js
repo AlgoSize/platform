@@ -29,8 +29,18 @@ import {
   canManageMembers,
   addMember,
   removeMember,
+  updateOrgBranding,
 } from "./_orgs.js";
 import { getUserById } from "./_users.js";
+import { resolveEntitlementForOrg } from "../entitlement.js";
+import {
+  mayWhiteLabel,
+  tierForOrg,
+  safeLogoUrl,
+  safeCompanyName,
+  MAX_COMPANY_NAME_LEN,
+  WHITE_LABEL_TIER,
+} from "../reports/branding.js";
 import { sendTransactional as defaultSendTransactional } from "../email/transactional.js";
 import { orgInvite } from "../email/templates.js";
 
@@ -135,9 +145,10 @@ export async function getOrgHandler(request, env) {
   if (ctxOrg.error) return ctxOrg.error;
   const { org, role } = ctxOrg;
 
-  const [members, pending] = await Promise.all([
+  const [members, pending, entitlement] = await Promise.all([
     listMembers(env, org.orgId),
     readPendingInvites(env, org.orgId),
+    resolveEntitlementForOrg(env, org.orgId, { request }),
   ]);
 
   return jsonResponse({
@@ -148,10 +159,117 @@ export async function getOrgHandler(request, env) {
       subStatus:      org.subStatus,
       seatsPurchased: org.seatsPurchased,
       seatsUsed:      members.length + pending.length,
+      tier:           tierForOrg(env, org),
+    },
+    // What the org has SET, plus whether it currently applies. The two are
+    // separate on purpose: a lapsed subscription keeps the saved values but
+    // stops using them, and the UI should be able to say so rather than
+    // showing a logo that no longer appears on reports.
+    branding: {
+      companyName: org.brandCompanyName || null,
+      logoUrl:     org.brandLogoUrl || null,
+      available:   mayWhiteLabel(env, org, entitlement),
+      appliesToNewReports: mayWhiteLabel(env, org, entitlement)
+        && !!(org.brandCompanyName || org.brandLogoUrl),
     },
     role,
     members,
     pendingInvites: pending.map((i) => ({ email: i.email, sentAt: i.sentAt })),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// PUT /api/org/branding   body {companyName?, logoUrl?}
+//
+// White-label report branding, top tier only. Owner/admin, like every other
+// org-level setting — this changes what a document sent to the customer's
+// own client says it came from.
+// ---------------------------------------------------------------------------
+export async function updateOrgBrandingHandler(request, env) {
+  const ctxOrg = await requireOrg(request, env, { manage: true });
+  if (ctxOrg.error) return ctxOrg.error;
+  const { org } = ctxOrg;
+
+  const entitlement = await resolveEntitlementForOrg(env, org.orgId, { request });
+  if (!mayWhiteLabel(env, org, entitlement)) {
+    // 402, not 403: the resolution is a purchase, same as seat and monitor
+    // limits. A 403 would read as "you're not allowed", which is wrong — they
+    // are, on a different plan.
+    return jsonResponse(
+      {
+        error:   "white_label_not_available",
+        message: `Custom report branding is included on the ${WHITE_LABEL_TIER.charAt(0).toUpperCase() + WHITE_LABEL_TIER.slice(1)} plan. ` +
+                 `Upgrade to put your own name and logo on reports you send to clients.`,
+        tier:        tierForOrg(env, org),
+        requiredTier: WHITE_LABEL_TIER,
+        upgradeUrl:  `${env.SITE_ORIGIN || ""}/#pricing`,
+      },
+      402,
+    );
+  }
+
+  let body;
+  try { body = await request.json(); }
+  catch { return jsonResponse({ error: "invalid_json", message: "Request body must be valid JSON." }, 400); }
+
+  // `undefined` leaves a field alone; explicit null clears it. Clearing the
+  // logo must not also wipe the company name.
+  const patch = {};
+
+  if (body && body.companyName !== undefined) {
+    if (body.companyName === null || body.companyName === "") {
+      patch.companyName = null;
+    } else {
+      const name = safeCompanyName(body.companyName);
+      if (!name) {
+        return jsonResponse(
+          { error: "invalid_company_name", message: `Company name must be 1–${MAX_COMPANY_NAME_LEN} characters.` },
+          400,
+        );
+      }
+      patch.companyName = name;
+    }
+  }
+
+  if (body && body.logoUrl !== undefined) {
+    if (body.logoUrl === null || body.logoUrl === "") {
+      patch.logoUrl = null;
+    } else {
+      const url = safeLogoUrl(body.logoUrl);
+      if (!url) {
+        // Named explicitly rather than "invalid URL": the https requirement is
+        // the surprising part, and it is not negotiable — the URL ends up in an
+        // <img src> in a document that gets forwarded.
+        return jsonResponse(
+          {
+            error: "invalid_logo_url",
+            message: "The logo must be an absolute https:// URL to an image. " +
+                     "http, data: and javascript: URLs are refused.",
+          },
+          400,
+        );
+      }
+      patch.logoUrl = url;
+    }
+  }
+
+  if (patch.companyName === undefined && patch.logoUrl === undefined) {
+    return jsonResponse(
+      { error: "nothing_to_update", message: "Provide companyName and/or logoUrl. Send null to clear one." },
+      400,
+    );
+  }
+
+  const updated = await updateOrgBranding(env, org.orgId, patch);
+  return jsonResponse({
+    ok: true,
+    branding: {
+      companyName: (updated && updated.brandCompanyName) || null,
+      logoUrl:     (updated && updated.brandLogoUrl) || null,
+    },
+    // Reports already rendered into R2 keep the branding they were generated
+    // with. Said out loud because it is the surprising part.
+    note: "New reports use this branding. Reports already generated are unchanged.",
   });
 }
 

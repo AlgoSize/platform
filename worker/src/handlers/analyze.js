@@ -31,6 +31,8 @@ import { runUserCode } from "../analyzers/sandbox_runner.js";
 import { inferBigO } from "../analyzers/bigo.js";
 import { getRefactorSuggestion } from "../analyzers/llm.js";
 import { queuePersist } from "./runs.js";
+import { getActiveOrg } from "./_orgs.js";
+import { storeReportFor } from "../reports/render.js";
 import { captureException } from "../observability.js";
 
 // After a 200 from any analyzer, queue a non-blocking write to the per-user
@@ -45,7 +47,26 @@ async function maybePersist(ctx, env, request, analyzer, input, response) {
   try { result = await response.clone().json(); }
   catch { return; }
   const ms = typeof result.wallTimeMs === "number" ? result.wallTimeMs : null;
-  queuePersist(ctx, env, { userId, analyzer, input, result, ms });
+
+  // File the run against the user's org as well as the user. Runs became
+  // org-scoped in migrations/0007 for CI ingestion, but this path still wrote
+  // org_id NULL — so a dashboard run stayed invisible to the rest of the team
+  // and its report had no org to key on in R2. Resolved here rather than
+  // inside persistRun so the lookup happens once per run, not once per caller.
+  let orgId = null;
+  try {
+    const active = await getActiveOrg(env, userId);
+    orgId = active ? active.org.orgId : null;
+  } catch { /* history is best-effort; an org lookup failure must not lose it */ }
+
+  // Render the client-facing report as soon as the run is filed, so a share
+  // link opened minutes later serves from R2 instead of rendering on the
+  // reader's request. No-ops when the bucket is unbound, or for analyzers that
+  // produce no report — see reports/render.js.
+  const persisted = queuePersist(ctx, env, { userId, orgId, analyzer, input, result, ms })
+    .then((run) => (run ? storeReportFor(env, ctx, run) : null))
+    .catch((err) => { console.error("maybePersist: report store failed", err); return null; });
+  if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(persisted);
 }
 
 // 100 MB cap on uploads. At ~150 bytes per CUR row, this comfortably covers
@@ -514,6 +535,17 @@ export async function auditManifests(manifests, fetchImpl, { env, ctx, request, 
       // `packagesFound` is what was actually in the lockfiles.
       packagesFound: totalPackagesFound,
     },
+    // The audited package list, kept so a CycloneDX SBOM can be produced from
+    // a stored run without re-fetching and re-parsing the lockfiles — which we
+    // could not do anyway, since we deliberately do not retain lockfile
+    // content (see handlers/ci.js). Bounded by MAX_PACKAGES_PER_AUDIT (1000),
+    // so this adds tens of KB to the stored result at worst.
+    //
+    // These are the packages that were AUDITED. When `scanned.packagesFound`
+    // exceeds `scanned.totalPackages` the lockfiles held more than the cap and
+    // the SBOM is correspondingly partial — which toCycloneDX records rather
+    // than presenting a truncated inventory as a complete one.
+    packages: allPackages,
     counts: countSeverities(advisories),
     advisories,
     topAdvisories: advisories.slice(0, 10),

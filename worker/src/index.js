@@ -20,6 +20,7 @@ import {
   inviteMemberHandler,
   acceptInviteHandler,
   removeMemberHandler,
+  updateOrgBrandingHandler,
 } from "./handlers/org.js";
 import {
   createApiKeyHandler,
@@ -41,7 +42,14 @@ import {
 import { sweepDueMonitors, handleMonitorQueue } from "./monitors/run.js";
 import { logoutHandler } from "./handlers/logout.js";
 import { meHandler } from "./handlers/me.js";
-import { listRunsHandler, getRunHandler, getRunReportHandler } from "./handlers/runs.js";
+import {
+  listRunsHandler,
+  getRunHandler,
+  getRunReportHandler,
+  createRunShareHandler,
+  revokeRunShareHandler,
+  sharedReportHandler,
+} from "./handlers/runs.js";
 import { ciRunHandler, ciSnippetHandler } from "./handlers/ci.js";
 import { billingPortalHandler } from "./handlers/billing.js";
 import { requestMagicLinkHandler, verifyMagicLinkHandler } from "./handlers/auth_magic.js";
@@ -79,6 +87,13 @@ const json = (body, status = 200, extraHeaders = {}) =>
 const checkoutRateLimit = makeRateLimit({ keyName: "checkout", limit: 10, windowSec: 60 });
 const signupRateLimit   = makeRateLimit({ keyName: "signup",   limit: 10, windowSec: 60 });
 const analyzeRateLimit  = makeRateLimit({ keyName: "analyze",  limit: 30, windowSec: 60 });
+
+// Shared report links (/api/share/:token) are the only unauthenticated read
+// path in the product, so they get their own bucket. Generous enough that a
+// client refreshing a report they were sent never notices, tight enough that
+// the endpoint cannot be used to sweep for valid tokens or to bounce traffic
+// off the origin.
+const publicReadRateLimit = makeRateLimit({ keyName: "share", limit: 60, windowSec: 60 });
 
 // API-key traffic gets a SECOND limiter, keyed by org rather than IP (Task
 // #P-4) — a key called from many CI runners or shared egress IPs is one
@@ -140,9 +155,21 @@ router.get( "/api/me",              requireAuth, meHandler);
 // Scoped to the ORG since migrations/0007, so a CI run — which has no user
 // behind it — is visible to the team it belongs to. The report route is
 // registered before /:id purely for readability; the paths don't overlap.
-router.get( "/api/runs",            requireAuth, listRunsHandler);
-router.get( "/api/runs/:id/report", requireAuth, getRunReportHandler);
-router.get( "/api/runs/:id",        requireAuth, getRunHandler);
+router.get(   "/api/runs",                    requireAuth, listRunsHandler);
+router.get(   "/api/runs/:id/report",         requireAuth, getRunReportHandler);
+// Share links: minting one requires a session that can already read the run;
+// following one requires nothing at all, which is the point — the reader is
+// the customer's client and will never have an account here.
+router.post(  "/api/runs/:id/share",          requireAuth, createRunShareHandler);
+router.delete("/api/runs/:id/share/:token",   requireAuth, revokeRunShareHandler);
+router.get(   "/api/runs/:id",                requireAuth, getRunHandler);
+
+// ---- Shared reports — DELIBERATELY UNAUTHENTICATED ------------------------
+// The token IS the authorisation. It names exactly one run, is read-only, and
+// expires; see src/reports/share.js for why there is no signature to verify.
+// Rate-limited on the same bucket as other public reads so a stolen link, or
+// a token-guessing sweep, cannot be used to hammer the origin.
+router.get(   "/api/share/:token",            publicReadRateLimit, sharedReportHandler);
 
 // ---- CI ingestion (Task #P-9) — a build pipeline posting an audit --------
 // /runs is API-key only (enforced inside the handler, not here — requireAuth
@@ -166,6 +193,9 @@ router.get(   "/api/org",                  requireAuth, getOrgHandler);
 router.post(  "/api/org/invite",           signupRateLimit, requireAuth, inviteMemberHandler);
 router.post(  "/api/org/invite/accept",    requireAuth, acceptInviteHandler);
 router.delete("/api/org/members/:userId",  requireAuth, removeMemberHandler);
+// White-label report branding. Owner/admin AND top tier — the tier check is
+// inside the handler, where the org is already resolved.
+router.put(   "/api/org/branding",         requireAuth, updateOrgBrandingHandler);
 
 // ---- API keys (Task #P-4) — CI and other machine callers -----------------
 // Management (create/list/revoke) requires a human owner/admin session —
