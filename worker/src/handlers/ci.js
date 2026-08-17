@@ -20,6 +20,7 @@
 
 import { auditManifests } from "./analyze.js";
 import { persistRun } from "./runs.js";
+import { storeReportFor } from "../reports/render.js";
 import { SUPPORTED_FILES as LOCKFILE_NAMES, MAX_LOCKFILE_BYTES } from "../analyzers/lockfile.js";
 import { captureException } from "../observability.js";
 
@@ -198,6 +199,14 @@ export async function ciRunHandler(request, env, ctx) {
     });
   } catch (err) {
     await captureException(env, ctx, err, { request, tags: { source: "ci_ingest", phase: "persist" } });
+  }
+
+  // Render the client-facing report into R2 while the build waits for nothing:
+  // this is queued, not awaited, because the workflow only needs the verdict
+  // and the report URL. No-ops when the bucket is unbound.
+  if (run) {
+    const stored = storeReportFor(env, ctx, run).catch(() => null);
+    if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(stored);
   }
 
   if (!run) {

@@ -60,10 +60,20 @@ const SCHEMA_ORGS = `
     current_period_end INTEGER,
     seats_purchased    INTEGER NOT NULL DEFAULT 1,
     price_id           TEXT,
+    brand_company_name TEXT,
+    brand_logo_url     TEXT,
     created_at         INTEGER NOT NULL,
     updated_at         INTEGER NOT NULL
   )
 `;
+// NOTE — do NOT put `--` comments inside these schema strings. They are
+// executed as `SCHEMA_X.replace(/\s+/g, " ")`, which collapses the newlines a
+// `--` comment needs to terminate, so the comment swallows the rest of the
+// statement and D1 fails with "incomplete input". Explanations go here, in JS.
+//
+// brand_company_name / brand_logo_url are the white-label report branding from
+// migrations/0008. Both nullable; whether an org may actually USE them is
+// resolved at render time from the live entitlement, never stored.
 const SCHEMA_MEMBERSHIPS = `
   CREATE TABLE IF NOT EXISTS memberships (
     org_id     TEXT NOT NULL,

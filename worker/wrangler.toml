@@ -33,6 +33,24 @@ database_name = "algosize"
 database_id   = "00000000-0000-0000-0000-000000000000"
 
 # ----------------------------------------------------------------------------
+# R2 bucket — rendered client-facing reports (Task #P-6)
+# ----------------------------------------------------------------------------
+# Objects are the HTML report for one run, keyed `reports/<orgId>/<runId>.html`
+# so an org's reports are a single prefix — which makes "delete everything for
+# this customer" a prefix delete rather than a scan.
+#
+# Provision once per account before deploying:
+#   wrangler r2 bucket create algosize-reports
+#
+# EVERY READ AND WRITE TOLERATES THIS BINDING BEING ABSENT (see
+# src/reports/store.js). Until the bucket exists the report route renders on
+# demand instead — slower, identical bytes — so a missing bucket degrades
+# performance rather than breaking the feature or the deploy.
+[[r2_buckets]]
+binding     = "REPORTS"
+bucket_name = "algosize-reports"
+
+# ----------------------------------------------------------------------------
 # Service binding — algorithm-optimizer sandbox (Task #16)
 # ----------------------------------------------------------------------------
 # The main Worker calls `env.SANDBOX.fetch(...)` to run user-supplied JS in a
@@ -191,6 +209,12 @@ binding       = "DB"
 database_name = "algosize"
 database_id   = "cfe388b1-8423-48ec-b1ec-358e3a8127d8"
 
+# Rendered reports (Task #P-6). Same bucket name in production; create with
+#   wrangler r2 bucket create algosize-reports
+[[env.production.r2_buckets]]
+binding     = "REPORTS"
+bucket_name = "algosize-reports"
+
 [[env.production.services]]
 binding = "SANDBOX"
 service = "algosize-sandbox"
@@ -259,6 +283,13 @@ id      = "0000000000000000000000000000stg2"
 binding       = "DB"
 database_name = "algosize-staging"
 database_id   = "00000000-0000-0000-0000-00000000stg1"
+
+# Separate reports bucket for staging so a staging render can never overwrite
+# a report a production customer has already sent to their client. Create with
+#   wrangler r2 bucket create algosize-reports-staging
+[[env.staging.r2_buckets]]
+binding     = "REPORTS"
+bucket_name = "algosize-reports-staging"
 
 # Separate sandbox sibling Worker so a bad sandbox deploy can be tested in
 # staging without touching prod isolates. Defined in

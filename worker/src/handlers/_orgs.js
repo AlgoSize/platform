@@ -32,9 +32,38 @@ function rowToOrg(row) {
       ? row.seats_purchased
       : 1,
     priceId:          row.price_id || null,
+    // White-label report branding (migrations/0008). Present on the row does
+    // NOT mean permitted to use — see brandingFor in src/reports/branding.js.
+    brandCompanyName: row.brand_company_name || null,
+    brandLogoUrl:     row.brand_logo_url || null,
     createdAt:        row.created_at,
     updatedAt:        row.updated_at,
   };
+}
+
+/**
+ * Set (or clear) an org's white-label branding.
+ *
+ * Entitlement is the caller's job — this writes what it is given. `null`
+ * clears a field; `undefined` leaves it alone, so clearing the logo does not
+ * also wipe the company name.
+ */
+export async function updateOrgBranding(env, orgId, { companyName, logoUrl } = {}) {
+  if (!orgId) return null;
+  const sets = [];
+  const vals = [];
+  if (companyName !== undefined) { sets.push("brand_company_name = ?"); vals.push(companyName); }
+  if (logoUrl     !== undefined) { sets.push("brand_logo_url = ?");     vals.push(logoUrl); }
+  if (!sets.length) return getOrgById(env, orgId);
+
+  sets.push("updated_at = ?");
+  vals.push(Math.floor(Date.now() / 1000));
+
+  await env.DB
+    .prepare(`UPDATE organisations SET ${sets.join(", ")} WHERE org_id = ?`)
+    .bind(...vals, orgId)
+    .run();
+  return getOrgById(env, orgId);
 }
 
 export async function getOrgById(env, orgId) {
