@@ -348,7 +348,18 @@ function countSeverities(advisories) {
   return c;
 }
 
-async function runLockfileAudit(body, env, request, ctx) {
+/**
+ * The dependency audit, as a Response.
+ *
+ * Exported because the scheduled monitor consumer (src/monitors/run.js) runs
+ * exactly this — same fetch, same parse, same OSV lookup, same summary — so
+ * a monitored repo and a manually-scanned one can never produce different
+ * verdicts. It returns a Response rather than the raw result because that is
+ * what the HTTP path needs and what every error branch below already
+ * produces; the consumer reads the JSON body back out. `request` is only
+ * used for observability context and may be null.
+ */
+export async function runLockfileAudit(body, env, request, ctx) {
   const repo = parseGithubUrl(body.repoUrl);
   if (!repo) {
     return json({

@@ -47,6 +47,40 @@ binding = "SANDBOX"
 service = "algosize-sandbox"
 
 # ----------------------------------------------------------------------------
+# Scheduled monitoring (migrations/0006) — Cron Trigger + Queue
+# ----------------------------------------------------------------------------
+# The cron fires once daily; its handler only decides which monitors are due
+# and puts one message per monitor on SCAN_QUEUE. The consumer below runs the
+# actual audit, one monitor per message, so a slow or hanging repo delays
+# only itself instead of starving the rest of the sweep. See src/monitors/run.js.
+#
+# 03:00 UTC: off-peak for both GitHub and OSV.dev, and far enough from
+# midnight that a repo's own nightly CI has usually finished publishing.
+#
+# BEFORE DEPLOYING: the queue must exist, or `wrangler deploy` fails with
+# "queue not found" — creating it is not implied by this config.
+#   wrangler queues create algosize-scans
+#   wrangler queues create algosize-scans-staging
+# Queues also require a paid Workers plan. If the queue binding is absent at
+# runtime the sweep refuses to run monitors inline and captures instead — see
+# sweepDueMonitors — so a half-provisioned deploy is loud rather than
+# silently serialising every scan into one cron invocation.
+[triggers]
+crons = ["0 3 * * *"]
+
+[[queues.producers]]
+binding = "SCAN_QUEUE"
+queue   = "algosize-scans"
+
+[[queues.consumers]]
+queue          = "algosize-scans"
+max_batch_size = 10
+max_retries    = 3
+# Failures that exhaust max_retries go here rather than vanishing. Create it
+# alongside the main queue: `wrangler queues create algosize-scans-dlq`.
+dead_letter_queue = "algosize-scans-dlq"
+
+# ----------------------------------------------------------------------------
 # Default (local-dev) public env vars. Override per-environment below.
 # ----------------------------------------------------------------------------
 [vars]
@@ -161,6 +195,23 @@ database_id   = "cfe388b1-8423-48ec-b1ec-358e3a8127d8"
 binding = "SANDBOX"
 service = "algosize-sandbox"
 
+# Scheduled monitoring — see the [triggers]/[[queues]] block near the top for
+# why this is split into a cron + a queue, and for the provisioning steps.
+# Per-environment blocks do NOT inherit the top-level ones, so these have to
+# be repeated rather than assumed.
+[env.production.triggers]
+crons = ["0 3 * * *"]
+
+[[env.production.queues.producers]]
+binding = "SCAN_QUEUE"
+queue   = "algosize-scans"
+
+[[env.production.queues.consumers]]
+queue             = "algosize-scans"
+max_batch_size    = 10
+max_retries       = 3
+dead_letter_queue = "algosize-scans-dlq"
+
 # ----------------------------------------------------------------------------
 # Staging overrides (used by `wrangler deploy --env staging`). Task #23.
 # Lives at https://staging.algosize.com so risky changes (real analyzer
@@ -215,6 +266,21 @@ database_id   = "00000000-0000-0000-0000-00000000stg1"
 [[env.staging.services]]
 binding = "SANDBOX"
 service = "algosize-sandbox-staging"
+
+# Staging monitors run on their own queue so a staging sweep can never send
+# mail about a production org's repositories. Same 03:00 UTC cadence.
+[env.staging.triggers]
+crons = ["0 3 * * *"]
+
+[[env.staging.queues.producers]]
+binding = "SCAN_QUEUE"
+queue   = "algosize-scans-staging"
+
+[[env.staging.queues.consumers]]
+queue             = "algosize-scans-staging"
+max_batch_size    = 10
+max_retries       = 3
+dead_letter_queue = "algosize-scans-staging-dlq"
 
 # ----------------------------------------------------------------------------
 # Required SECRETS — never declared in this file.

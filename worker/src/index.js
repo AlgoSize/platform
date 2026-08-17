@@ -26,6 +26,13 @@ import {
   listApiKeysHandler,
   revokeApiKeyHandler,
 } from "./handlers/keys.js";
+import {
+  listMonitorsHandler,
+  createMonitorHandler,
+  deleteMonitorHandler,
+  pauseMonitorHandler,
+} from "./handlers/monitors.js";
+import { sweepDueMonitors, handleMonitorQueue } from "./monitors/run.js";
 import { analyzeCostHandler, analyzeVulnHandler, analyzeAlgoHandler } from "./handlers/analyze.js";
 import { logoutHandler } from "./handlers/logout.js";
 import { meHandler } from "./handlers/me.js";
@@ -145,6 +152,15 @@ router.post(  "/api/keys",       requireAuth, createApiKeyHandler);
 router.get(   "/api/keys",       requireAuth, listApiKeysHandler);
 router.delete("/api/keys/:id",   requireAuth, revokeApiKeyHandler);
 
+// ---- Scheduled monitors — continuous re-scanning -------------------------
+// Any member of the org can manage these (see handlers/monitors.js for why
+// they aren't owner/admin-gated like keys are). Both credential types work,
+// so CI that can trigger a scan can also manage what gets scanned.
+router.get(   "/api/monitors",           requireAuth, listMonitorsHandler);
+router.post(  "/api/monitors",           requireAuth, createMonitorHandler);
+router.delete("/api/monitors/:id",       requireAuth, deleteMonitorHandler);
+router.post(  "/api/monitors/:id/pause", requireAuth, pauseMonitorHandler);
+
 // ---- Analytics noscript pixel (Task #26) ----------------------------------
 // Forwards a GET <img> request to Plausible's POST events API so visitors
 // with JavaScript disabled still get a pageview count. No auth, no cookies,
@@ -189,5 +205,33 @@ export default {
         { status: 500, headers: { "content-type": "application/json", ...corsHeaders(request, env) } },
       );
     }
+  },
+
+  /**
+   * Cron Trigger entry point — daily at 03:00 UTC (see wrangler.toml).
+   *
+   * Only decides which monitors are due and enqueues one message each; the
+   * scans themselves happen in `queue` below. See src/monitors/run.js for
+   * why the two are split.
+   */
+  async scheduled(event, env, ctx) {
+    try {
+      const summary = await sweepDueMonitors(env, ctx);
+      console.log("monitors: sweep", JSON.stringify({ cron: event && event.cron, ...summary }));
+    } catch (err) {
+      // A cron handler that throws is a sweep that silently didn't happen —
+      // capture so a broken nightly run is visible rather than just absent.
+      await captureException(env, ctx, err, { tags: { source: "worker_scheduled" } });
+      throw err;
+    }
+  },
+
+  /**
+   * Queue consumer — one batch of monitor-check messages. Each message is
+   * acked or retried individually inside handleMonitorQueue, so one slow or
+   * failing repo can't redeliver (and re-email) its batch-mates.
+   */
+  async queue(batch, env, ctx) {
+    await handleMonitorQueue(batch, env, ctx);
   },
 };
