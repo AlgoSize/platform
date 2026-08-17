@@ -7,7 +7,11 @@
 //
 // requireAuth resolves the token from either an `Authorization: Bearer <jwt>`
 // header or a `<COOKIE_NAME>=<jwt>` cookie. Tampered or expired tokens are
-// rejected with 401.
+// rejected with 401. It also accepts `Authorization: Bearer ask_live_…` API
+// keys (migrations/0005) as a second, session-less credential — see
+// requireAuth's own doc comment below for the split.
+
+import { verifyApiKey, touchApiKeyLastUsed } from "./handlers/_api_keys.js";
 
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;  // 30 days
 const ALG = "HS256";
@@ -217,18 +221,59 @@ export function buildClearSessionCookie(env) {
   ].join("; ");
 }
 
+// Bearer tokens in this exact shape are API keys (migrations/0005), never
+// JWTs — a JWT is three dot-separated base64url segments and never starts
+// with a literal tag like this. Checking the tag first means a malformed or
+// truncated API key is diagnosed as an invalid key, not run through JWT
+// verification and misreported as a bad session token.
+const API_KEY_TAG = "ask_live_";
+
 /**
  * requireAuth — itty-router middleware.
  *
- * Resolves token from `Authorization: Bearer ...` header first, then cookie.
- * Verifies the JWT, then double-checks SESSIONS KV (so revoked tokens fail
- * even if not yet expired). On success, attaches `request.user = { userId,
- * email, subStatus }` and returns undefined so routing continues. On failure,
- * returns a 401 Response and short-circuits the route.
+ * Two credential types, checked in this order:
+ *
+ *   1. `Authorization: Bearer ask_live_…` — an API key (Task #P-4). Hashed
+ *      and looked up in D1; on success attaches `request.org = { orgId }`
+ *      and `request.authMethod = "api_key"`, and queues a non-blocking
+ *      last_used_at bump. There is no member behind a key, so `request.user`
+ *      is NOT set on this path — callers that need a human (billing portal,
+ *      org management, /api/me) are simply not reachable with a key, which
+ *      is correct: those questions don't make sense for a service account.
+ *
+ *   2. `Authorization: Bearer <jwt>`, then a `<COOKIE_NAME>` cookie — the
+ *      existing session flow, unchanged. Verifies the JWT, then double-checks
+ *      SESSIONS KV (so revoked tokens fail even if not yet expired), and
+ *      attaches `request.user = { userId, email, subStatus }` plus
+ *      `request.authMethod = "session"`.
+ *
+ * On success returns undefined so itty-router proceeds to the next handler.
+ * On failure returns a 401 Response and short-circuits the route.
  */
-export async function requireAuth(request, env) {
+export async function requireAuth(request, env, ctx) {
   requireSecret(env);
-  const token = readBearer(request) || readCookie(request, env.COOKIE_NAME);
+
+  const bearer = readBearer(request);
+  if (bearer && bearer.startsWith(API_KEY_TAG)) {
+    const verified = await verifyApiKey(env, bearer);
+    if (!verified) {
+      return new Response(
+        JSON.stringify({ error: "unauthorized", reason: "invalid_api_key" }),
+        { status: 401, headers: { "content-type": "application/json" } },
+      );
+    }
+    // Never blocks the response — see touchApiKeyLastUsed's own doc.
+    const bump = touchApiKeyLastUsed(env, verified.keyId);
+    if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(bump);
+    else void bump.catch(() => {});
+
+    request.org = { orgId: verified.orgId };
+    request.authMethod = "api_key";
+    request.apiKeyId = verified.keyId;
+    return;
+  }
+
+  const token = bearer || readCookie(request, env.COOKIE_NAME);
   if (!token) {
     return new Response(JSON.stringify({ error: "unauthorized", reason: "missing_token" }), {
       status: 401,
@@ -256,5 +301,6 @@ export async function requireAuth(request, env) {
     subStatus: session.subStatus ?? payload.subStatus,
   };
   request.token = token;
+  request.authMethod = "session";
   // returning undefined → itty-router proceeds to the next handler
 }

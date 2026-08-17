@@ -2,13 +2,13 @@
 // Used in the Replit environment instead of wrangler's D1 binding.
 
 import Database from "better-sqlite3";
-import { readFileSync, existsSync, mkdirSync } from "fs";
+import { readFileSync, readdirSync, existsSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DB_PATH = join(__dirname, "..", "..", "data", "algosize.db");
-const SCHEMA_PATH = join(__dirname, "..", "..", "migrations", "0001_init.sql");
+const MIGRATIONS_DIR = join(__dirname, "..", "..", "migrations");
 
 // One connection per path. Keyed by path rather than a single `_db` global
 // because callers can ask for `:memory:` — and with a single global, the
@@ -23,13 +23,44 @@ function getDb(path) {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   }
   const db = new Database(path);
-  // Apply schema
-  if (existsSync(SCHEMA_PATH)) {
-    const schema = readFileSync(SCHEMA_PATH, "utf-8");
-    db.exec(schema);
-  }
+  applyMigrations(db);
   _dbs.set(path, db);
   return db;
+}
+
+/**
+ * Apply every file in migrations/ in filename order, recording each one so it
+ * runs at most once against a given database.
+ *
+ * The tracking table is what makes this safe to call on every boot: this
+ * adapter opens a PERSISTENT file, and not every migration is self-guarding.
+ * 0001 is all `CREATE TABLE IF NOT EXISTS` and re-runs harmlessly, but SQLite
+ * has no `ADD COLUMN IF NOT EXISTS`, so 0002's `ALTER TABLE` throws
+ * "duplicate column name" the second time. Without a record of what has run,
+ * adding any ALTER-based migration breaks local dev on the next restart.
+ *
+ * An existing database that predates the tracking table is handled by the
+ * same path: 0001 re-runs as a no-op and gets recorded, then 0002 applies for
+ * the first time.
+ */
+function applyMigrations(db) {
+  if (!existsSync(MIGRATIONS_DIR)) return;
+
+  db.exec(`CREATE TABLE IF NOT EXISTS _migrations (
+             file       TEXT PRIMARY KEY,
+             applied_at INTEGER NOT NULL
+           )`);
+
+  const applied = new Set(
+    db.prepare("SELECT file FROM _migrations").all().map((r) => r.file),
+  );
+  const record = db.prepare("INSERT OR IGNORE INTO _migrations (file, applied_at) VALUES (?, ?)");
+
+  for (const file of readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort()) {
+    if (applied.has(file)) continue;
+    db.exec(readFileSync(join(MIGRATIONS_DIR, file), "utf-8"));
+    record.run(file, Date.now());
+  }
 }
 
 // D1 statement wrapper

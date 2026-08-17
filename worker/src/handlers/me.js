@@ -12,25 +12,31 @@
 // quota wrapper in src/quota.js, so the dashboard and the analyzer
 // gate always agree.
 //
-// If the user record has gone missing under us (KV row deleted but session
-// still valid), fall back to the session payload rather than returning a
-// confusing 200 with empty fields.
+// If the user record has gone missing under us (row deleted but session
+// still valid), fall back to the session payload for the display fields
+// rather than returning a confusing 200 with empty fields. Entitlement is a
+// separate question and is NOT guessed — see below.
 
-import { getUserById } from "./_users.js";
+import { resolveEntitlement } from "../entitlement.js";
 import { getMonthlyUsage, FREE_MONTHLY_LIMIT } from "../quota.js";
 
-export async function meHandler(request, env) {
+export async function meHandler(request, env, ctx) {
   const sessionUser = request.user || {};
-  const stored = sessionUser.userId
-    ? await getUserById(env, sessionUser.userId)
-    : null;
+
+  // Entitlement comes from the one resolver the analyzer gate also uses, so
+  // the pill in the dashboard and the 402 from the API can never disagree.
+  // This previously defaulted to "paid" whenever a session existed, which
+  // told users with no row that they had "Unlimited" runs — and the quota
+  // wrapper agreed with it, so they did.
+  const entitlement = await resolveEntitlement(env, sessionUser.userId, { ctx, request });
+  const stored = entitlement.user;
 
   const email     = (stored && stored.email)     || sessionUser.email     || null;
   const subStatus = (stored && stored.subStatus) || sessionUser.subStatus || null;
-  // Default to "paid" when no row exists — same posture as the quota
-  // wrapper, so the orphan-session edge case doesn't accidentally lock
-  // an existing user behind a free quota.
-  const plan      = (stored && stored.plan) || (stored?.stripeCustomerId ? "paid" : (sessionUser.userId ? "paid" : null));
+  // Report what the account can actually do, not what the row claims: a
+  // cancelled subscriber past their paid-through date reads as "free" here
+  // exactly as they do at the analyzer gate.
+  const plan      = entitlement.active ? "paid" : "free";
 
   let monthlyRunsUsed  = null;
   let monthlyRunsLimit = null;

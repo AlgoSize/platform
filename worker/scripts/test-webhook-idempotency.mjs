@@ -22,7 +22,8 @@
 
 import { stripeWebhookHandler } from "../src/handlers/webhook.js";
 import { buildSignatureHeader } from "../src/stripe.js";
-import { getUserByEmail, getUserByCustomerId } from "../src/handlers/_users.js";
+import { getUserByEmail } from "../src/handlers/_users.js";
+import { getOrgByCustomerId } from "../src/handlers/_orgs.js";
 import { makeD1, makeFailingD1 } from "./_d1-stub.mjs";
 
 const SECRET     = "whsec_idempotency_test_secret_xxxxxxxxxxxxxx";  // 32+ chars
@@ -218,7 +219,9 @@ console.log("\nwebhook idempotency — independence between events\n");
   expect(bodyJsonB.handled === "customer.subscription.deleted",
     "event B fully processed (handled=customer.subscription.deleted)");
 
-  const cancelled = await getUserByCustomerId(env, "cus_SHARED");
+  // Subscription state lives on the ORGANISATION (migrations/0004): the user
+  // row carries identity, the org carries billing.
+  const cancelled = await getOrgByCustomerId(env, "cus_SHARED");
   expect(cancelled && cancelled.subStatus === "inactive",
     "event B flipped subStatus to inactive (per-event dedup, not per-customer)");
 
@@ -232,7 +235,12 @@ console.log("\nwebhook idempotency — independence between events\n");
 // 4. Unknown event types are also deduped.
 {
   const env = makeEnv();
-  const body = JSON.stringify({ id: "evt_unknown_1", type: "invoice.paid", data: { object: {} } });
+  // Must be a type the switch genuinely does not handle. This used to be
+  // `invoice.paid`, which the subscription-lifecycle work turned into a
+  // handled event — `customer.discount.created` is one we have no reason to
+  // ever act on, so it keeps testing the default branch rather than silently
+  // becoming a second test of a real handler.
+  const body = JSON.stringify({ id: "evt_unknown_1", type: "customer.discount.created", data: { object: {} } });
   const res1 = await stripeWebhookHandler(await makeSignedRequest(body), env);
   const body1 = await res1.json();
   expect(res1.status === 200 && body1.handled === false,

@@ -15,6 +15,7 @@ import { checkoutHandler, checkoutSuccessHandler } from "../src/handlers/checkou
 import { stripeWebhookHandler } from "../src/handlers/webhook.js";
 import { makeD1 } from "./_d1-stub.mjs";
 import { getUserByEmail, getUserByCustomerId } from "../src/handlers/_users.js";
+import { getOrgByCustomerId } from "../src/handlers/_orgs.js";
 
 const SECRET     = "whsec_test_secret_for_unit_tests_only_xxxxx";   // 32+ chars
 const JWT_SECRET = "jwt-test-secret-32-or-more-chars-please-okay";
@@ -330,11 +331,14 @@ console.log("\nPOST /api/stripe/webhook\n");
     }),
     env,
   );
-  const user = await getUserByCustomerId(env, "cus_CANCEL_ME");
-  if (res.status === 200 && user && user.subStatus === "inactive") {
+  // Subscription state lives on the ORGANISATION now (migrations/0004) — the
+  // user row carries identity, the org carries billing. Reading the user here
+  // would read the dead pre-migration snapshot.
+  const org = await getOrgByCustomerId(env, "cus_CANCEL_ME");
+  if (res.status === 200 && org && org.subStatus === "inactive") {
     ok("webhook customer.subscription.deleted flips subStatus to inactive");
   } else {
-    fail(`cancel did not flip status: status=${res.status} user=${JSON.stringify(user)}`);
+    fail(`cancel did not flip status: status=${res.status} org=${JSON.stringify(org)}`);
   }
 }
 
@@ -445,7 +449,10 @@ console.log("\nWebhook miscellaneous\n");
 // 17. Webhook acks unknown event types with 200
 {
   const env = makeEnv();
-  const body = JSON.stringify({ id: "evt_x", type: "invoice.paid", data: { object: {} } });
+  // `invoice.paid` used to stand in for "a type we don't handle"; the
+  // subscription-lifecycle work made it a handled event. Swapped for one we
+  // have no reason to ever act on, so this keeps testing the default branch.
+  const body = JSON.stringify({ id: "evt_x", type: "customer.discount.created", data: { object: {} } });
   const t = Math.floor(Date.now() / 1000);
   const sig = await buildSignatureHeader(body, SECRET, t);
   const res = await stripeWebhookHandler(

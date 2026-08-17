@@ -15,6 +15,17 @@ import { handlePreflight, withCors, corsHeaders } from "./cors.js";
 import { requireAuth } from "./auth.js";
 import { checkoutHandler, checkoutSuccessHandler } from "./handlers/checkout.js";
 import { stripeWebhookHandler } from "./handlers/webhook.js";
+import {
+  getOrgHandler,
+  inviteMemberHandler,
+  acceptInviteHandler,
+  removeMemberHandler,
+} from "./handlers/org.js";
+import {
+  createApiKeyHandler,
+  listApiKeysHandler,
+  revokeApiKeyHandler,
+} from "./handlers/keys.js";
 import { analyzeCostHandler, analyzeVulnHandler, analyzeAlgoHandler } from "./handlers/analyze.js";
 import { logoutHandler } from "./handlers/logout.js";
 import { meHandler } from "./handlers/me.js";
@@ -26,7 +37,7 @@ import { adminListUsersHandler, adminUsersCsvHandler, requireAdmin } from "./han
 import { pageviewPixelHandler } from "./handlers/pageview.js";
 import { seedHandler } from "./handlers/_seed.js";
 import { enforceQuota } from "./quota.js";
-import { makeRateLimit } from "./middleware/rate-limit.js";
+import { makeRateLimit, makeApiKeyRateLimit } from "./middleware/rate-limit.js";
 import { captureException } from "./observability.js";
 
 const router = Router();
@@ -56,6 +67,15 @@ const checkoutRateLimit = makeRateLimit({ keyName: "checkout", limit: 10, window
 const signupRateLimit   = makeRateLimit({ keyName: "signup",   limit: 10, windowSec: 60 });
 const analyzeRateLimit  = makeRateLimit({ keyName: "analyze",  limit: 30, windowSec: 60 });
 
+// API-key traffic gets a SECOND limiter, keyed by org rather than IP (Task
+// #P-4) — a key called from many CI runners or shared egress IPs is one
+// customer either way, which per-IP limiting can't see. Runs AFTER
+// requireAuth (it reads request.org) and is a no-op for cookie-session
+// traffic, which the per-IP limiter above and the free-tier quota already
+// cover. 300/min comfortably covers a CI fleet; it exists to stop a leaked
+// or scripted-abuse key, not to ration normal use.
+const apiKeyAnalyzeRateLimit = makeApiKeyRateLimit({ keyName: "analyze-key", limit: 300, windowSec: 60 });
+
 // ---- Real routes (Task #4) -------------------------------------------------
 router.post("/api/checkout",          checkoutRateLimit, checkoutHandler);
 router.get( "/api/checkout/success",  checkoutSuccessHandler);
@@ -66,9 +86,9 @@ router.post("/api/stripe/webhook",    stripeWebhookHandler);
 // 5 successful runs in the current calendar month; paid users bypass.
 // Rate-limit middleware runs FIRST so flood traffic doesn't even read the
 // auth KV row.
-router.post("/api/analyze/cost",    analyzeRateLimit, requireAuth, enforceQuota(analyzeCostHandler));
-router.post("/api/analyze/vuln",    analyzeRateLimit, requireAuth, enforceQuota(analyzeVulnHandler));
-router.post("/api/analyze/algo",    analyzeRateLimit, requireAuth, enforceQuota(analyzeAlgoHandler));
+router.post("/api/analyze/cost",    analyzeRateLimit, requireAuth, apiKeyAnalyzeRateLimit, enforceQuota(analyzeCostHandler));
+router.post("/api/analyze/vuln",    analyzeRateLimit, requireAuth, apiKeyAnalyzeRateLimit, enforceQuota(analyzeVulnHandler));
+router.post("/api/analyze/algo",    analyzeRateLimit, requireAuth, apiKeyAnalyzeRateLimit, enforceQuota(analyzeAlgoHandler));
 
 // ---- Magic-link auth — email-verified sign-in/sign-up ---------------------
 // Replaces the old /api/signup endpoint (which issued a session immediately
@@ -105,6 +125,25 @@ router.get( "/api/runs/:id",        requireAuth, getRunHandler);
 
 // ---- Stripe Customer Portal (Task #18) — manage card / cancel / invoices --
 router.post("/api/billing/portal",  requireAuth, billingPortalHandler);
+
+// ---- Organisations, seats and roles ---------------------------------------
+// Role enforcement lives inside the handlers rather than in middleware: the
+// caller's role is a property of the org they're acting as, so it can't be
+// known until that org is resolved. The invite endpoint shares the signup
+// rate-limit bucket because it, too, sends mail to an attacker-chosen address.
+router.get(   "/api/org",                  requireAuth, getOrgHandler);
+router.post(  "/api/org/invite",           signupRateLimit, requireAuth, inviteMemberHandler);
+router.post(  "/api/org/invite/accept",    requireAuth, acceptInviteHandler);
+router.delete("/api/org/members/:userId",  requireAuth, removeMemberHandler);
+
+// ---- API keys (Task #P-4) — CI and other machine callers -----------------
+// Management (create/list/revoke) requires a human owner/admin session —
+// requireKeyManager in handlers/keys.js refuses a request authenticated by
+// an API key itself. Machine use of a minted key is the requireAuth branch
+// above, on the SAME /api/analyze/* routes a browser session already uses.
+router.post(  "/api/keys",       requireAuth, createApiKeyHandler);
+router.get(   "/api/keys",       requireAuth, listApiKeysHandler);
+router.delete("/api/keys/:id",   requireAuth, revokeApiKeyHandler);
 
 // ---- Analytics noscript pixel (Task #26) ----------------------------------
 // Forwards a GET <img> request to Plausible's POST events API so visitors

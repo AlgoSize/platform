@@ -46,10 +46,21 @@ export function clientIp(request) {
  * /api/analyze/* traffic don't share a bucket.
  *
  * Optional `now` lets tests inject a fixed clock without mocking Date.now.
+ *
+ * `identity(request)` overrides what the counter is keyed on — default is
+ * `clientIp(request)`. Task #P-4 needs API-key traffic limited per org
+ * rather than per IP (a key used from many CI runners, or many IPs behind
+ * one NAT, is one customer either way — and per-IP limiting would either
+ * miss a single leaked key spread across sources, or wrongly throttle
+ * unrelated customers sharing an egress IP). Returning a falsy identity
+ * skips limiting entirely for that request — see makeApiKeyRateLimit below,
+ * which uses this to become a no-op for non-API-key traffic rather than
+ * limiting it on an identity that doesn't apply.
  */
-export function makeRateLimit({ keyName, limit, windowSec = 60, now }) {
+export function makeRateLimit({ keyName, limit, windowSec = 60, now, identity }) {
   if (!keyName) throw new Error("makeRateLimit: keyName is required");
   if (!limit || limit < 1) throw new Error("makeRateLimit: limit must be >= 1");
+  const identityOf = identity || clientIp;
 
   return async function rateLimitMiddleware(request, env) {
     // SESSIONS is the existing KV binding — re-using it instead of
@@ -61,10 +72,12 @@ export function makeRateLimit({ keyName, limit, windowSec = 60, now }) {
       return undefined;
     }
 
-    const ip          = clientIp(request);
+    const id = identityOf(request);
+    if (!id) return undefined;   // nothing to key this request on — not limited here
+
     const nowSec      = Math.floor((typeof now === "function" ? now() : Date.now()) / 1000);
     const windowIndex = Math.floor(nowSec / windowSec);
-    const key         = `rl:${ip}:${keyName}:${windowIndex}`;
+    const key         = `rl:${id}:${keyName}:${windowIndex}`;
 
     const raw     = await env.SESSIONS.get(key);
     const current = raw ? parseInt(raw, 10) || 0 : 0;
@@ -91,4 +104,19 @@ export function makeRateLimit({ keyName, limit, windowSec = 60, now }) {
     });
     return undefined;   // proceed to next handler
   };
+}
+
+/**
+ * A rate limiter scoped to API-key traffic only, keyed by org id rather than
+ * IP (Task #P-4). Must run AFTER requireAuth in the middleware chain — it
+ * reads `request.org`, which requireAuth is what attaches. For a cookie
+ * session (no `request.org`) this is a no-op: that traffic is already
+ * covered by the endpoint's own per-IP limiter earlier in the chain, plus
+ * the free-tier monthly quota.
+ */
+export function makeApiKeyRateLimit({ keyName, limit, windowSec = 60, now }) {
+  return makeRateLimit({
+    keyName, limit, windowSec, now,
+    identity: (request) => request.org && request.org.orgId ? `org:${request.org.orgId}` : null,
+  });
 }
