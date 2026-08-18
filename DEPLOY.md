@@ -1478,6 +1478,7 @@ exactly this reason: a skip is not evidence of health.
 | Group | Requests | Proves |
 |---|---|---|
 | Reachability | one `GET` to an unrouted path, expecting the Worker's own `{"error":"not_found"}` | `SITE_ORIGIN` reaches **this Worker**, not something in front of it. A failure here stops the run. |
+| Stripe account | `GET /api/admin/stripe-check` | The Customer Portal default configuration and the webhook endpoint both exist in the mode the deployed key belongs to. See §8.4. |
 | Schema | `GET /api/admin/schema-check` | Every migration `0001`–`0008` is applied, checked per table **and per column**. The authoritative migration check. |
 | Routes deployed | `GET /api/me`, `/api/org`, `/api/monitors`, `/api/keys`, `/api/ci/snippet` with **no** cookie | Each route is registered and reachable in the deployed bundle. A `404` means the deploy predates the route; a `500` means the Worker throws before auth; a `200` means the endpoint is not gated at all. |
 | Handlers reach D1 | The same endpoints **with** the admin session | The handlers run and their tables exist. This is the group where a `500` really does mean a missing table. |
@@ -1520,6 +1521,43 @@ in a minute.
 Run it against staging too, with `SITE_ORIGIN` pointing at the staging
 hostname (§7). Staging having the same schema as production is the whole
 point of having a staging environment.
+
+### 8.4 Stripe account configuration (`GET /api/admin/stripe-check`)
+
+Two things the billing code depends on live in the **Stripe dashboard**, not
+in this repo. Neither is a secret or a `wrangler.toml` entry, so nothing in
+CI can see them, and both fail only once a real customer arrives:
+
+| Missing | Symptom |
+|---|---|
+| Customer Portal default configuration | Every "Manage billing" click 400s — `POST /billing_portal/sessions` returns *"No configuration provided"*. Fails for your **first paying customer**, not in any test. |
+| Webhook endpoint for this deployment | Checkout still works and the customer **is charged**, but renewals, cancellations and `payment_failed` dunning never arrive. Entitlement silently drifts from Stripe: a cancelled subscriber keeps access indefinitely. |
+
+The endpoint checks both and is included in the §8 run. Standalone:
+
+```bash
+curl -s https://algosize.com/api/admin/stripe-check \
+  -H "Cookie: algosize_session=<token>" | jq
+```
+
+**`mode` is part of the answer, not decoration.** Stripe's live and test modes
+are separate worlds with separate portal configurations, webhook endpoints and
+prices. A green result in test mode says *nothing* about live. The mode is read
+from the key prefix (`sk_live_` / `sk_test_`, and the `rk_` restricted
+equivalents), so it is reported even when Stripe rejects the key.
+
+The webhook check goes further than "does an endpoint exist": it also verifies
+the endpoint is `enabled` and subscribed to **every** event `handlers/webhook.js`
+acts on. An endpoint that exists and looks healthy in the dashboard but is
+missing `customer.subscription.deleted` breaks cancellations silently, which is
+precisely the class of failure this check is for. Missing events are listed in
+`checks.webhookEndpoint.missingEvents`.
+
+Fixes are in the response's `fix` fields, mode-correct (test-mode dashboard
+URLs carry `/test/`). A 500 with `error: "stripe_unreachable"` means the key
+itself is wrong, revoked, or a restricted key without read access to billing
+settings — a broken deployment rather than a failed check, the same distinction
+§8.2's schema group draws.
 
 ---
 
