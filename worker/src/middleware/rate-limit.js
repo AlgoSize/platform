@@ -14,9 +14,17 @@
 // a JSON body of `{error:"rate_limited", retryAfterSec}`.
 //
 // Caveat: KV is non-atomic — a true read-then-write race under burst can
-// let a few extra requests through (under-counts). That's acceptable for
-// abuse mitigation: the goal is "stop the flood", not "exact 10/min". For
-// hard guarantees we'd move to a Durable Object (out of scope for #21).
+// let extra requests through (under-counts). For pure abuse mitigation that
+// is an acceptable trade: the goal is "stop the flood", not "exact 10/min".
+//
+// But do not read that as "the overshoot is small". Concurrent requests all
+// read the same count and all write count+1, so a burst of N advances the
+// counter by 1, and the limit binds only against traffic that arrives
+// sequentially. Note also what this does NOT back up: src/quota.js has the
+// same non-atomicity in its free-tier counter, and its header comment names
+// this limiter as the remaining brake. It is a weak one for that purpose —
+// per-IP rather than per-account, and racy itself. Neither layer should be
+// cited as making the other safe. See the KNOWN GAP notes in src/quota.js.
 //
 // Itty-router middleware contract: returning a Response short-circuits the
 // chain; returning undefined lets the next handler run.
