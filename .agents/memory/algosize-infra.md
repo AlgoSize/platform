@@ -31,3 +31,10 @@ After `wrangler deploy --env production`, the zone route takes ~2 minutes to pro
 
 ## Secrets on the production Worker
 JWT_SECRET, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_ID, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET — all set as of 2026-08-18.
+
+## Secret binding names
+Price IDs must be Cloudflare secrets rather than `[env.*.vars]` entries. Cloudflare rejects `secret put` when a deployed plaintext var already uses the same binding name, so remove the vars and redeploy before uploading same-named secrets.
+
+**Why:** The API Worker needs the eight tier price IDs protected as secrets, and Cloudflare treats a plaintext binding and secret with the same name as a conflict.
+
+**How to apply:** Always pass `--config wrangler.toml` for API Worker secret operations; the parent config can target the separate site Worker.
