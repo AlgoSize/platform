@@ -1,94 +1,220 @@
 ---
-layout: default
+layout: none
 title: Admin
-description: Algosize admin — signed-up users.
+description: Algosize admin control panel.
 permalink: /admin/
 sitemap: false
 ---
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Algosize admin</title>
+<link rel="stylesheet" href="{{ '/assets/css/admin.css' | relative_url }}">
+<script>
+  // Same value the default layout sets: empty in production (the Worker is on
+  // the same origin via the algosize.com/api/* route), and the wrangler dev
+  // URL locally. Duplicated here rather than inherited because this page
+  // deliberately does not use that layout — see the comment below.
+  window.ALGOSIZE_API_BASE = {{ site.api_base | default: "" | jsonify }};
+</script>
+</head>
+<!--
+  The admin panel deliberately does NOT use the site's `default` layout.
 
-<header class="nav dash-nav">
-  <div class="nav-inner">
-    <a href="/" class="brand">
-      <span class="brand-mark" aria-hidden="true">[as]</span>
-      <span class="brand-word">Algosize</span>
-    </a>
-    <div class="dash-nav-actions">
-      <span class="dash-user-email mono" id="admin-user-email" hidden></span>
-      <a href="/dashboard/" class="btn btn-ghost btn-sm">Dashboard</a>
-      <button id="admin-logout-btn" type="button" class="btn btn-ghost btn-sm">Sign out</button>
-    </div>
-  </div>
+  It is not a page of the marketing site or of the product: it is an operator
+  console, and inheriting the site chrome would put a "Pricing" link and a
+  footer sitemap around a screen where someone is about to sign another
+  person out of their account. Keeping it standalone also keeps its palette
+  from fighting main.css, so a screenshot of this panel is never mistaken for
+  a screenshot of the product.
+-->
+<body class="adm" data-page="overview">
+
+<a class="adm-skip" href="#adm-main">Skip to content</a>
+
+<div class="adm-envbar" id="adm-envbar" data-env="unknown">
+  <span class="adm-envbar-label">
+    <span aria-hidden="true" id="adm-env-mark">●</span>
+    <span id="adm-env-name">checking environment…</span>
+    <span class="adm-envbar-detail" id="adm-env-detail"></span>
+  </span>
+  <a class="adm-btn adm-btn-sm" href="/dashboard/">Back to dashboard</a>
+</div>
+
+<header class="adm-top">
+  <a class="adm-brand" href="/">
+    <span class="adm-brand-mark" aria-hidden="true">[as]</span>Algosize
+    <span class="adm-tag">admin</span>
+  </a>
+  <button type="button" class="adm-search" id="adm-palette-open" aria-keyshortcuts="Meta+K Control+K">
+    <span aria-hidden="true" class="adm-mono">⌕</span>
+    <span class="adm-search-label">Search accounts, users, sections</span>
+    <span class="adm-kbd" aria-hidden="true">⌘K</span>
+  </button>
+  <span class="adm-whoami">
+    <span class="adm-whoami-email" id="adm-whoami"></span>
+    <button type="button" class="adm-btn adm-btn-sm" id="adm-signout">Sign out</button>
+  </span>
 </header>
 
-<main class="dashboard">
-  <div class="container">
+<div class="adm-body">
+  <nav class="adm-nav" aria-label="Admin sections" id="adm-nav">
+    <button type="button" class="adm-nav-btn" data-nav="overview" aria-current="page">
+      Overview <span class="adm-nav-badge" data-badge="overview"></span>
+    </button>
+    <button type="button" class="adm-nav-btn" data-nav="accounts">
+      Accounts <span class="adm-nav-badge" data-badge="accounts"></span>
+    </button>
+    <button type="button" class="adm-nav-btn" data-nav="users">
+      Users <span class="adm-nav-badge" data-badge="users"></span>
+    </button>
+    <span class="adm-nav-rule" aria-hidden="true"></span>
+    <button type="button" class="adm-nav-btn" data-nav="billing">
+      Billing <span class="adm-nav-badge" data-badge="billing"></span>
+    </button>
+    <button type="button" class="adm-nav-btn" data-nav="automation">
+      Automation <span class="adm-nav-badge" data-badge="automation"></span>
+    </button>
+    <span class="adm-nav-rule" aria-hidden="true"></span>
+    <button type="button" class="adm-nav-btn" data-nav="audit">Audit log</button>
+    <button type="button" class="adm-nav-btn" data-nav="settings">
+      Settings <span class="adm-nav-badge" data-badge="settings"></span>
+    </button>
+    <span class="adm-nav-sub" id="adm-nav-settings-sub" hidden>
+      <button type="button" class="adm-nav-subbtn" data-subnav="access">Access</button>
+      <button type="button" class="adm-nav-subbtn" data-subnav="flags">Feature flags</button>
+      <button type="button" class="adm-nav-subbtn" data-subnav="connections">Connections</button>
+      <button type="button" class="adm-nav-subbtn" data-subnav="environment">Environment</button>
+    </span>
+  </nav>
 
-    <div class="dash-head">
-      <span class="eyebrow">Admin</span>
-      <h1>Signed-up users</h1>
-      <p class="lede">
-        Every email that has verified ownership through the magic-link flow,
-        newest first. Export the list as CSV for outreach or backup.
-      </p>
-    </div>
+  <main class="adm-main" id="adm-main" tabindex="-1">
 
-    <div id="admin-error" class="quota-banner" hidden style="border-color:#5a1d1d;background:#1f0d0d">
-      <div class="quota-banner-text">
-        <strong id="admin-error-title">Access denied</strong>
-        <p id="admin-error-msg">You're signed in but this account is not on the admin allowlist.</p>
-      </div>
-    </div>
-
-    <section class="panel" id="panel-users">
-      <header class="panel-head">
-        <div class="panel-heading">
-          <span class="panel-tag">Users</span>
-          <h2><span id="admin-user-count">—</span> emails on file</h2>
-          <p class="panel-desc">Plan, subscription status, and signup date for every account. Free signups appear here as soon as they verify their email.</p>
-        </div>
-        <div class="panel-actions">
-          <button type="button" class="btn btn-ghost btn-sm" id="admin-refresh-btn">Refresh</button>
-          <a id="admin-csv-btn" href="#" class="btn btn-primary btn-sm" download>Download CSV</a>
-        </div>
-      </header>
-      <div class="panel-body">
-        <div id="admin-users-table">
-          <div class="panel-empty">Loading users…</div>
+    <!-- Access failures replace the whole panel: there is nothing useful to
+         render around a 401 or a 403, and showing empty tables beside the
+         error would suggest the data is genuinely empty. -->
+    <section class="adm-page" id="adm-page-blocked" hidden>
+      <div class="adm-region">
+        <div class="adm-state" data-kind="error">
+          <strong id="adm-blocked-title">Admin access required</strong>
+          <span id="adm-blocked-msg"></span>
+          <div class="adm-state-actions">
+            <a class="adm-btn" href="/dashboard/">Go to the dashboard</a>
+            <a class="adm-btn adm-btn-primary" href="/login/" id="adm-blocked-signin" hidden>Sign in</a>
+          </div>
         </div>
       </div>
     </section>
 
-  </div>
-</main>
+    <section class="adm-page" id="adm-page-overview">
+      <div class="adm-pagehead">
+        <h1>Overview</h1>
+        <span class="adm-stamp" id="adm-overview-stamp"></span>
+      </div>
+      <div id="adm-overview-attention"></div>
+      <div class="adm-kpis" id="adm-overview-kpis"></div>
+      <div class="adm-region">
+        <div class="adm-region-head">
+          <span class="adm-region-title">Recent activity</span>
+          <button type="button" class="adm-btn adm-btn-sm" data-nav="audit">Full audit log</button>
+        </div>
+        <div id="adm-overview-activity"></div>
+      </div>
+    </section>
 
-<style>
-  .admin-table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
-  .admin-table th, .admin-table td {
-    text-align: left;
-    padding: 10px 12px;
-    border-bottom: 1px solid #21262d;
-    vertical-align: top;
-  }
-  .admin-table th {
-    font-size: 0.72rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: #8b949e;
-    font-weight: 600;
-    background: #0d1117;
-    position: sticky; top: 0;
-  }
-  .admin-table td.mono { font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: 0.86rem; }
-  .admin-pill {
-    display: inline-block; padding: 2px 8px; border-radius: 999px;
-    font-size: 0.72rem; letter-spacing: 0.04em; text-transform: uppercase; font-weight: 600;
-  }
-  .admin-pill-free { background: #21262d; color: #c9d1d9; }
-  .admin-pill-paid { background: rgba(126,224,192,0.15); color: #7ee0c0; }
-  .admin-pill-active { background: rgba(126,224,192,0.15); color: #7ee0c0; }
-  .admin-pill-inactive { background: #3a1d1d; color: #f0a8a8; }
-  .admin-pill-none { background: transparent; color: #6e7681; }
-  .admin-table-wrap { overflow-x: auto; }
-</style>
+    <section class="adm-page" id="adm-page-accounts" hidden>
+      <div class="adm-pagehead">
+        <h1>Accounts</h1>
+        <span class="adm-stamp" id="adm-accounts-count"></span>
+      </div>
+      <div class="adm-filters">
+        <input class="adm-input" type="search" id="adm-accounts-q" placeholder="Name, org id or Stripe customer" aria-label="Search accounts">
+        <select class="adm-select" id="adm-accounts-status" aria-label="Filter by subscription status">
+          <option value="">All statuses</option>
+          <option value="active">active</option>
+          <option value="trialing">trialing</option>
+          <option value="past_due">past due</option>
+          <option value="unpaid">unpaid</option>
+          <option value="canceled">canceled</option>
+          <option value="none">no subscription</option>
+        </select>
+        <button type="button" class="adm-btn" id="adm-accounts-refresh">Refresh</button>
+      </div>
+      <div class="adm-region"><div id="adm-accounts-table"></div></div>
+    </section>
+
+    <section class="adm-page" id="adm-page-users" hidden>
+      <div class="adm-pagehead">
+        <h1>Users</h1>
+        <span class="adm-stamp" id="adm-users-count"></span>
+      </div>
+      <div class="adm-filters">
+        <input class="adm-input" type="search" id="adm-users-q" placeholder="Email, user id or org" aria-label="Search users">
+        <select class="adm-select" id="adm-users-plan" aria-label="Filter by plan">
+          <option value="">All plans</option>
+          <option value="free">free</option>
+          <option value="paid">paid</option>
+        </select>
+        <button type="button" class="adm-btn" id="adm-users-refresh">Refresh</button>
+        <a class="adm-btn" id="adm-users-csv" href="#" download>Download CSV</a>
+      </div>
+      <div class="adm-region"><div id="adm-users-table"></div></div>
+    </section>
+
+    <section class="adm-page" id="adm-page-billing" hidden>
+      <div class="adm-pagehead">
+        <h1>Billing</h1>
+        <span class="adm-stamp" id="adm-billing-stamp"></span>
+      </div>
+      <div id="adm-billing-body"></div>
+    </section>
+
+    <section class="adm-page" id="adm-page-automation" hidden>
+      <div class="adm-pagehead">
+        <h1>Automation</h1>
+        <span class="adm-stamp" id="adm-automation-stamp"></span>
+      </div>
+      <div id="adm-automation-body"></div>
+    </section>
+
+    <section class="adm-page" id="adm-page-audit" hidden>
+      <div class="adm-pagehead">
+        <h1>Audit log</h1>
+        <span class="adm-stamp" id="adm-audit-stamp"></span>
+      </div>
+      <div class="adm-filters">
+        <input class="adm-input" type="search" id="adm-audit-actor" placeholder="Actor email" aria-label="Filter by actor">
+        <select class="adm-select" id="adm-audit-action" aria-label="Filter by action">
+          <option value="">All actions</option>
+        </select>
+        <button type="button" class="adm-btn" id="adm-audit-refresh">Refresh</button>
+      </div>
+      <div class="adm-region"><div id="adm-audit-table"></div></div>
+      <div><button type="button" class="adm-btn" id="adm-audit-more" hidden>Load older entries</button></div>
+    </section>
+
+    <section class="adm-page" id="adm-page-settings" hidden>
+      <div class="adm-pagehead">
+        <h1>Settings</h1>
+      </div>
+      <div class="adm-tabs" role="tablist" id="adm-settings-tabs">
+        <button type="button" class="adm-tab" role="tab" data-subnav="access" aria-selected="true">Access</button>
+        <button type="button" class="adm-tab" role="tab" data-subnav="flags" aria-selected="false">Feature flags</button>
+        <button type="button" class="adm-tab" role="tab" data-subnav="connections" aria-selected="false">Connections</button>
+        <button type="button" class="adm-tab" role="tab" data-subnav="environment" aria-selected="false">Environment</button>
+      </div>
+      <div id="adm-settings-body"></div>
+    </section>
+
+  </main>
+</div>
+
+<div class="adm-toasts" id="adm-toasts" role="status" aria-live="polite"></div>
+<div class="adm-sr" id="adm-live" role="status" aria-live="polite"></div>
 
 <script src="{{ '/assets/js/admin.js' | relative_url }}" defer></script>
+</body>
+</html>
