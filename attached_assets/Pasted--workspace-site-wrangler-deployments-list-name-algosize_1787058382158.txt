@@ -1,0 +1,51 @@
+~/workspace/site$ wrangler deployments list --name algosize-site
+
+  ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+  │                                                                                                                                                    │
+  │                                                                 ⛔  DEPRECATED ⛔                                                                  │
+  │                                              The version of Wrangler you are using is now deprecated.                                              │
+  │                                    Please update to the latest version of wrangler to prevent critical errors.                                     │
+  │      If originally installed via npm, run `npm uninstall -g @cloudflare/wrangler && npm install -g wrangler` to update to the latest version.      │
+  │                            If originally installed via cargo, run `cargo uninstall wrangler && npm install -g wrangler`                            │
+  │       Docs migration guide: https://developers.cloudflare.com/workers/wrangler/migration/migrating-from-wrangler-1/#update-wrangler-version        │
+  │                                                                                                                                                    │
+  ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+error: Found argument 'deployments' which wasn't expected, or isn't valid in this context
+
+USAGE:
+    wrangler [FLAGS] [OPTIONS] <SUBCOMMAND>
+
+For more information try --help
+~/workspace/site$ # from anywhere — pins the modern CLI explicitly
+npx wrangler@4 deployments list --name algosize-site
+
+# or use the repo's pinned copy
+cd ~/workspace/worker && ./node_modules/.bin/wrangler deployments list --name algosize-site
+Need to install the following packages:
+wrangler@4.86.0
+Ok to proceed? (y) y
+
+
+ ⛅️ wrangler 4.86.0
+───────────────────
+
+
+~/workspace/worker$ wrangler deployments list --name algosize-site
+
+  ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+  │                                                                                                                                                    │
+  │                                                                 ⛔  DEPRECATED ⛔                                                                  │
+  │                                              The version of Wrangler you are using is now deprecated.                                              │
+  │                                    Please update to the latest version of wrangler to prevent critical errors.                                     │
+  │      If originally installed via npm, run `npm uninstall -g @cloudflare/wrangler && npm install -g wrangler` to update to the latest version.      │
+  │                            If originally installed via cargo, run `cargo uninstall wrangler && npm install -g wrangler`                            │
+  │       Docs migration guide: https://developers.cloudflare.com/workers/wrangler/migration/migrating-from-wrangler-1/#update-wrangler-version        │
+  │                                                                                                                                                    │
+  ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+error: Found argument 'deployments' which wasn't expected, or isn't valid in this context
+
+USAGE:
+    wrangler [FLAGS] [OPTIONS] <SUBCOMMAND>
+
+For more information try --help
+~/workspace/worker$ 
