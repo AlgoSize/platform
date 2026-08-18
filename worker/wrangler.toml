@@ -7,7 +7,7 @@ compatibility_date = "2024-09-23"
 # ----------------------------------------------------------------------------
 # IDs are real Cloudflare namespace IDs. Locally, Miniflare maps these to
 # in-memory KV (no real Cloudflare reads/writes). In production they bind to
-# the real namespaces created with `wrangler kv namespace create <NAME>`.
+# the real namespaces created with `wrangler kv namespace create <NAME> --config wrangler.toml`.
 [[kv_namespaces]]
 binding = "SESSIONS"
 id      = "2a67b8b8fa4444f2b04b4ee7b98407dc"
@@ -26,7 +26,7 @@ id      = "b321f8eeccf0422694b87f719fa0d70c"
 #
 # The placeholder database_id below is for local dev (Miniflare maps it to
 # an in-memory SQLite); production + staging override with the real UUIDs
-# printed by `wrangler d1 create algosize`. See DEPLOY.md §2.5.
+# printed by `wrangler d1 create algosize --config wrangler.toml`. See DEPLOY.md §2.5.
 [[d1_databases]]
 binding       = "DB"
 database_name = "algosize"
@@ -56,7 +56,7 @@ bucket_name = "algosize-reports"
 # The main Worker calls `env.SANDBOX.fetch(...)` to run user-supplied JS in a
 # sibling Worker's isolate so a runaway loop can't take down the API. The
 # sibling Worker lives in `/worker-sandbox` and must be deployed first:
-#   cd worker-sandbox && wrangler deploy --env production
+#   cd worker-sandbox && wrangler deploy --config wrangler.toml --env production
 # In single-Worker dev mode (no service binding) the main Worker falls back
 # to in-process execution — same code, same sandbox model, just no
 # CPU-budget isolation between Workers.
@@ -95,7 +95,7 @@ queue          = "algosize-scans"
 max_batch_size = 10
 max_retries    = 3
 # Failures that exhaust max_retries go here rather than vanishing. Create it
-# alongside the main queue: `wrangler queues create algosize-scans-dlq`.
+# alongside the main queue: `wrangler queues create algosize-scans-dlq --config wrangler.toml`.
 dead_letter_queue = "algosize-scans-dlq"
 
 # ----------------------------------------------------------------------------
@@ -273,8 +273,8 @@ EMAIL_DELEGATED_USER = "noreply-staging@algosize.com"
 ADMIN_EMAILS         = "guillaumelauzier@gmail.com"
 
 # KV namespace IDs are placeholders. Create the real ones with:
-#   wrangler kv namespace create SESSIONS --env staging
-#   wrangler kv namespace create USERS    --env staging
+#   wrangler kv namespace create SESSIONS --config wrangler.toml --env staging
+#   wrangler kv namespace create USERS    --config wrangler.toml --env staging
 # then paste each printed id below. See DEPLOY.md §7.1.
 [[env.staging.kv_namespaces]]
 binding = "SESSIONS"
@@ -285,7 +285,7 @@ binding = "USERS"
 id      = "0000000000000000000000000000stg2"
 
 # Separate D1 database for staging (Task #25). Create with
-#   wrangler d1 create algosize-staging
+#   wrangler d1 create algosize-staging --config wrangler.toml
 # and paste the printed UUID below. See DEPLOY.md §7.1.
 [[env.staging.d1_databases]]
 binding       = "DB"
@@ -294,7 +294,7 @@ database_id   = "00000000-0000-0000-0000-00000000stg1"
 
 # Separate reports bucket for staging so a staging render can never overwrite
 # a report a production customer has already sent to their client. Create with
-#   wrangler r2 bucket create algosize-reports-staging
+#   wrangler r2 bucket create algosize-reports-staging --config wrangler.toml
 [[env.staging.r2_buckets]]
 binding     = "REPORTS"
 bucket_name = "algosize-reports-staging"
@@ -377,24 +377,24 @@ dead_letter_queue = "algosize-scans-staging-dlq"
 # `worker/.dev.vars.example` for the template.
 #
 # Production: set them with:
-#   cd worker && wrangler secret put JWT_SECRET             --env production
-#   cd worker && wrangler secret put STRIPE_SECRET_KEY      --env production
-#   cd worker && wrangler secret put STRIPE_WEBHOOK_SECRET  --env production
-#   cd worker && wrangler secret put STRIPE_PRICE_ID        --env production
-#   cd worker && wrangler secret put OPENAI_API_KEY         --env production
-#   cd worker && wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON --env production
-#   cd worker && wrangler secret put GOOGLE_CLIENT_ID            --env production
-#   cd worker && wrangler secret put GOOGLE_CLIENT_SECRET        --env production
+#   cd worker && wrangler secret put JWT_SECRET             --config wrangler.toml --env production
+#   cd worker && wrangler secret put STRIPE_SECRET_KEY      --config wrangler.toml --env production
+#   cd worker && wrangler secret put STRIPE_WEBHOOK_SECRET  --config wrangler.toml --env production
+#   cd worker && wrangler secret put STRIPE_PRICE_ID        --config wrangler.toml --env production
+#   cd worker && wrangler secret put OPENAI_API_KEY         --config wrangler.toml --env production
+#   cd worker && wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON --config wrangler.toml --env production
+#   cd worker && wrangler secret put GOOGLE_CLIENT_ID            --config wrangler.toml --env production
+#   cd worker && wrangler secret put GOOGLE_CLIENT_SECRET        --config wrangler.toml --env production
 #
 # Staging: same names, different values (Stripe TEST mode keys, separate
 # Sentry project DSN, etc.). Set them with `--env staging`:
-#   cd worker && wrangler secret put JWT_SECRET             --env staging
-#   cd worker && wrangler secret put STRIPE_SECRET_KEY      --env staging   # sk_test_…
-#   cd worker && wrangler secret put STRIPE_WEBHOOK_SECRET  --env staging   # whsec_… from staging endpoint
-#   cd worker && wrangler secret put STRIPE_PRICE_ID        --env staging   # price_… from test mode
-#   cd worker && wrangler secret put OPENAI_API_KEY         --env staging   # optional
-#   cd worker && wrangler secret put SENTRY_DSN             --env staging   # optional, separate project
-#   cd worker && wrangler secret put RELEASE_TAG            --env staging
+#   cd worker && wrangler secret put JWT_SECRET             --config wrangler.toml --env staging
+#   cd worker && wrangler secret put STRIPE_SECRET_KEY      --config wrangler.toml --env staging   # sk_test_…
+#   cd worker && wrangler secret put STRIPE_WEBHOOK_SECRET  --config wrangler.toml --env staging   # whsec_… from staging endpoint
+#   cd worker && wrangler secret put STRIPE_PRICE_ID        --config wrangler.toml --env staging   # price_… from test mode
+#   cd worker && wrangler secret put OPENAI_API_KEY         --config wrangler.toml --env staging   # optional
+#   cd worker && wrangler secret put SENTRY_DSN             --config wrangler.toml --env staging   # optional, separate project
+#   cd worker && wrangler secret put RELEASE_TAG            --config wrangler.toml --env staging
 
 [dev]
 port = 8787

@@ -280,7 +280,9 @@ function sourceFlag(source) {
 
 function runWrangler(extraArgs, { inheritStdio = false } = {}) {
   const [cmd, ...prefixArgs] = WRANGLER;
-  const fullArgs = [...prefixArgs, ...extraArgs];
+  // The repository root contains wrangler.jsonc for the static-site Worker.
+  // Always select this API Worker's config explicitly.
+  const fullArgs = [...prefixArgs, "--config", "wrangler.toml", ...extraArgs];
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, fullArgs, {
       stdio: inheritStdio ? "inherit" : ["ignore", "pipe", "pipe"],

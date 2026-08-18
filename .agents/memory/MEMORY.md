@@ -1,0 +1,1 @@
+- [Cloudflare connector permissions](cloudflare-connector-permissions.md) — read access can work while R2/Queues provisioning fails unless the connected API key has write scopes.

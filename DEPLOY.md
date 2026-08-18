@@ -185,10 +185,10 @@ API Worker.
 
 ```bash
 cd worker
-./node_modules/.bin/wrangler login
+./node_modules/.bin/wrangler login --config wrangler.toml
 # Browser pops; accept. Picks the active Cloudflare account automatically.
 # If you have multiple accounts:
-./node_modules/.bin/wrangler whoami            # confirm the right account
+./node_modules/.bin/wrangler whoami --config wrangler.toml # confirm the right account
 export CLOUDFLARE_ACCOUNT_ID=<id from whoami>  # if you need to pin one
 ```
 
@@ -207,8 +207,8 @@ export CLOUDFLARE_ACCOUNT_ID=<id from whoami>  # if you need to pin one
 > succeeds — the Worker no longer reads or writes it.
 
 ```bash
-wrangler kv namespace create SESSIONS --env production
-wrangler kv namespace create USERS    --env production
+wrangler kv namespace create SESSIONS --config wrangler.toml --env production
+wrangler kv namespace create USERS    --config wrangler.toml --env production
 ```
 
 Each command prints something like:
@@ -275,7 +275,7 @@ existing account where these were already provisioned, skip to §2.6.
 
 ```bash
 cd worker
-./node_modules/.bin/wrangler d1 create algosize
+./node_modules/.bin/wrangler d1 create algosize --config wrangler.toml
 ```
 
 This prints something like:
@@ -302,7 +302,7 @@ execute` reads the binding from `wrangler.toml`.
 
 ```bash
 cd worker
-./node_modules/.bin/wrangler d1 execute algosize \
+./node_modules/.bin/wrangler d1 execute algosize --config wrangler.toml \
   --file=migrations/0001_init.sql --env production --remote
 ```
 
@@ -364,7 +364,7 @@ index are intentionally NOT copied (D1's UNIQUE constraints +
 #### 2.5.5 Verify
 
 ```bash
-./node_modules/.bin/wrangler d1 execute algosize --env production --remote \
+./node_modules/.bin/wrangler d1 execute algosize --config wrangler.toml --env production --remote \
   --command="SELECT COUNT(*) AS users FROM users; SELECT COUNT(*) AS runs FROM runs;"
 ```
 
@@ -397,7 +397,7 @@ old `RUNS` KV namespace is unreferenced. Delete it from
 `worker/wrangler.toml` if anything references it, then:
 
 ```bash
-./node_modules/.bin/wrangler kv namespace delete --binding RUNS --env production
+./node_modules/.bin/wrangler kv namespace delete --config wrangler.toml --binding RUNS --env production
 ```
 
 Leave `USERS` KV in place — it still holds the monthly quota counters
@@ -410,8 +410,8 @@ stored in R2, keyed `reports/<orgId>/<runId>.html`. Create the bucket once
 per environment before the next deploy:
 
 ```bash
-./node_modules/.bin/wrangler r2 bucket create algosize-reports
-./node_modules/.bin/wrangler r2 bucket create algosize-reports-staging
+./node_modules/.bin/wrangler r2 bucket create algosize-reports --config wrangler.toml
+./node_modules/.bin/wrangler r2 bucket create algosize-reports-staging --config wrangler.toml
 ```
 
 The `REPORTS` binding is already declared in `wrangler.toml` for the default,
@@ -435,7 +435,7 @@ Adds two nullable columns to `organisations` for the top-tier white-label
 report branding:
 
 ```bash
-./node_modules/.bin/wrangler d1 execute algosize --env production --remote \
+./node_modules/.bin/wrangler d1 execute algosize --config wrangler.toml --env production --remote \
   --file=worker/migrations/0008_org_branding.sql
 ```
 
@@ -459,7 +459,7 @@ anyone clearing the row.
 
 ```bash
 cd worker
-./node_modules/.bin/wrangler deploy --env production
+./node_modules/.bin/wrangler deploy --config wrangler.toml --env production
 ```
 
 You should see:
@@ -557,27 +557,27 @@ cd worker
 #   macOS/Linux: openssl rand -hex 32
 #   Windows:     [convert]::ToHexString((1..32 | %{[byte](Get-Random -Max 256)}))
 # Paste the value at the prompt.
-./node_modules/.bin/wrangler secret put JWT_SECRET            --env production
+./node_modules/.bin/wrangler secret put JWT_SECRET            --config wrangler.toml --env production
 
 # Stripe SECRET key — must start with `sk_test_` (testing) or `sk_live_`
 # (production). Do NOT paste the publishable key (`pk_test_...` /
 # `pk_live_...`) — the Worker will get 401s from api.stripe.com on every
 # call. Swap test→live in §6.
-./node_modules/.bin/wrangler secret put STRIPE_SECRET_KEY     --env production
+./node_modules/.bin/wrangler secret put STRIPE_SECRET_KEY     --config wrangler.toml --env production
 
 # Stripe webhook signing secret (whsec_...). You'll get this in §5.
 # Set it AFTER you create the webhook endpoint.
-./node_modules/.bin/wrangler secret put STRIPE_WEBHOOK_SECRET --env production
+./node_modules/.bin/wrangler secret put STRIPE_WEBHOOK_SECRET --config wrangler.toml --env production
 
 # Stripe Price ID for the monthly subscription plan (price_...).
 # Create the product/price in §6.1 first if you don't have one yet.
-./node_modules/.bin/wrangler secret put STRIPE_PRICE_ID       --env production
+./node_modules/.bin/wrangler secret put STRIPE_PRICE_ID       --config wrangler.toml --env production
 ```
 
 Verify each secret is set (values are not printed — only names):
 
 ```bash
-./node_modules/.bin/wrangler secret list --env production
+./node_modules/.bin/wrangler secret list --config wrangler.toml --env production
 # expect all four names: JWT_SECRET, STRIPE_SECRET_KEY,
 # STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_ID
 ```
