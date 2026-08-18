@@ -26,21 +26,29 @@ Reads env vars `STRIPE_PRICE_<PLAN>_<INTERVAL>` and `STRIPE_PRICE_<PLAN>_<INTERV
 Interval key suffix is `MONTHLY` or `ANNUAL` (not YEARLY).
 Returns `{ base, seat, perSeat }` or `null` for unconfigured/unknown.
 
-## Test-mode product catalog (created 2026-08-18)
+## Stripe catalog
 
-Products: Solo prod_V5vJByyVzDuaen | Practice prod_V5vJcC1hpf72yW (14d trial) | Firm prod_V5vJen7tpRrIe5 (14d trial)
+The earlier `price_1U5j...` catalog was mislabeled as test mode; Stripe
+confirmed those IDs are live-mode objects. Never use them for staging.
 
-Prices (account acct_1TcPgVFA2hGHNbZ5):
-- SOLO_MONTHLY          price_1U5jTEFA2hGHNbZ5NfvGfNfk  $49/mo
-- SOLO_ANNUAL           price_1U5jTFFA2hGHNbZ5Un2v2HwX  $490/yr
-- PRACTICE_MONTHLY      price_1U5jTHFA2hGHNbZ5YE2aj50K  $149/mo
-- PRACTICE_ANNUAL       price_1U5jTIFA2hGHNbZ5XFx4ldqK  $1490/yr
-- PRACTICE_MONTHLY_SEAT price_1U5jTKFA2hGHNbZ5b14jztio  $39/mo
-- PRACTICE_ANNUAL_SEAT  price_1U5jTLFA2hGHNbZ5XlBm9Nia  $390/yr
-- FIRM_MONTHLY          price_1U5jTNFA2hGHNbZ50LekndBp  $599/mo
-- FIRM_ANNUAL           price_1U5jTOFA2hGHNbZ5T38KlYFr  $5990/yr
-- FIRM_MONTHLY_SEAT     price_1U5jTQFA2hGHNbZ5q6xmEDjY  $29/mo
-- FIRM_ANNUAL_SEAT      price_1U5jTRFA2hGHNbZ5NeqO6SWq  $290/yr
+The actual test-mode staging catalog is on account `acct_1TcPgVFA2hGHNbZ5`:
+
+Products: Solo `prod_V5yOyeK8wzCUe5` | Practice `prod_V5yObV5ha2k7mY` |
+Firm `prod_V5yOS0F9p8HPJ2`
+
+Prices:
+- SOLO_MONTHLY          `price_1U5mRHFA2hGHNbZ5nmUfOxyB`  $49/mo
+- SOLO_ANNUAL           `price_1U5mRHFA2hGHNbZ5RDEPWnjk`  $490/yr
+- PRACTICE_MONTHLY      `price_1U5mRIFA2hGHNbZ5bf0PMVbE`  $149/mo
+- PRACTICE_MONTHLY_SEAT `price_1U5mRIFA2hGHNbZ5McTbHSTw`  $39/mo
+- PRACTICE_ANNUAL       `price_1U5mRIFA2hGHNbZ5fpaWFKKR`  $1490/yr
+- PRACTICE_ANNUAL_SEAT  `price_1U5mRJFA2hGHNbZ5SP0TKVfG`  $390/yr
+- FIRM_MONTHLY          `price_1U5mRJFA2hGHNbZ5ziFb85Gd`  $599/mo
+- FIRM_ANNUAL           `price_1U5mRJFA2hGHNbZ5SSmcquE9`  $5990/yr
+
+The staging Worker uses the eight tier bindings above plus
+`STRIPE_PRICE_ID`, which aliases Solo monthly. The optional Firm seat prices
+from the old note are not part of the established eight-binding staging set.
 
 Webhook endpoints — STRIPE_WEBHOOK_SECRET uploaded to both Workers:
 - Production we_1U5jUFFA2hGHNbZ5Fb0CzTIf → https://algosize.com/api/stripe/webhook
