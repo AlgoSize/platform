@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" /><title>Security — Algosize</title>
+    <meta name="description" content="What Algosize stores, what it never stores, how long it keeps it, who else processes it, and how to report a vulnerability." />
+    <link rel="canonical" href="https://algosize.com/security/" />
+    <link rel="stylesheet" href="/assets/css/main.css" />
+    <link rel="alternate" type="application/rss+xml" title="Algosize — Engineering blog" href="https://algosize.com/feed.xml" />
+
+    <!-- Favicons / app icons. Sourced from /assets/img/brand-mark.svg ([as] mark). -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Algosize" />
+    <meta property="og:title" content="Security — Algosize" />
+    <meta property="og:description" content="What Algosize stores, what it never stores, how long it keeps it, who else processes it, and how to report a vulnerability." />
+    <meta property="og:url" content="https://algosize.com/security/" />
+    <meta property="og:image" content="https://algosize.com/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Algosize — the [as] brand mark" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Security — Algosize" />
+    <meta name="twitter:description" content="What Algosize stores, what it never stores, how long it keeps it, who else processes it, and how to report a vulnerability." />
+    <meta name="twitter:image" content="https://algosize.com/og-image.png" />
+    <meta name="twitter:image:alt" content="Algosize — the [as] brand mark" /></head>
+  <body>
+    <header class="nav">
+  <div class="nav-inner">
+    <a href="/" class="brand">
+      <span class="brand-mark" aria-hidden="true">[as]</span>
+      <span class="brand-word">Algosize</span>
+    </a>
+    <nav class="nav-links" aria-label="Primary">
+      <a href="/#features">Features</a>
+      <a href="/#pricing">Pricing</a>
+      <a href="/blog/">Blog</a>
+      <a href="/dashboard/">Dashboard</a>
+    </nav>
+  </div>
+</header>
+
+
+<article class="page-content">
+  <div class="container container-narrow">
+    <header class="page-head">
+      <h1 class="page-title">Security</h1><p class="page-lede">What Algosize stores, what it never stores, how long it keeps it, who else processes it, and how to report a vulnerability.</p></header>
+    <div class="post-prose">
+      <p><strong>Last updated: 17 August 2026</strong></p>
+
+<p>This page is written for the person who has to sign off on running us against
+their code. It describes what the system actually does today. Where something
+is planned but not yet running, it says so rather than describing the intended
+end state in the present tense.</p>
+
+<p>Report a vulnerability: <strong><a href="mailto:security@algosize.com">security@algosize.com</a></strong>.</p>
+
+<hr />
+
+<h2 id="1-what-we-never-store">1. What we never store</h2>
+
+<ul>
+  <li><strong>Your source files.</strong> Source submitted to the scanner is analysed in memory
+and discarded. What persists is the finding — rule, file path, line number,
+and severity — not the file it came from.</li>
+  <li><strong>Lockfile contents from CI runs.</strong> A CI run stores the <em>paths</em> of the
+lockfiles it scanned. The lockfile bytes themselves are parsed, queried, and
+dropped.</li>
+  <li><strong>API key plaintext.</strong> Keys are stored as a SHA-256 hash plus a 16-character
+display prefix. The full key exists exactly once, in the response that
+created it. We cannot recover it, show it again, or email it to you — only
+revoke it and issue a new one.</li>
+  <li><strong>Passwords.</strong> There are none. Sign-in is a single-use emailed link or Google
+OAuth.</li>
+  <li><strong>Card numbers.</strong> Payment details go to Stripe directly and never touch our
+infrastructure. We hold a Stripe customer ID, a price ID, a subscription
+status, and a renewal date.</li>
+</ul>
+
+<h2 id="2-what-we-do-store">2. What we do store</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>Category</th>
+      <th>Fields</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Account</td>
+      <td>Email address, organisation membership, role, active organisation</td>
+    </tr>
+    <tr>
+      <td>Billing</td>
+      <td>Stripe customer ID, price ID, subscription status, current period end, seats purchased</td>
+    </tr>
+    <tr>
+      <td>Run records</td>
+      <td>Analyzer, computed result, one-line headline, duration, timestamp, and the organisation and user it belongs to</td>
+    </tr>
+    <tr>
+      <td>Run inputs</td>
+      <td>Retained only when under 256 KB. Anything larger is replaced with an <code class="language-plaintext highlighter-rouge">_omitted</code> marker, which disables re-run for that record</td>
+    </tr>
+    <tr>
+      <td>API keys</td>
+      <td>SHA-256 hash, name, display prefix, creator, created / last-used / revoked timestamps</td>
+    </tr>
+    <tr>
+      <td>Monitors</td>
+      <td>Repository URL, branch, schedule, last run time, and the advisory IDs seen on the last run</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>Monitors keep the previous run’s advisory IDs for one reason: it is what lets
+the alert email contain only what is <em>new</em>. Without it every scheduled email
+would re-send the entire backlog.</p>
+
+<h2 id="3-retention">3. Retention</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>Data</th>
+      <th>Retention</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Session tokens</td>
+      <td>30 days, then expire</td>
+    </tr>
+    <tr>
+      <td>Sign-in links</td>
+      <td>15 minutes, single use — deleted the moment they are redeemed</td>
+    </tr>
+    <tr>
+      <td>Organisation invites</td>
+      <td>7 days, single use</td>
+    </tr>
+    <tr>
+      <td>Run history</td>
+      <td>Hidden from every read path after 90 days</td>
+    </tr>
+    <tr>
+      <td>Account and billing records</td>
+      <td>Kept for the life of the account, then as required for tax and accounting</td>
+    </tr>
+  </tbody>
+</table>
+
+<p><strong>One honest caveat on run history.</strong> The 90-day cutoff is enforced at read
+time — after 90 days a run is invisible to you, to your organisation, and to
+our own support tooling. The rows are not yet physically deleted from the
+database; the scheduled hard-delete job is written but not in service. Until it
+is, treat 90 days as the point at which data becomes unreachable, not the point
+at which it is destroyed. If you need a hard deletion before then, email
+<a href="mailto:privacy@algosize.com">privacy@algosize.com</a> and we will run it
+manually and confirm.</p>
+
+<h2 id="4-what-leaves-our-infrastructure-during-a-scan">4. What leaves our infrastructure during a scan</h2>
+
+<p>A dependency audit sends <strong>package name, ecosystem, and version</strong> to the OSV
+advisory database. That is the whole outbound payload — your lockfile, your
+repository name, and your source are not transmitted to OSV or to any other
+advisory provider.</p>
+
+<p>A secret scan makes no outbound requests at all. Detection is entirely local to
+the worker.</p>
+
+<h2 id="5-subprocessors">5. Subprocessors</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>Subprocessor</th>
+      <th>Purpose</th>
+      <th>What it receives</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Cloudflare</td>
+      <td>Compute, database, object and key-value storage, queues</td>
+      <td>All service data</td>
+    </tr>
+    <tr>
+      <td>Stripe</td>
+      <td>Payments and subscription management</td>
+      <td>Email address, billing details you enter on Stripe’s own form</td>
+    </tr>
+    <tr>
+      <td>Google (Workspace Gmail API)</td>
+      <td>Transactional email — sign-in links, invites, alerts</td>
+      <td>Recipient address and message body</td>
+    </tr>
+    <tr>
+      <td>OSV.dev</td>
+      <td>Vulnerability advisory data</td>
+      <td>Package name, ecosystem, version</td>
+    </tr>
+    <tr>
+      <td>Sentry</td>
+      <td>Error monitoring</td>
+      <td>Exception traces, request metadata. Optional; disabled when unconfigured</td>
+    </tr>
+    <tr>
+      <td>OpenAI</td>
+      <td>Refactor suggestions in the algorithm optimizer only</td>
+      <td>The function you submit to that specific tool. Never invoked by the dependency or secret scanners</td>
+    </tr>
+    <tr>
+      <td>Plausible</td>
+      <td>Marketing-site analytics</td>
+      <td>Page URL and referrer. Cookieless, no cross-site identifier, marketing pages only — never the dashboard</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>The OpenAI row is worth reading twice if it matters to you: it is reachable
+only from the algorithm optimizer, a tool that is not part of the auditing
+product. Running dependency and secret audits never sends anything to a model
+provider.</p>
+
+<h2 id="6-access-and-authentication">6. Access and authentication</h2>
+
+<ul>
+  <li>Sessions are HMAC-SHA-256 signed tokens in an <code class="language-plaintext highlighter-rouge">HttpOnly</code>, <code class="language-plaintext highlighter-rouge">Secure</code>,
+<code class="language-plaintext highlighter-rouge">SameSite=Lax</code> cookie, backed by a server-side record so a session can be
+revoked rather than merely expiring.</li>
+  <li>API keys authenticate as the <strong>organisation</strong>, not as a person, so
+membership can change without breaking a pipeline. They are scoped to that
+organisation’s data.</li>
+  <li>An API key cannot manage API keys. Creating or revoking a key requires an
+interactive owner or admin session — otherwise a compromised key could
+re-arm itself after being revoked.</li>
+  <li>The CI ingestion endpoint refuses cookie sessions and accepts bearer keys
+only. A cookie is reachable from any page you visit; a bearer token is not.</li>
+  <li>Findings are computed server-side from the bytes you submit. A CI job cannot
+post its own verdict — submitting an empty finding list does not produce a
+clean report, because the report is not built from what was submitted.</li>
+</ul>
+
+<h2 id="7-reporting-a-vulnerability">7. Reporting a vulnerability</h2>
+
+<p>Email <strong><a href="mailto:security@algosize.com">security@algosize.com</a></strong>. Please
+include enough detail to reproduce: affected endpoint or page, request and
+response, and what you expected instead.</p>
+
+<ul>
+  <li>We acknowledge within <strong>3 business days</strong> and give you a substantive
+response, or a schedule for one, within <strong>10 business days</strong>.</li>
+  <li>We will tell you when the issue is fixed, and credit you by name unless you
+prefer otherwise.</li>
+  <li>We do not currently run a paid bounty.</li>
+</ul>
+
+<p><strong>Safe harbour.</strong> We will not pursue or support legal action against research
+conducted in good faith under these terms: give us reasonable time to fix
+before disclosing publicly, do not access, modify, or delete data belonging to
+anyone else, do not degrade the service for other users, and stop at the point
+where you have demonstrated the issue rather than proving how far it goes. If
+you are unsure whether something is in scope, ask first.</p>
+
+<h2 id="8-data-protection-requests">8. Data protection requests</h2>
+
+<p>For access, export, correction, or deletion, email
+<a href="mailto:privacy@algosize.com">privacy@algosize.com</a>. See the
+<a href="/privacy/">Privacy Policy</a> for the legal bases we rely
+on and your rights under GDPR and comparable regimes.</p>
+
+    </div>
+  </div>
+</article>
+
+<footer class="footer">
+  <div class="container">
+    <div class="footer-inner">
+      <a href="/" class="brand">
+        <span class="brand-mark" aria-hidden="true">[as]</span>
+        <span class="brand-word">Algosize</span>
+      </a>
+      <nav class="footer-links" aria-label="Footer">
+        <a href="/#features">Features</a>
+        <a href="/#pricing">Pricing</a>
+        <a href="/blog/">Blog</a>
+        <a href="/dashboard/">Dashboard</a>
+        <a href="/security/">Security</a>
+        <a href="/privacy/">Privacy</a>
+        <a href="/terms/">Terms</a>
+      </nav>
+      <nav class="footer-social" aria-label="Algosize on social media">
+        <a href="https://www.facebook.com/Algosize/" class="footer-social-link"
+           target="_blank" rel="noopener noreferrer" aria-label="Facebook">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true" focusable="false">
+            <path d="M20 2H4a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h8v-8h-2.5v-3H12V9.5A3.5 3.5 0 0 1 15.5 6H18v3h-2a1 1 0 0 0-1 1v1.5h3l-.5 3H15V22h5a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z"/>
+          </svg>
+        </a>
+        <a href="https://www.linkedin.com/company/algosize/" class="footer-social-link"
+           target="_blank" rel="noopener noreferrer" aria-label="LinkedIn">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true" focusable="false">
+            <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 0 1-2.063-2.065 2.064 2.064 0 1 1 2.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/>
+          </svg>
+        </a>
+        <a href="https://twitter.com/algosize" class="footer-social-link"
+           target="_blank" rel="noopener noreferrer" aria-label="X (Twitter)">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true" focusable="false">
+            <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.73-8.835L2 2.25h6.968l4.27 5.65 5.006-5.65zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+          </svg>
+        </a>
+        <a href="https://instagram.com/algosize" class="footer-social-link"
+           target="_blank" rel="noopener noreferrer" aria-label="Instagram">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true" focusable="false">
+            <path fill-rule="evenodd" d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.052.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98C8.333 23.986 8.741 24 12 24c3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 1 0 0 12.324 6.162 6.162 0 0 0 0-12.324zM12 16a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm6.406-11.845a1.44 1.44 0 1 0 0 2.881 1.44 1.44 0 0 0 0-2.881z"/>
+          </svg>
+        </a>
+        <a href="https://www.youtube.com/@algosize" class="footer-social-link"
+           target="_blank" rel="noopener noreferrer" aria-label="YouTube">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true" focusable="false">
+            <path d="M23.495 6.205a3.007 3.007 0 0 0-2.088-2.088c-1.871-.501-9.396-.501-9.396-.501s-7.507-.01-9.396.501A3.007 3.007 0 0 0 .527 6.205a31.247 31.247 0 0 0-.522 5.805 31.247 31.247 0 0 0 .522 5.783 3.007 3.007 0 0 0 2.088 2.088c1.868.502 9.396.502 9.396.502s7.506 0 9.396-.502a3.007 3.007 0 0 0 2.088-2.088 31.247 31.247 0 0 0 .5-5.783 31.247 31.247 0 0 0-.5-5.805zM9.609 15.601V8.408l6.264 3.602z"/>
+          </svg>
+        </a>
+        <a href="https://www.tiktok.com/@algosize" class="footer-social-link"
+           target="_blank" rel="noopener noreferrer" aria-label="TikTok">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true" focusable="false">
+            <path d="M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93-.01 2.92.01 5.84-.02 8.75-.08 1.4-.54 2.79-1.35 3.94-1.31 1.92-3.58 3.17-5.91 3.21-1.43.08-2.86-.31-4.08-1.03-2.02-1.19-3.44-3.37-3.65-5.71-.02-.5-.03-1-.01-1.49.18-1.9 1.12-3.72 2.58-4.96 1.66-1.44 3.98-2.13 6.15-1.72.02 1.48-.04 2.96-.04 4.44-.99-.32-2.15-.23-3.02.37-.63.41-1.11 1.04-1.36 1.75-.21.51-.15 1.07-.14 1.61.24 1.64 1.82 3.02 3.5 2.87 1.12-.01 2.19-.66 2.77-1.61.19-.33.4-.67.41-1.06.1-1.79.06-3.57.07-5.36.01-4.03-.01-8.05.02-12.07z"/>
+          </svg>
+        </a>
+      </nav>
+    </div>
+    <p class="footer-copy">© 2026 Algosize</p>
+  </div>
+</footer>
+
+<script>
+      // API base for the Worker. Empty in production (same origin via
+      // Cloudflare route algosize.com/api/*); set to the wrangler dev URL
+      // in local development. See site/_config.yml.
+      window.ALGOSIZE_API_BASE = "";
+    </script>
+    <script src="/assets/js/auth-banner.js" defer></script>
+    <script src="/assets/js/pricing.js" defer></script>
+    <script src="/assets/js/checkout.js" defer></script>
+    <script src="/assets/js/analytics.js" defer></script>
+  </body>
+</html>

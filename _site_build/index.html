@@ -2,8 +2,8 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" /><title>Algosize — cut cloud waste, catch vulnerabilities early, optimize your algorithms — Algosize</title>
-    <meta name="description" content="Algosize helps engineering teams cut cloud waste, catch vulnerabilities early, and optimize the algorithms running their business." />
+    <meta name="viewport" content="width=device-width, initial-scale=1" /><title>Continuous dependency and secret auditing — Algosize</title>
+    <meta name="description" content="Algosize re-scans your lockfiles and source on every pull request and on a schedule. Every advisory arrives with the CVSS vector it was scored from, the version that fixes it, and the command that gets you there." />
     <link rel="canonical" href="https://algosize.com/" />
     <link rel="stylesheet" href="/assets/css/main.css" />
     <link rel="alternate" type="application/rss+xml" title="Algosize — Engineering blog" href="https://algosize.com/feed.xml" />
@@ -15,20 +15,20 @@
     <!-- Open Graph -->
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Algosize" />
-    <meta property="og:title" content="Algosize — cut cloud waste, catch vulnerabilities early, optimize your algorithms — Algosize" />
-    <meta property="og:description" content="Algosize helps engineering teams cut cloud waste, catch vulnerabilities early, and optimize the algorithms running their business." />
+    <meta property="og:title" content="Continuous dependency and secret auditing — Algosize" />
+    <meta property="og:description" content="Algosize re-scans your lockfiles and source on every pull request and on a schedule. Every advisory arrives with the CVSS vector it was scored from, the version that fixes it, and the command that gets you there." />
     <meta property="og:url" content="https://algosize.com/" />
     <meta property="og:image" content="https://algosize.com/og-image.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="Algosize — [as] brand mark with the tagline ‘Cut cloud waste. Catch vulnerabilities early. Optimize your algorithms.’" />
+    <meta property="og:image:alt" content="Algosize — the [as] brand mark" />
 
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Algosize — cut cloud waste, catch vulnerabilities early, optimize your algorithms — Algosize" />
-    <meta name="twitter:description" content="Algosize helps engineering teams cut cloud waste, catch vulnerabilities early, and optimize the algorithms running their business." />
+    <meta name="twitter:title" content="Continuous dependency and secret auditing — Algosize" />
+    <meta name="twitter:description" content="Algosize re-scans your lockfiles and source on every pull request and on a schedule. Every advisory arrives with the CVSS vector it was scored from, the version that fixes it, and the command that gets you there." />
     <meta name="twitter:image" content="https://algosize.com/og-image.png" />
-    <meta name="twitter:image:alt" content="Algosize — [as] brand mark with the tagline ‘Cut cloud waste. Catch vulnerabilities early. Optimize your algorithms.’" /></head>
+    <meta name="twitter:image:alt" content="Algosize — the [as] brand mark" /></head>
   <body>
     <header class="nav">
   <div class="nav-inner">
@@ -50,62 +50,194 @@
 
   <div id="auth-banner-slot"></div>
 
-  <!-- ============= HERO ============= -->
+  <!-- ============= HERO =============
+       The hero is a finding, not a feature list. The card on the right is a
+       real advisory in the shape our scanner actually emits (see the
+       `advisories[]` objects built in worker/src/analyzers/osv.js): OSV id,
+       aliases, CVSS vector, computed score, installed version, fixed version.
+       Every number in it is checkable against the published vector. -->
   <section class="hero">
     <div class="container">
       <div class="hero-grid">
         <div>
-          <span class="eyebrow">Engineering ops, not vibes</span>
+          <span class="eyebrow">Continuous auditing</span>
           <h1>
-            Cut cloud waste.<br />
-            Catch vulnerabilities early.<br />
-            <span class="accent">Optimize your algorithms.</span>
+            Every finding,<br />
+            <span class="accent">with its evidence.</span>
           </h1>
           <p class="lede">
-            Algosize is one tool for the three bills engineering teams keep paying:
-            wasted cloud, undiscovered vulnerabilities, and slow code that ships
-            anyway. Plug in your services, paste your code, get answers.
+            Algosize re-scans your lockfiles and your source on every pull
+            request and again on a schedule. Each advisory carries the CVSS
+            vector it was scored from, the version that fixes it, and the
+            command that gets you there — in your PR, your Security tab, and
+            your inbox.
           </p>
           <div class="hero-actions">
-            <a href="#pricing" class="btn btn-primary">
-              Start optimizing →
-            </a>
-            <a href="#features" class="btn btn-ghost">See what it does</a>
-            <span class="meta">Live · no credit card to browse</span>
+            <a href="#pricing" class="btn btn-primary">See pricing →</a>
+            <a href="/security/" class="btn btn-ghost">How we handle your code</a>
           </div>
+          <ul class="hero-facts">
+            <li><span class="mono">SARIF 2.1.0</span> to the GitHub Security tab</li>
+            <li><span class="mono">fail_on</span> threshold gates the build</li>
+            <li>Nightly re-scan, <span class="mono">diff-only</span> alerts</li>
+          </ul>
         </div>
 
-        <aside class="terminal" aria-hidden="true">
-          <div class="terminal-bar">
-            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-            <span class="label">algosize ~ analyze</span>
+        <aside class="finding" aria-label="Example advisory from an Algosize scan">
+          <div class="finding-bar">
+            <span class="mono finding-src">package-lock.json</span>
+            <span class="mono finding-meta">nightly · 04:12 UTC</span>
           </div>
-<pre class="terminal-body"><span class="prompt">$</span> algosize cost analyze prod-services.json
-<span class="ok">✓</span> 4 services scanned in <span class="num">320ms</span>
-<span class="warn">!</span> idle ec2 fleet (us-east-1) ........ <span class="num">$1,840/mo</span>
-<span class="warn">!</span> oversized rds (db.r6g.4xlarge) ... <span class="num">$  920/mo</span>
-<span class="warn">!</span> egress to s3 cross-region ........ <span class="num">$  410/mo</span>
-<span class="ok">→</span> projected savings <span class="num">31%</span>  <span class="dim">(~$3,170/mo)</span>
 
-<span class="prompt">$</span> algosize vuln scan src/api/auth.js
-<span class="warn">!</span> hardcoded AWS key  L42  <span class="dim">severity: critical</span>
-<span class="warn">!</span> sql concat in user lookup  L91  <span class="dim">severity: high</span>
+          <article class="finding-body">
+            <header class="finding-head">
+              <span class="sev sev-critical">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true">
+                  <path d="M12 3v11" /><circle cx="12" cy="19.5" r="1.2" fill="currentColor" stroke="none" />
+                </svg>
+                Critical
+              </span>
+              <span class="cvss">
+                <span class="cvss-score mono">9.8</span>
+                <span class="cvss-ver mono">CVSS v3.1 base</span>
+              </span>
+            </header>
 
-<span class="prompt">$</span> algosize algo check sortMatches.js
-<span class="warn">!</span> nested loop on candidates[] → O(n²)
-<span class="ok">→</span> swap to Map lookup, ~<span class="num">40×</span> faster on n=10k</pre>
+            <h2 class="finding-pkg mono">minimist<span class="dim">@</span>1.2.5</h2>
+            <p class="finding-summary">
+              Prototype pollution. A crafted argument vector can reach
+              <code>Object.prototype</code> and set properties on every object in
+              the process.
+            </p>
+
+            <dl class="finding-grid">
+              <div class="finding-row">
+                <dt>Advisory</dt>
+                <dd class="mono">GHSA-xvch-5gv4-984h</dd>
+              </div>
+              <div class="finding-row">
+                <dt>Alias</dt>
+                <dd class="mono">CVE-2021-44906</dd>
+              </div>
+              <div class="finding-row finding-row-wide">
+                <dt>Vector</dt>
+                <dd class="mono vector">CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H</dd>
+              </div>
+              <div class="finding-row">
+                <dt>Installed</dt>
+                <dd class="mono">1.2.5</dd>
+              </div>
+              <div class="finding-row">
+                <dt>Fixed in</dt>
+                <dd class="mono fixed-in">1.2.6</dd>
+              </div>
+            </dl>
+
+            <div class="finding-fix">
+              <span class="mono finding-fix-label">Remediation</span>
+              <code class="mono finding-fix-cmd">npm audit fix</code>
+            </div>
+          </article>
+
+          <footer class="finding-foot">
+            <span class="mono">also this run: 1 high · 3 medium</span>
+            <span class="mono finding-foot-right">uploaded to Security tab</span>
+          </footer>
         </aside>
       </div>
     </div>
   </section>
 
-  <!-- ============= FEATURES ============= -->
+  <!-- ============= PROOF: HOW THE SCORE IS COMPUTED =============
+       "Proof over adjectives." Every claim in this section is checkable
+       against worker/src/analyzers/cvss.js, which implements the FIRST
+       CVSS v3.1 base-score equations, and worker/src/analyzers/osv.js,
+       which prefers the vector over the text rating when both exist. -->
+  <section class="section proof" id="proof">
+    <div class="container">
+      <div class="section-head">
+        <span class="eyebrow">Scoring</span>
+        <h2>The 9.8 is computed, not copied.</h2>
+        <p>
+          OSV publishes severity as a vector string. The text rating printed
+          beside it is a convenience field, and it is frequently absent, stale,
+          or disagrees with the vector. We score the vector.
+        </p>
+      </div>
+
+      <div class="proof-grid">
+        <div class="proof-panel">
+          <h3 class="proof-panel-title mono">Base metrics, parsed</h3>
+          <ul class="metrics">
+            <li class="metric"><span class="metric-key mono">AV:N</span> <span class="metric-name">Attack vector</span> <span class="metric-val mono">Network · 0.85</span></li>
+            <li class="metric"><span class="metric-key mono">AC:L</span> <span class="metric-name">Attack complexity</span> <span class="metric-val mono">Low · 0.77</span></li>
+            <li class="metric"><span class="metric-key mono">PR:N</span> <span class="metric-name">Privileges required</span> <span class="metric-val mono">None · 0.85</span></li>
+            <li class="metric"><span class="metric-key mono">UI:N</span> <span class="metric-name">User interaction</span> <span class="metric-val mono">None · 0.85</span></li>
+            <li class="metric"><span class="metric-key mono">S:U</span> <span class="metric-name">Scope</span> <span class="metric-val mono">Unchanged</span></li>
+            <li class="metric"><span class="metric-key mono">C:H I:H A:H</span> <span class="metric-name">Impact</span> <span class="metric-val mono">High · 0.56 each</span></li>
+          </ul>
+        </div>
+
+        <div class="proof-panel">
+          <h3 class="proof-panel-title mono">Base score, derived</h3>
+          <dl class="math-rows">
+            <div class="math-row">
+              <dt>Exploitability</dt>
+              <dd class="mono">8.22 × 0.85 × 0.77 × 0.85 × 0.85 = <strong>3.89</strong></dd>
+            </div>
+            <div class="math-row">
+              <dt>Impact sub-score</dt>
+              <dd class="mono">1 − (1 − 0.56)³ = <strong>0.9148</strong></dd>
+            </div>
+            <div class="math-row">
+              <dt>Impact</dt>
+              <dd class="mono">6.42 × 0.9148 = <strong>5.87</strong></dd>
+            </div>
+            <div class="math-row math-row-total">
+              <dt>Base</dt>
+              <dd class="mono">roundup(5.87 + 3.89) = <strong>9.8</strong></dd>
+            </div>
+          </dl>
+          <p class="math-note">
+            Rounding is CVSS v3.1 “Roundup”, done in integer arithmetic — the
+            floating-point shortcut scores a handful of real vectors one
+            tenth low.
+          </p>
+        </div>
+      </div>
+
+      <ul class="claims">
+        <li>
+          <span class="claim-head">CVSS v3.1 and v3.0 base scores are computed from the published vector</span>
+          <span class="claim-body">— per the FIRST specification, not read off a text rating. v2 vectors are scored with the v2 equations.</span>
+        </li>
+        <li>
+          <span class="claim-head">CVSS v4.0 vectors are approximated, and say so</span>
+          <span class="claim-body">— the v4 base score needs a lookup table we do not ship yet, so those advisories carry an explicit “approximate” flag rather than a confident wrong number.</span>
+        </li>
+        <li>
+          <span class="claim-head">An advisory with no usable severity data is reported as <span class="mono">unknown</span></span>
+          <span class="claim-body">— never silently downgraded to “low” to keep a dashboard green. Unknowns cap the run at a C.</span>
+        </li>
+        <li>
+          <span class="claim-head">A truncated scan is labelled a floor, not a total</span>
+          <span class="claim-body">— if a run hits an internal cap, the report says the counts are a lower bound instead of presenting a partial answer as a clean bill of health.</span>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============= WHAT IT DOES ============= -->
   <section class="section" id="features">
     <div class="container">
       <div class="section-head">
-        <span class="eyebrow">Three problems, one workspace</span>
-        <h2>Stop paying for waste, leaks, and slow code.</h2>
-        <p>Each module is a focused diagnostic. No noisy dashboards, no LLM hand-waving — just findings you can act on this afternoon.</p>
+        <span class="eyebrow">Where it runs</span>
+        <h2>On the pull request, on a schedule, and in your inbox.</h2>
+        <p>
+          One audit engine, three places it reaches you. The same bytes produce
+          the same answer in all three — the CI path and the dashboard path call
+          the same function.
+        </p>
       </div>
 
       <div class="features">
@@ -113,149 +245,239 @@
         <article class="feature">
           <div class="feature-icon" aria-hidden="true">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 2v20M5 5h11a3.5 3.5 0 0 1 0 7H8a3.5 3.5 0 0 0 0 7h11"/>
+              <circle cx="18" cy="6" r="2.6" /><circle cx="6" cy="6" r="2.6" /><circle cx="6" cy="18" r="2.6" />
+              <path d="M6 8.6v6.8M18 8.6v2.9a3 3 0 0 1-3 3H8" />
             </svg>
           </div>
-          <h3>Cost analyzer</h3>
-          <p>Point it at your cloud usage and it flags idle resources, oversized instances, surprise egress, and unreserved compute. Ranked by dollars saved, not by service noise.</p>
+          <h3>Gate the pull request</h3>
+          <p>
+            A workflow file collects your lockfiles and posts them. The report
+            comes back as SARIF 2.1.0 for the Security tab, as one sticky PR
+            comment that updates in place, and as an exit code. Set
+            <code>fail_on</code> to the severity you actually block on.
+          </p>
           <div class="stat">
-            <span class="value">~30%</span>
-            <span class="label">avg savings flagged</span>
+            <span class="value">SARIF 2.1.0</span>
+            <span class="label">security-tab format</span>
           </div>
         </article>
 
         <article class="feature">
           <div class="feature-icon" aria-hidden="true">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-              <path d="m9 12 2 2 4-4"/>
+              <circle cx="12" cy="12" r="8.5" /><path d="M12 7v5.2l3.2 2" />
             </svg>
           </div>
-          <h3>Vulnerability scan</h3>
-          <p>Paste a file or a folder. We surface hardcoded secrets, SQL string concat, eval/exec, and HTTP-in-prod config — with line numbers and an honest severity, not a 4,000-line PDF.</p>
+          <h3>Re-scan on a schedule</h3>
+          <p>
+            Advisories get published against code that has not changed. Point a
+            monitor at a repo and branch, and it re-scans nightly or weekly. The
+            alert email carries only what is new since the previous run, so a
+            quiet week produces no mail at all.
+          </p>
           <div class="stat">
-            <span class="value">5 classes</span>
-            <span class="label">caught in the MVP</span>
+            <span class="value">diff only</span>
+            <span class="label">new findings only</span>
           </div>
         </article>
 
         <article class="feature">
           <div class="feature-icon" aria-hidden="true">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M3 17l4-4 4 4 4-8 6 8"/>
-              <circle cx="7" cy="13" r="0.5" fill="currentColor"/>
+              <rect x="4" y="10.5" width="16" height="10" rx="2" /><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" />
             </svg>
           </div>
-          <h3>Algorithm optimizer</h3>
-          <p>Drop in a function. We diagnose nested loops, repeated array scans, and unmemoized recursion — and suggest a faster shape. If we can&rsquo;t prove anything, we say so.</p>
+          <h3>Catch the committed secret</h3>
+          <p>
+            Live credentials and private key material in source, with the file
+            and line. The remediation says rotate first and purge history
+            second, because deleting the line does not undo the exposure — and
+            one exposed credential caps the run at an F regardless of what else
+            is clean.
+          </p>
           <div class="stat">
-            <span class="value">O(n²) → O(n)</span>
-            <span class="label">most common fix</span>
+            <span class="value">rotate → purge</span>
+            <span class="label">in that order</span>
           </div>
         </article>
 
       </div>
+
+      <!-- The CI gate, as it actually reads in a job log. -->
+      <aside class="terminal terminal-wide" aria-label="Example Algosize output in a CI job log">
+        <div class="terminal-bar">
+          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          <span class="label">github actions ~ algosize audit</span>
+        </div>
+<pre class="terminal-body"><span class="prompt">$</span> algosize audit --fail-on high
+<span class="ok">✓</span> 4 lockfiles collected  <span class="dim">(npm, pip)</span>
+<span class="ok">✓</span> 1,204 packages resolved, queried against osv.dev
+<span class="warn">!</span> minimist 1.2.5 ......... <span class="num">9.8 critical</span>  <span class="dim">fixed in 1.2.6</span>
+<span class="warn">!</span> lodash 4.17.20 ......... <span class="num">7.2 high</span>      <span class="dim">fixed in 4.17.21</span>
+<span class="ok">→</span> sarif uploaded to the security tab  <span class="dim">(category: algosize)</span>
+<span class="warn">✗</span> threshold <span class="num">high</span> exceeded — failing the build</pre>
+      </aside>
     </div>
   </section>
 
-  <!-- ============= PRICING ============= -->
+  <!-- ============= PRICING =============
+       Three tiers. Prices are held in data-monthly / data-annual attributes
+       and swapped by assets/js/pricing.js; the annual figure is ten months of
+       the monthly one, which is what "two months free" means. Each form
+       carries data-plan / data-interval so assets/js/checkout.js can tell the
+       Worker which price to bill — see POST /api/checkout. -->
   <section class="section" id="pricing">
     <div class="container">
-      <div class="pricing-wrap">
+      <div class="section-head">
+        <span class="eyebrow">Pricing</span>
+        <h2>Priced per practice, not per scan.</h2>
+        <p>
+          Scans are unmetered on every paid tier. What changes is how many
+          repositories you can watch continuously and how many people share the
+          findings.
+        </p>
+      </div>
 
-        <div class="pricing-pitch">
-          <span class="eyebrow">Pricing</span>
-          <h2>Try it free. Upgrade when it pays for itself.</h2>
-          <p>Five analyses a month, no credit card. When you&rsquo;re convinced, $29/mo unlocks the rest. If the cost analyzer alone doesn&rsquo;t find more savings than the subscription costs, email us and we&rsquo;ll refund the month.</p>
-          <ul>
-            <li>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>
-              <span>Free tier: 5 analyses per month across all three tools.</span>
-            </li>
-            <li>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>
-              <span>Your code never leaves your session — analyzed in-memory, never stored.</span>
-            </li>
-            <li>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>
-              <span>Cancel anytime, in one click. No annual contracts.</span>
-            </li>
+      <fieldset class="billing-toggle" id="billing-toggle">
+        <legend class="sr-only">Billing period</legend>
+        <div class="billing-toggle-inner">
+          <input type="radio" name="billing" id="billing-monthly" value="monthly" checked />
+          <label for="billing-monthly">Monthly</label>
+          <input type="radio" name="billing" id="billing-annual" value="annual" />
+          <label for="billing-annual">Annual <span class="save-pill">2 months free</span></label>
+        </div>
+      </fieldset>
+
+      <div class="tiers">
+
+        <!-- ---- Solo ---- -->
+        <article class="tier" aria-labelledby="tier-solo-title">
+          <h3 class="tier-name" id="tier-solo-title">Solo</h3>
+          <p class="tier-for">One practitioner, your own repositories.</p>
+          <div class="price">
+            <span class="currency">$</span>
+            <span class="amount" data-monthly="49" data-annual="490">49</span>
+            <span class="period" data-monthly="/month" data-annual="/year">/month</span>
+          </div>
+          <p class="billing-note" data-monthly="billed monthly · cancel anytime" data-annual="billed yearly · 2 months free">billed monthly · cancel anytime</p>
+          <ul class="plan-includes">
+            <li>Unmetered scans, all analyzers</li>
+            <li>5 repositories watched continuously</li>
+            <li>CI gate, SARIF upload, PR comments</li>
+            <li>1 seat</li>
           </ul>
-        </div>
+          <form class="plan-cta-form" method="post" action="/api/checkout" data-plan="solo">
+            <button type="submit" class="btn btn-ghost" data-cta="checkout-solo">Start Solo →</button>
+            <p class="plan-fineprint">Stripe Checkout. We never see your card details.</p>
+          </form>
+        </article>
 
-        <div class="plan-grid">
+        <!-- ---- Practice (featured) ---- -->
+        <article class="tier tier-featured" aria-labelledby="tier-practice-title">
+          <span class="plan-badge">Most teams</span>
+          <h3 class="tier-name" id="tier-practice-title">Practice</h3>
+          <p class="tier-for">A security team reporting to other teams.</p>
+          <div class="price">
+            <span class="currency">$</span>
+            <span class="amount" data-monthly="149" data-annual="1,490">149</span>
+            <span class="period" data-monthly="/month" data-annual="/year">/month</span>
+          </div>
+          <p class="billing-note">
+            <span data-monthly="+ $39 per seat / month" data-annual="+ $390 per seat / year">+ $39 per seat / month</span>
+          </p>
+          <ul class="plan-includes">
+            <li>Everything in Solo</li>
+            <li>25 repositories watched continuously</li>
+            <li>Shared org history — CI runs visible to the team</li>
+            <li>API keys, roles, invites</li>
+          </ul>
 
-          <div class="plan plan-free" aria-labelledby="plan-free-title">
-            <span class="plan-badge plan-badge-free">Free</span>
-            <h3 id="plan-free-title">Starter</h3>
-            <div class="price">
-              <span class="currency">$</span>
-              <span class="amount">0</span>
-              <span class="period">/month</span>
+          <div class="seat-stepper">
+            <label for="practice-seats">Seats</label>
+            <div class="seat-controls">
+              <button type="button" class="seat-btn" data-seat-step="-1" aria-label="Remove a seat">−</button>
+              <input type="number" id="practice-seats" class="mono" value="3" min="1" max="100" step="1" inputmode="numeric" />
+              <button type="button" class="seat-btn" data-seat-step="1" aria-label="Add a seat">+</button>
             </div>
-            <p class="billing-note">5 analyses / month · no card</p>
-            <ul class="plan-includes">
-              <li>All three analyzers</li>
-              <li>5 runs per month, resets the 1st</li>
-              <li>Same private analysis — nothing stored</li>
-            </ul>
-            <form class="plan-cta-form" id="signup-free-form" novalidate>
-              <label class="signup-label" for="signup-email">Email address</label>
-              <input
-                id="signup-email"
-                class="signup-input mono"
-                type="email"
-                name="email"
-                autocomplete="email"
-                placeholder="you@company.com"
-                required>
-              <button type="submit" class="btn btn-ghost" data-cta="signup-free">
-                Email me a sign-in link →
-              </button>
-              <p class="plan-fineprint" id="signup-message">No password. We'll email you a one-time link to verify your address.</p>
-            </form>
-            <div class="signup-divider"><span>or</span></div>
-            <a href="/api/auth/google/start" class="btn btn-google" data-cta="signup-google">
-              <svg class="google-icon" width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-                <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.258h2.908c1.702-1.567 2.684-3.875 2.684-6.615z"/>
-                <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/>
-                <path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/>
-                <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z"/>
-              </svg>
-              Sign in with Google
-            </a>
-            <p class="plan-fineprint">Google verifies your email — instant access, no inbox check.</p>
-            <p class="plan-fineprint">By creating an account you agree to our
-              <a href="/terms/">Terms</a> and
-              <a href="/privacy/">Privacy Policy</a>.</p>
+            <p class="seat-total mono" id="practice-total" aria-live="polite">$266 / month</p>
           </div>
 
-          <div class="plan" aria-labelledby="plan-title">
-            <span class="plan-badge">Monthly</span>
-            <h3 id="plan-title">Algosize Pro</h3>
-            <div class="price">
-              <span class="currency">$</span>
-              <span class="amount">29</span>
-              <span class="period">/month</span>
-            </div>
-            <p class="billing-note">billed monthly · cancel anytime</p>
-            <ul class="plan-includes">
-              <li>All three analyzers, unlimited use</li>
-              <li>Private analysis — nothing stored on our side</li>
-              <li>Email support, &lt; 24h response</li>
-              <li>One seat (team plans coming soon)</li>
-            </ul>
-            <form class="plan-cta-form" method="post" action="/api/checkout">
-              <button type="submit" class="btn btn-primary" data-cta="checkout">
-                Start with Stripe →
-              </button>
-              <p class="plan-fineprint">Redirects to Stripe Checkout. We&rsquo;ll never see your card details.</p>
-            </form>
-          </div>
+          <form class="plan-cta-form" method="post" action="/api/checkout" data-plan="practice" data-seats-from="practice-seats">
+            <button type="submit" class="btn btn-primary" data-cta="checkout-practice">Start Practice →</button>
+            <p class="plan-fineprint">Stripe Checkout. Add or remove seats later from the billing portal.</p>
+          </form>
+        </article>
 
-        </div>
+        <!-- ---- Firm ---- -->
+        <article class="tier" aria-labelledby="tier-firm-title">
+          <h3 class="tier-name" id="tier-firm-title">Firm</h3>
+          <p class="tier-for">Consultancies auditing someone else’s code.</p>
+          <div class="price">
+            <span class="currency">$</span>
+            <span class="amount" data-monthly="599" data-annual="5,990">599</span>
+            <span class="period" data-monthly="/month" data-annual="/year">/month</span>
+          </div>
+          <p class="billing-note" data-monthly="billed monthly · 25 seats included" data-annual="billed yearly · 25 seats included">billed monthly · 25 seats included</p>
+          <ul class="plan-includes">
+            <li>Everything in Practice</li>
+            <li>Unlimited repositories watched</li>
+            <li>25 seats included</li>
+            <li>Client-separated organisations</li>
+          </ul>
+          <form class="plan-cta-form" method="post" action="/api/checkout" data-plan="firm">
+            <button type="submit" class="btn btn-ghost" data-cta="checkout-firm">Start Firm →</button>
+            <p class="plan-fineprint">Need invoicing or a DPA? <a href="mailto:hello@algosize.com">Email us</a>.</p>
+          </form>
+        </article>
 
       </div>
+
+      <p class="pricing-security-note">
+        Before you buy, read what we do and do not store:
+        <a href="/security/">the security page</a> covers
+        retention, subprocessors, and disclosure contact.
+      </p>
+
+      <!-- Free tier. Deliberately not a fourth card — it is not a tier we
+           sell, it is the way to try the thing before buying one. -->
+      <aside class="free-strip">
+        <div class="free-strip-copy">
+          <h3>Not ready to buy?</h3>
+          <p>Five analyses a month, no card. Same scanner, same scoring.</p>
+        </div>
+        <div class="free-strip-actions">
+          <form class="free-strip-form" id="signup-free-form" novalidate>
+            <label class="sr-only" for="signup-email">Email address</label>
+            <input
+              id="signup-email"
+              class="signup-input mono"
+              type="email"
+              name="email"
+              autocomplete="email"
+              placeholder="you@company.com"
+              required />
+            <button type="submit" class="btn btn-ghost" data-cta="signup-free">Email me a sign-in link →</button>
+          </form>
+          <p class="plan-fineprint" id="signup-message">
+            No password. We’ll email you a one-time link to verify your address.
+          </p>
+          <a href="/api/auth/google/start" class="btn btn-google" data-cta="signup-google">
+            <svg class="google-icon" width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+              <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.258h2.908c1.702-1.567 2.684-3.875 2.684-6.615z"/>
+              <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/>
+              <path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/>
+              <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z"/>
+            </svg>
+            Sign in with Google
+          </a>
+          <p class="plan-fineprint">
+            By creating an account you agree to our
+            <a href="/terms/">Terms</a> and
+            <a href="/privacy/">Privacy Policy</a>.
+          </p>
+        </div>
+      </aside>
+
     </div>
   </section>
 
@@ -274,6 +496,7 @@
         <a href="/#pricing">Pricing</a>
         <a href="/blog/">Blog</a>
         <a href="/dashboard/">Dashboard</a>
+        <a href="/security/">Security</a>
         <a href="/privacy/">Privacy</a>
         <a href="/terms/">Terms</a>
       </nav>
@@ -327,6 +550,7 @@
       window.ALGOSIZE_API_BASE = "";
     </script>
     <script src="/assets/js/auth-banner.js" defer></script>
+    <script src="/assets/js/pricing.js" defer></script>
     <script src="/assets/js/checkout.js" defer></script>
     <script src="/assets/js/analytics.js" defer></script>
   </body>
