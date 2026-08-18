@@ -44,6 +44,10 @@ magic-token discovery; do not print the token. The verification session cleanup
 path may return `invalid_token`, so confirm the session state before reusing this
 flow.
 
+Stripe's API does not return an existing webhook endpoint's signing secret.
+Production secret health can be checked without exposing it by signing a harmless
+unknown event with the configured secret and confirming the Worker returns 200.
+
 ## Secret binding names
 Price IDs must be Cloudflare secrets rather than `[env.*.vars]` entries. Cloudflare rejects `secret put` when a deployed plaintext var already uses the same binding name, so remove the vars and redeploy before uploading same-named secrets.
 
