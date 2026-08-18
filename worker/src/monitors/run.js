@@ -150,6 +150,20 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
     ranAt:       nowSec,
     resultHash:  hashKeySet(diff.currentKeys),
     advisoryIds: diff.currentKeys,
+    // Persist what this run found new (migrations/0009). It has to be written
+    // here, in the same statement that advances the baseline, because the
+    // moment advisoryIds lands the previous set is gone and this number can
+    // never be derived again.
+    //
+    // A baseline run is recorded as a delta of zero, not as the size of the
+    // whole list: the first sweep of a repo "discovers" every advisory, and
+    // calling that "+14 new since last run" would be false — there was no
+    // last run. diff.isBaseline is exactly that distinction.
+    delta: {
+      total:  diff.isBaseline ? 0 : diff.newAdvisories.length,
+      counts: diff.isBaseline ? {} : countBySeverityOrdered(diff.newAdvisories),
+      at:     nowSec,
+    },
   });
 
   if (!diff.shouldAlert) {

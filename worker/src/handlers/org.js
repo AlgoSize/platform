@@ -504,3 +504,61 @@ export async function removeMemberHandler(request, env) {
     seatsPurchased: org.seatsPurchased,
   });
 }
+
+// ---------------------------------------------------------------------------
+// POST /api/org/invite/revoke   body {email}
+// ---------------------------------------------------------------------------
+//
+// Withdraw an invite that has not been accepted yet.
+//
+// An outstanding invite consumes a seat (see countSeatsUsed), so without this
+// the only way to reclaim a seat from a typo'd address or a candidate who
+// declined is to wait out the 7-day TTL. On a Solo or Practice plan that is a
+// real block, not an inconvenience: a 3-seat org with one mistyped invite has
+// lost a third of its capacity for a week.
+//
+// Revoking deletes BOTH the token row and the pending-index entry. Deleting
+// only the index would leave a live token that still accepts, and deleting
+// only the token would leave a phantom seat consumed by an invite that can no
+// longer be used — the two have to move together.
+//
+// Keyed by email rather than token because the dashboard lists invites by
+// email and never sees the token; the token is in the recipient's inbox.
+export async function revokeInviteHandler(request, env) {
+  const resolved = await requireOrg(request, env, { manage: true });
+  if (resolved.error) return resolved.error;
+  const { org } = resolved;
+
+  let body;
+  try { body = await request.json(); }
+  catch { return jsonResponse({ error: "invalid_json", message: "Body must be valid JSON." }, 400); }
+
+  const rawEmail = body && typeof body.email === "string" ? body.email.trim() : "";
+  if (!rawEmail || rawEmail.length > MAX_EMAIL_LEN || !EMAIL_RE.test(rawEmail)) {
+    return jsonResponse(
+      { error: "invalid_email", message: "Provide the email address of the invite to revoke." },
+      400,
+    );
+  }
+  const email = rawEmail.toLowerCase();
+
+  const now     = Math.floor(Date.now() / 1000);
+  const pending = await readPendingInvites(env, org.orgId, now);
+  const match   = pending.find((i) => i.email === email);
+
+  if (!match) {
+    // Already accepted, already revoked, or lapsed. 404 rather than a silent
+    // 200: the caller is looking at a list that disagrees with the server, and
+    // saying so is what makes them refresh it.
+    return jsonResponse(
+      { error: "invite_not_found", message: "No pending invite for that address." },
+      404,
+    );
+  }
+
+  await env.SESSIONS.delete(inviteKey(match.token));
+  await writePendingInvites(env, org.orgId, pending.filter((i) => i.email !== email));
+
+  const seatsUsed = await countSeatsUsed(env, org.orgId, pending.length - 1);
+  return jsonResponse({ ok: true, email, seatsUsed, seatsPurchased: org.seatsPurchased }, 200);
+}

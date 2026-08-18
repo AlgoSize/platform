@@ -1,0 +1,18 @@
+-- 0009 — persist the last sweep's delta on the monitor row.
+--
+-- sweepDueMonitors already computes exactly this: diffAdvisories() returns the
+-- advisories that are new since the previous run, and the result is used to
+-- decide whether to send mail and what to put in it. Then it is discarded.
+--
+-- The dashboard's monitor list wants the same number ("+2 critical since
+-- Tuesday"), and had no way to get it: `last_advisory_ids` is the full current
+-- set, so the list API could report how many advisories a repo has but not how
+-- many of them are new. Recomputing the delta on read is impossible — the
+-- previous set is gone the moment last_advisory_ids is overwritten.
+--
+-- So the sweep stores its own answer. One nullable TEXT column holding
+-- {"total":N,"counts":{"critical":N,...},"at":<unix>}; NULL means "this
+-- monitor has not completed a sweep since this column existed", which the UI
+-- renders as no badge rather than as a zero — an unknown delta and a delta of
+-- zero are different facts and must not look the same.
+ALTER TABLE monitors ADD COLUMN last_delta_json TEXT;

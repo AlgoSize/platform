@@ -137,9 +137,9 @@
     table.appendChild(tbody);
     wrap.appendChild(table);
 
-    // Pending invites. There is no revoke-invite endpoint on the Worker, so
-    // no revoke button is rendered — invites lapse on their own after 7 days
-    // and the row says so.
+    // Pending invites. Each one holds a seat until accepted or expired, so a
+    // typo'd address costs capacity for a full week — the revoke button exists
+    // to get that seat back now rather than on the TTL's schedule.
     var pendWrap = document.getElementById("pending-invites-wrap");
     if (pendWrap) {
       while (pendWrap.firstChild) pendWrap.removeChild(pendWrap.firstChild);
@@ -156,6 +156,15 @@
           var sent = typeof i.sentAt === "number" ? i.sentAt : null;
           var expires = sent ? fmtDate(sent + 7 * 86400) : "—";
           li.appendChild(el("span", { class: "mono invite-expiry" }, "expires " + expires));
+          // Owners and admins only — the same gate the Worker enforces. An
+          // action the viewer cannot take is not rendered disabled, it is not
+          // rendered, so the screen never offers something that will 403.
+          if (canManage()) {
+            var revokeBtn = el("button",
+              { type: "button", class: "btn btn-ghost btn-sm invite-revoke" }, "Revoke");
+            revokeBtn.addEventListener("click", function () { revokeInvite(i, revokeBtn); });
+            li.appendChild(revokeBtn);
+          }
           ul.appendChild(li);
         });
         pendWrap.appendChild(ul);
@@ -164,6 +173,31 @@
         pendWrap.hidden = true;
       }
     }
+  }
+
+  /**
+   * Withdraw an invite that has not been accepted.
+   *
+   * Confirmed rather than instant: the invite email is already in someone's
+   * inbox, and revoking turns a link they may be about to click into a dead
+   * one. That is recoverable — re-invite — but it should be deliberate.
+   */
+  function revokeInvite(invite, btn) {
+    var label = invite.email || "this invite";
+    if (!window.confirm(
+      "Revoke the invite to " + label + "? The link in their email stops working " +
+      "immediately and the seat is freed.")) return;
+    setBusy(btn, true, "Revoking…");
+    callApi("/api/org/invite/revoke", { email: invite.email })
+      .then(function () { return load(true); })
+      .catch(function (e) {
+        // 404 means the list is stale — someone accepted or it lapsed between
+        // render and click. Reloading shows the truth, which is more useful
+        // than an error about a row that is already gone.
+        if (/invite_not_found/.test(e && e.code || "")) return load(true);
+        window.alert((e && e.message) || "Could not revoke invite");
+      })
+      .then(function () { setBusy(btn, false); });
   }
 
   function removeMember(m, btn) {

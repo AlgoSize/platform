@@ -88,6 +88,13 @@ function publicMonitor(m) {
     // How many advisories the last completed run saw. Null before the first
     // run — distinct from 0, which means "we looked and found nothing".
     knownAdvisoryCount: m.lastAdvisoryIds === null ? null : m.lastAdvisoryIds.length,
+    // What the last sweep found NEW (migrations/0009). Null means no sweep has
+    // completed since the column existed, which is NOT the same as a delta of
+    // zero — the dashboard renders the first as no badge and the second as
+    // "no change", because "we don't know" must never be shown as "all clear".
+    lastDelta: m.lastDelta
+      ? { total: m.lastDelta.total, counts: m.lastDelta.counts, at: m.lastDelta.at }
+      : null,
   };
 }
 

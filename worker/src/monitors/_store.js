@@ -40,6 +40,12 @@ function rowToMonitor(row) {
     // send the whole list. Fall back to null (baseline) instead, which sends
     // the same email but labels it honestly.
     lastAdvisoryIds: parseIdList(row.last_advisory_ids),
+    // What the previous sweep found NEW (migrations/0009). null means no
+    // sweep has completed since the column existed — deliberately distinct
+    // from a delta of zero, which means "swept, nothing new". The UI must
+    // render the two differently or it invents a clean bill of health for a
+    // monitor that has never reported.
+    lastDelta:       parseDelta(row.last_delta_json),
     createdBy:       row.created_by || null,
     createdAt:       row.created_at,
     pausedAt:        typeof row.paused_at === "number" ? row.paused_at : null,
@@ -119,13 +125,47 @@ export async function setMonitorPaused(env, orgId, monitorId, paused) {
   return getMonitor(env, orgId, monitorId);
 }
 
-/** Record the outcome of a completed run — the next run's diff baseline. */
-export async function recordMonitorRun(env, monitorId, { ranAt, resultHash, advisoryIds }) {
+/**
+ * Record the outcome of a completed run — the next run's diff baseline.
+ *
+ * `delta` is what THIS run found new, and is stored because it cannot be
+ * recovered later: the moment last_advisory_ids is overwritten below, the
+ * previous set is gone and the difference is unrecomputable. Passing null
+ * leaves the column untouched rather than clearing it, so a caller that does
+ * not compute a delta cannot erase the last one that did.
+ */
+export async function recordMonitorRun(env, monitorId, { ranAt, resultHash, advisoryIds, delta = null }) {
+  if (delta) {
+    await env.DB.prepare(
+      `UPDATE monitors
+          SET last_run_at = ?, last_result_hash = ?, last_advisory_ids = ?, last_delta_json = ?
+        WHERE monitor_id = ?`,
+    ).bind(ranAt, resultHash, JSON.stringify(advisoryIds), JSON.stringify(delta), monitorId).run();
+    return;
+  }
   await env.DB.prepare(
     `UPDATE monitors
         SET last_run_at = ?, last_result_hash = ?, last_advisory_ids = ?
       WHERE monitor_id = ?`,
   ).bind(ranAt, resultHash, JSON.stringify(advisoryIds), monitorId).run();
+}
+
+/**
+ * Parse the stored delta. Anything malformed reads as null ("unknown"), never
+ * as an empty delta — same rule parseIdList follows, and for the same reason:
+ * a corrupt value must not be able to assert that nothing changed.
+ */
+function parseDelta(raw) {
+  if (typeof raw !== "string" || !raw) return null;
+  try {
+    const d = JSON.parse(raw);
+    if (!d || typeof d.total !== "number" || d.total < 0) return null;
+    return {
+      total:  d.total,
+      counts: (d.counts && typeof d.counts === "object") ? d.counts : {},
+      at:     typeof d.at === "number" ? d.at : null,
+    };
+  } catch { return null; }
 }
 
 /**

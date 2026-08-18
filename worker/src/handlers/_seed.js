@@ -113,10 +113,16 @@ const SCHEMA_MONITORS = `
     last_advisory_ids TEXT,
     created_by        TEXT,
     created_at        INTEGER NOT NULL,
-    paused_at         INTEGER
+    paused_at         INTEGER,
+    last_delta_json   TEXT
   )
 `;
 // migrations/0008, for a database whose organisations table predates it.
+// migrations/0009, for a persisted database whose monitors table predates it.
+const MONITORS_BACKFILL_COLUMNS = [
+  "ALTER TABLE monitors ADD COLUMN last_delta_json TEXT",
+];
+
 const ORGS_BACKFILL_COLUMNS = [
   "ALTER TABLE organisations ADD COLUMN brand_company_name TEXT",
   "ALTER TABLE organisations ADD COLUMN brand_logo_url TEXT",
@@ -212,7 +218,7 @@ export async function seedHandler(request, env) {
     await env.DB.exec(SCHEMA_MEMBERSHIPS.replace(/\s+/g, " ").trim());
     await env.DB.exec(SCHEMA_API_KEYS.replace(/\s+/g, " ").trim());
     await env.DB.exec(SCHEMA_MONITORS.replace(/\s+/g, " ").trim());
-    for (const sql of USERS_BACKFILL_COLUMNS.concat(RUNS_BACKFILL_COLUMNS, ORGS_BACKFILL_COLUMNS)) {
+    for (const sql of USERS_BACKFILL_COLUMNS.concat(RUNS_BACKFILL_COLUMNS, ORGS_BACKFILL_COLUMNS, MONITORS_BACKFILL_COLUMNS)) {
       try { await env.DB.exec(sql); } catch { /* column already present */ }
     }
     // AFTER the backfill ALTERs: on a persisted pre-0007 table this index

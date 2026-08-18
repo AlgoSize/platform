@@ -184,6 +184,8 @@ const MIGRATIONS = Object.freeze([
   { id: "0008", name: "org_branding",
     checks: [{ table: "organisations", column: "brand_company_name" },
              { table: "organisations", column: "brand_logo_url" }] },
+  { id: "0009", name: "monitor_delta",
+    checks: [{ table: "monitors", column: "last_delta_json" }] },
 ]);
 
 /** Plain SQLite identifier — the only shape we will interpolate into a PRAGMA. */

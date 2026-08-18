@@ -2256,6 +2256,34 @@ code, .mono {
 .chip-impact-medium { color: var(--text-muted); }
 .chip-impact-low    { color: var(--text-dim); }
 .chip-mark { font-family: var(--font-mono); font-size: 0.6rem; }
+/* Critical needs a tone of its own: reusing chip-warn's amber for both would
+   collapse the top two severities into one signal exactly where the ordering
+   matters most. */
+.chip-danger { color: #fda4af; border-color: rgba(251, 113, 133, 0.4); background: rgba(251, 113, 133, 0.14); }
+
+/* Monitor delta — what the last sweep found NEW, beside the standing total. */
+.monitor-delta { display: inline-flex; gap: var(--s-2); flex-wrap: wrap; align-items: center; }
+
+/* Share links already minted for a report (D-4). */
+.share-list { list-style: none; margin: 0 0 var(--s-4); padding: 0; display: grid; gap: var(--s-2); }
+.share-item {
+  display: flex;
+  gap: var(--s-3);
+  align-items: center;
+  flex-wrap: wrap;
+  padding: var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2, #0d1118);
+}
+.share-item-url {
+  flex: 1 1 16rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+.share-item-revoke { color: #fda4af; }
 
 /* --- Team: members, invites, keys (D-2) --- */
 .member-table td { vertical-align: middle; }

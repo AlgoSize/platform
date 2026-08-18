@@ -107,6 +107,12 @@
       top.appendChild(el("span", { class: "mono monitor-branch" }, m.branch || "default branch"));
       var badge = statusBadge(m);
       if (badge) top.appendChild(badge);
+      // What changed since the previous sweep, beside the standing total. The
+      // two answer different questions — "how exposed is this repo" versus
+      // "did anything move" — and the second is the one a daily reader is
+      // actually scanning for.
+      var delta = deltaBadges(m);
+      if (delta) top.appendChild(delta);
       info.appendChild(top);
 
       var meta = el("div", { class: "monitor-meta mono" });
@@ -146,9 +152,7 @@
     wrap.appendChild(ul);
   }
 
-  // What the last run saw. There is no per-run delta in the list API — the
-  // diff lives in the alert email — so the badge reports the honest facts it
-  // has: baseline pending, clean, or N known advisories.
+  // What the last run saw: the standing total.
   function statusBadge(m) {
     if (m.paused) return el("span", { class: "chip chip-muted" }, "paused");
     if (m.knownAdvisoryCount === null || m.knownAdvisoryCount === undefined) {
@@ -159,6 +163,59 @@
     }
     return el("span", { class: "chip chip-warn" },
       m.knownAdvisoryCount + " known advisor" + (m.knownAdvisoryCount === 1 ? "y" : "ies"));
+  }
+
+  var DELTA_ORDER = ["critical", "high", "medium", "low", "unknown"];
+  var DELTA_CLASS = {
+    critical: "chip-danger", high: "chip-warn", medium: "chip-warn",
+    low: "chip-muted", unknown: "chip-muted",
+  };
+
+  /**
+   * What the last sweep found NEW (lastDelta, from migrations/0009).
+   *
+   * Three states, and the difference between the first two is the whole point:
+   *
+   *   null      no sweep has completed since the column existed. Renders
+   *             NOTHING — an unknown delta must never be shown as "no change",
+   *             which would assert a clean bill of health nobody measured.
+   *   total 0   swept, nothing new. Renders "no change", which is a real
+   *             result and worth saying.
+   *   total > 0 one chip per severity present, worst first.
+   *
+   * A baseline sweep is stored as zero by the Worker rather than as the size
+   * of the whole list, so a first run reads "no change" rather than claiming
+   * every advisory it discovered is new.
+   */
+  function deltaBadges(m) {
+    var d = m.lastDelta;
+    if (!d || typeof d.total !== "number") return null;
+
+    var box = el("span", { class: "monitor-delta" });
+    if (d.total === 0) {
+      box.appendChild(el("span", { class: "chip chip-muted" }, "no change"));
+      return box;
+    }
+
+    var counts = d.counts || {};
+    var shown = 0;
+    DELTA_ORDER.forEach(function (sev) {
+      var n = counts[sev];
+      if (!n) return;
+      shown += n;
+      box.appendChild(el("span",
+        { class: "chip " + (DELTA_CLASS[sev] || "chip-muted") },
+        "+" + n + " " + sev));
+    });
+
+    // Counts can be absent or not add up if an older row was written before
+    // the per-severity breakdown existed. Fall back to the total rather than
+    // rendering an empty box that silently loses the finding.
+    if (!shown) {
+      box.appendChild(el("span", { class: "chip chip-warn" },
+        "+" + d.total + " new"));
+    }
+    return box;
   }
 
   // ---------------------------------------------------------------------
