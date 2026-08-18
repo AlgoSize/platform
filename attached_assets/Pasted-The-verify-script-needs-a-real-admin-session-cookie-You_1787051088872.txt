@@ -1,0 +1,53 @@
+The verify script needs a real admin session cookie. You cannot get one by
+pasting placeholder text — the previous runs sent the literal string
+"<your algosize_session cookie value>" as the cookie, which is why every
+authenticated check returned 401.
+
+A valid session needs TWO things: a JWT signed with the production
+JWT_SECRET, AND a matching `sess:<token>` row in the SESSIONS KV namespace.
+Create both.
+
+Step 1 — write this to worker/scripts/mint-session.mjs (temporary, do not commit):
+
+```js
+import { signJWT } from "../src/auth.js";
+const secret = process.env.JWT_SECRET;
+const email  = process.env.ADMIN_EMAIL;
+if (!secret || !email) { console.error("set JWT_SECRET and ADMIN_EMAIL"); process.exit(1); }
+const userId = `usr_admin_verify`;
+const token  = await signJWT({ sub: userId, email, subStatus: "active" }, secret);
+const value  = JSON.stringify({ userId, email, subStatus: "active", iat: Math.floor(Date.now()/1000) });
+console.log("TOKEN=" + token);
+console.log("KVKEY=sess:" + token);
+console.log("KVVAL=" + value);
+```
+
+Step 2 — run it with the SAME JWT_SECRET value you uploaded to production
+earlier (you have it in Replit's secret store), and ADMIN_EMAIL set to
+guillaumelauzier@gmail.com (it must be in ADMIN_EMAILS or /api/admin/*
+returns 403):
+
+    cd worker
+    JWT_SECRET='<the production JWT_SECRET>' \
+    ADMIN_EMAIL='guillaumelauzier@gmail.com' \
+      node scripts/mint-session.mjs
+
+Step 3 — write the session row into the production SESSIONS KV namespace.
+Get the namespace id from worker/wrangler.toml's [env.production] SESSIONS
+binding, then:
+
+    wrangler kv key put --namespace-id=<SESSIONS_ID> "<KVKEY>" '<KVVAL>' --remote
+
+Step 4 — run the verification with the real token:
+
+    SITE_ORIGIN=https://algosize.com \
+    ADMIN_SESSION_COOKIE='<TOKEN from step 2>' \
+      npm run verify:production
+
+Paste back the full output. Then delete worker/scripts/mint-session.mjs and
+revoke the session:
+
+    wrangler kv key delete --namespace-id=<SESSIONS_ID> "<KVKEY>" --remote
+
+IMPORTANT: substitute the actual values everywhere you see <...>. Do not run
+any command containing literal angle brackets.
