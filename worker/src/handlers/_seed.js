@@ -84,6 +84,44 @@ const SCHEMA_MEMBERSHIPS = `
   )
 `;
 
+// migrations/0005 and 0006. Absent here until GET /api/admin/schema-check
+// pointed out that a wrangler-dev database had neither — which meant every
+// Team-screen and Monitors-screen request 500ed with "no such table" in the
+// one environment Playwright runs against, while passing everywhere else.
+const SCHEMA_API_KEYS = `
+  CREATE TABLE IF NOT EXISTS api_keys (
+    key_id       TEXT PRIMARY KEY,
+    org_id       TEXT NOT NULL,
+    name         TEXT NOT NULL,
+    key_hash     TEXT NOT NULL UNIQUE,
+    prefix       TEXT NOT NULL,
+    created_by   TEXT NOT NULL,
+    created_at   INTEGER NOT NULL,
+    last_used_at INTEGER,
+    revoked_at   INTEGER
+  )
+`;
+const SCHEMA_MONITORS = `
+  CREATE TABLE IF NOT EXISTS monitors (
+    monitor_id        TEXT PRIMARY KEY,
+    org_id            TEXT NOT NULL,
+    repo_url          TEXT NOT NULL,
+    branch            TEXT,
+    schedule          TEXT NOT NULL DEFAULT 'daily',
+    last_run_at       INTEGER,
+    last_result_hash  TEXT,
+    last_advisory_ids TEXT,
+    created_by        TEXT,
+    created_at        INTEGER NOT NULL,
+    paused_at         INTEGER
+  )
+`;
+// migrations/0008, for a database whose organisations table predates it.
+const ORGS_BACKFILL_COLUMNS = [
+  "ALTER TABLE organisations ADD COLUMN brand_company_name TEXT",
+  "ALTER TABLE organisations ADD COLUMN brand_logo_url TEXT",
+];
+
 // Columns added to `users` after the original inline schema above shipped.
 // A database file left over from an earlier run already has the table, so
 // CREATE TABLE IF NOT EXISTS silently skips the new columns — these bring it
@@ -92,6 +130,9 @@ const SCHEMA_MEMBERSHIPS = `
 const USERS_BACKFILL_COLUMNS = [
   "ALTER TABLE users ADD COLUMN current_period_end INTEGER",
   "ALTER TABLE users ADD COLUMN active_org_id TEXT",
+  // migrations/0003 — read back by handlers/_users.js.
+  "ALTER TABLE users ADD COLUMN quantity INTEGER",
+  "ALTER TABLE users ADD COLUMN price_id TEXT",
 ];
 const SCHEMA_RUNS = `
   CREATE TABLE IF NOT EXISTS runs (
@@ -169,7 +210,9 @@ export async function seedHandler(request, env) {
     await env.DB.exec(SCHEMA_RUNS_INDEX.replace(/\s+/g, " ").trim());
     await env.DB.exec(SCHEMA_ORGS.replace(/\s+/g, " ").trim());
     await env.DB.exec(SCHEMA_MEMBERSHIPS.replace(/\s+/g, " ").trim());
-    for (const sql of USERS_BACKFILL_COLUMNS.concat(RUNS_BACKFILL_COLUMNS)) {
+    await env.DB.exec(SCHEMA_API_KEYS.replace(/\s+/g, " ").trim());
+    await env.DB.exec(SCHEMA_MONITORS.replace(/\s+/g, " ").trim());
+    for (const sql of USERS_BACKFILL_COLUMNS.concat(RUNS_BACKFILL_COLUMNS, ORGS_BACKFILL_COLUMNS)) {
       try { await env.DB.exec(sql); } catch { /* column already present */ }
     }
     // AFTER the backfill ALTERs: on a persisted pre-0007 table this index

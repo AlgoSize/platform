@@ -54,7 +54,12 @@ import { ciRunHandler, ciSnippetHandler } from "./handlers/ci.js";
 import { billingPortalHandler } from "./handlers/billing.js";
 import { requestMagicLinkHandler, verifyMagicLinkHandler } from "./handlers/auth_magic.js";
 import { googleStartHandler, googleCallbackHandler } from "./handlers/auth_google.js";
-import { adminListUsersHandler, adminUsersCsvHandler, requireAdmin } from "./handlers/admin.js";
+import {
+  adminListUsersHandler,
+  adminUsersCsvHandler,
+  adminSchemaCheckHandler,
+  requireAdmin,
+} from "./handlers/admin.js";
 import { pageviewPixelHandler } from "./handlers/pageview.js";
 import { seedHandler } from "./handlers/_seed.js";
 import { enforceQuota } from "./quota.js";
@@ -144,6 +149,11 @@ router.get( "/api/auth/google/callback", makeRateLimit({ keyName: "google_cb", l
 // ---- Admin endpoints — gated by env.ADMIN_EMAILS allowlist ----------------
 router.get( "/api/admin/users",      requireAdmin, adminListUsersHandler);
 router.get( "/api/admin/users.csv",  requireAdmin, adminUsersCsvHandler);
+// Which migrations the live database actually has. The deploy pipeline does
+// not run `wrangler d1 execute`, so this is the only way to confirm from
+// outside the Cloudflare account that production has the schema the code
+// expects — see adminSchemaCheckHandler for what it can and cannot prove.
+router.get( "/api/admin/schema-check", requireAdmin, adminSchemaCheckHandler);
 
 // ---- Session routes (Task #8) ---------------------------------------------
 router.post("/api/logout",          requireAuth, logoutHandler);
