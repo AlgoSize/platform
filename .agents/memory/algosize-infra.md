@@ -32,6 +32,12 @@ After `wrangler deploy --env production`, the zone route takes ~2 minutes to pro
 ## Secrets on the production Worker
 JWT_SECRET, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_ID, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET — all set as of 2026-08-18.
 
+Replit's current secret store can serve as the recovery source for existing Stripe
+values: pass `$STRIPE_SECRET_KEY`, `$STRIPE_WEBHOOK_SECRET`, and `$STRIPE_PRICE_ID`
+to `wrangler secret put` without printing them. A newly uploaded JWT may briefly
+produce a 500 at the API route before propagation; retrying after propagation
+returned the expected 401 for a request without a token.
+
 ## Secret binding names
 Price IDs must be Cloudflare secrets rather than `[env.*.vars]` entries. Cloudflare rejects `secret put` when a deployed plaintext var already uses the same binding name, so remove the vars and redeploy before uploading same-named secrets.
 
