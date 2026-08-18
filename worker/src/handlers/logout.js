@@ -14,7 +14,10 @@ import { revokeJWT, buildClearSessionCookie } from "../auth.js";
 
 export async function logoutHandler(request, env) {
   if (request.token) {
-    await revokeJWT(env, request.token);
+    // The user id comes from requireAuth, which has already resolved it — so
+    // the per-user session index entry is dropped alongside the session
+    // rather than lingering as an orphan that reads as a live device.
+    await revokeJWT(env, request.token, request.user && request.user.userId);
   }
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,

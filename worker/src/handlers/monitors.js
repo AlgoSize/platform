@@ -24,6 +24,7 @@ import {
   monitorLimitFor,
   SCHEDULES,
 } from "../monitors/_store.js";
+import { auditFromRequest, AUDIT_ACTIONS } from "../audit.js";
 
 const MAX_URL_LEN    = 300;
 const MAX_BRANCH_LEN = 255;
@@ -187,6 +188,14 @@ export async function createMonitorHandler(request, env) {
     throw err;
   }
 
+  await auditFromRequest(request, env, null, {
+    action:     AUDIT_ACTIONS.MONITOR_CREATED,
+    targetType: "monitor",
+    targetId:   monitor.monitorId,
+    orgId:      ctxOrg.orgId,
+    metadata:   { repoUrl, branch, schedule },
+  });
+
   return jsonResponse({ ok: true, monitor: publicMonitor(monitor), monitorsUsed: used + 1, monitorLimit: limit }, 201);
 }
 
@@ -200,10 +209,22 @@ export async function deleteMonitorHandler(request, env) {
   const monitorId = request.params && request.params.id;
   if (!monitorId) return jsonResponse({ error: "invalid_request", message: "No monitor id supplied." }, 400);
 
+  // Read before delete: the repo URL is the only human-readable identifier a
+  // monitor has, and after the delete there is nothing left to name it by.
+  const before  = await getMonitor(env, ctxOrg.orgId, monitorId);
   const removed = await deleteMonitor(env, ctxOrg.orgId, monitorId);
   if (!removed) {
     return jsonResponse({ error: "not_found", message: "No monitor with that id on this organisation." }, 404);
   }
+
+  await auditFromRequest(request, env, null, {
+    action:     AUDIT_ACTIONS.MONITOR_DELETED,
+    targetType: "monitor",
+    targetId:   monitorId,
+    orgId:      ctxOrg.orgId,
+    metadata:   { repoUrl: (before && before.repoUrl) || null, branch: (before && before.branch) || null },
+  });
+
   return jsonResponse({ ok: true, monitorId, removed: true });
 }
 
@@ -232,5 +253,16 @@ export async function pauseMonitorHandler(request, env) {
     : existing.pausedAt === null;
 
   const updated = await setMonitorPaused(env, ctxOrg.orgId, monitorId, paused);
+
+  // A paused monitor stops sending the alerts someone is relying on, so the
+  // pause is logged as its own action rather than a generic "updated".
+  await auditFromRequest(request, env, null, {
+    action:     paused ? AUDIT_ACTIONS.MONITOR_PAUSED : AUDIT_ACTIONS.MONITOR_RESUMED,
+    targetType: "monitor",
+    targetId:   monitorId,
+    orgId:      ctxOrg.orgId,
+    metadata:   { repoUrl: existing.repoUrl, branch: existing.branch || null },
+  });
+
   return jsonResponse({ ok: true, monitor: publicMonitor(updated) });
 }

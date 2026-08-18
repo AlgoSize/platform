@@ -198,7 +198,9 @@ export async function googleCallbackHandler(request, env) {
     user = created.user;
   }
 
-  const sessionToken = await issueJWT(env, user.userId, user.email, user.subStatus);
+  const sessionToken = await issueJWT(env, user.userId, user.email, user.subStatus, {
+    request, authMethod: "google",
+  });
   const cookie = buildSessionCookie(env, sessionToken, {
     secure: !(env.SITE_ORIGIN || "").startsWith("http://localhost"),
   });

@@ -12,6 +12,7 @@
 // requireAuth's own doc comment below for the split.
 
 import { verifyApiKey, touchApiKeyLastUsed } from "./handlers/_api_keys.js";
+import { indexSession, unindexSession } from "./sessions.js";
 
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;  // 30 days
 const ALG = "HS256";
@@ -151,8 +152,21 @@ function requireSecret(env) {
  * Issue a session JWT for a user, store it in SESSIONS KV with a 30-day TTL,
  * and return the token. Callers (e.g. the Stripe webhook in Task #4) decide
  * whether to put the token in a cookie, send it back as JSON, or both.
+ *
+ * The options bag is how a caller says HOW the user got here:
+ *
+ *   request    — the inbound request, used only for session-index display
+ *                metadata (user agent, IP, country).
+ *   authMethod — "magic_link" | "google" | "checkout" | "signup". Persisted
+ *                on the users row (migrations/0011) so support can answer
+ *                "why can't this person sign in" without guessing which of
+ *                the two flows they use.
+ *
+ * Both are optional and both fail soft. A session must be issuable even when
+ * D1 is unreachable: refusing to log someone in because a metadata write
+ * failed would turn a reporting outage into an authentication outage.
  */
-export async function issueJWT(env, userId, email, subStatus) {
+export async function issueJWT(env, userId, email, subStatus, { request = null, authMethod = null } = {}) {
   requireSecret(env);
   const token = await signJWT(
     { sub: userId, email, subStatus },
@@ -166,12 +180,35 @@ export async function issueJWT(env, userId, email, subStatus) {
     JSON.stringify({ userId, email, subStatus, iat: Math.floor(Date.now() / 1000) }),
     { expirationTtl: SESSION_TTL_SECONDS },
   );
+
+  try { await indexSession(env, userId, token, request); }
+  catch { /* the session is valid; it is only missing from the sessions list */ }
+
+  if (authMethod) {
+    try {
+      await env.DB
+        .prepare("UPDATE users SET auth_method = ? WHERE user_id = ?")
+        .bind(authMethod, userId)
+        .run();
+    } catch { /* pre-0011 database, or D1 unavailable — not worth failing a login over */ }
+  }
+
   return token;
 }
 
-/** Revoke a session by deleting it from KV. */
-export async function revokeJWT(env, token) {
+/**
+ * Revoke a session by deleting it from KV.
+ *
+ * `userId` is optional but should be passed wherever it is known: without it
+ * the per-user index entry survives the session it points at, and that
+ * orphan then shows up as a live session until the next index read prunes it.
+ */
+export async function revokeJWT(env, token, userId = null) {
   await env.SESSIONS.delete(`sess:${token}`);
+  if (userId) {
+    try { await unindexSession(env, userId, token); }
+    catch { /* orphaned index entry; pruned on the next listUserSessions */ }
+  }
 }
 
 // ---------------------------------------------------------------------------

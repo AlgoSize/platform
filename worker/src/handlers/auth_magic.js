@@ -16,6 +16,7 @@
 // accounts. (Same enumeration-safe pattern Stripe / Linear / GitHub use.)
 
 import { issueJWT, buildSessionCookie } from "../auth.js";
+import { recordEmailSend } from "../oplog.js";
 import { getUserByEmail, createFreeUser } from "./_users.js";
 import { sendTransactional } from "../email/transactional.js";
 import { magicLinkEmail } from "../email/templates.js";
@@ -88,14 +89,20 @@ export async function requestMagicLinkHandler(request, env, ctx) {
   // attempt the send (an attacker probing for accounts gets the same
   // 200 + "check your inbox" copy regardless of whether mail goes out).
   const tmpl = magicLinkEmail({ email, verifyUrl, ttlMinutes: TOKEN_TTL_SEC / 60 });
+  // The send stays off the response path, but its OUTCOME is logged — this
+  // is the exact flow whose silent no-op made the magic-link outage earlier
+  // in this project invisible: every send "succeeded" by doing nothing.
   const sendPromise = sendTransactional(env, ctx, {
     to:      email,
     subject: tmpl.subject,
     text:    tmpl.text,
     html:    tmpl.html,
-  });
+  }).then((result) =>
+    recordEmailSend(env, ctx, { recipient: email, template: "magic_link", result })
+      .then(() => result),
+  );
   if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(sendPromise);
-  else void sendPromise;
+  else void sendPromise.catch(() => {});
 
   return jsonResponse({
     ok: true,
@@ -156,7 +163,9 @@ export async function verifyMagicLinkHandler(request, env) {
     user = created.user;
   }
 
-  const sessionToken = await issueJWT(env, user.userId, user.email, user.subStatus);
+  const sessionToken = await issueJWT(env, user.userId, user.email, user.subStatus, {
+    request, authMethod: "magic_link",
+  });
   const cookie = buildSessionCookie(env, sessionToken, {
     secure: !(env.SITE_ORIGIN || "").startsWith("http://localhost"),
   });

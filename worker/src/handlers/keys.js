@@ -14,6 +14,7 @@
 
 import { getActiveOrg, canManageMembers } from "./_orgs.js";
 import { createApiKey, listApiKeys, getApiKey, revokeApiKey } from "./_api_keys.js";
+import { auditFromRequest, AUDIT_ACTIONS } from "../audit.js";
 
 const MAX_NAME_LEN = 100;
 
@@ -89,6 +90,18 @@ export async function createApiKeyHandler(request, env) {
 
   const { key, record } = await createApiKey(env, { orgId: org.orgId, name, createdBy: userId });
 
+  // The PREFIX, never the key. This row is read by the admin panel and
+  // exported; a log that reproduces the credential is a second place to
+  // leak it from, and the prefix is all anyone needs to match a log line
+  // to a key in the list.
+  await auditFromRequest(request, env, null, {
+    action:     AUDIT_ACTIONS.API_KEY_CREATED,
+    targetType: "api_key",
+    targetId:   record.keyId,
+    orgId:      org.orgId,
+    metadata:   { name: record.name, prefix: record.prefix },
+  });
+
   return jsonResponse(
     {
       ok: true,
@@ -151,5 +164,14 @@ export async function revokeApiKeyHandler(request, env) {
   }
 
   const revoked = await revokeApiKey(env, ctxOrg.org.orgId, keyId);
+
+  await auditFromRequest(request, env, null, {
+    action:     AUDIT_ACTIONS.API_KEY_REVOKED,
+    targetType: "api_key",
+    targetId:   keyId,
+    orgId:      ctxOrg.org.orgId,
+    metadata:   { name: existing.name, prefix: existing.prefix },
+  });
+
   return jsonResponse({ ok: true, keyId, revoked });
 }

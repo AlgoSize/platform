@@ -186,6 +186,16 @@ const MIGRATIONS = Object.freeze([
              { table: "organisations", column: "brand_logo_url" }] },
   { id: "0009", name: "monitor_delta",
     checks: [{ table: "monitors", column: "last_delta_json" }] },
+  { id: "0010", name: "audit_log",
+    checks: [{ table: "audit_log" }] },
+  { id: "0011", name: "user_auth_method",
+    checks: [{ table: "users", column: "auth_method" }] },
+  { id: "0012", name: "webhook_deliveries",
+    checks: [{ table: "webhook_deliveries" }] },
+  { id: "0013", name: "email_sends",
+    checks: [{ table: "email_sends" }] },
+  { id: "0014", name: "feature_flags",
+    checks: [{ table: "feature_flags" }] },
 ]);
 
 /** Plain SQLite identifier — the only shape we will interpolate into a PRAGMA. */

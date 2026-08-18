@@ -139,6 +139,8 @@ const USERS_BACKFILL_COLUMNS = [
   // migrations/0003 — read back by handlers/_users.js.
   "ALTER TABLE users ADD COLUMN quantity INTEGER",
   "ALTER TABLE users ADD COLUMN price_id TEXT",
+  // migrations/0011 — read back by the admin panel's user drawer.
+  "ALTER TABLE users ADD COLUMN auth_method TEXT",
 ];
 const SCHEMA_RUNS = `
   CREATE TABLE IF NOT EXISTS runs (
@@ -170,6 +172,61 @@ const RUNS_BACKFILL_COLUMNS = [
   "ALTER TABLE runs ADD COLUMN org_id TEXT",
   "ALTER TABLE runs ADD COLUMN source TEXT",
 ];
+
+// migrations/0010 and 0012-0014 — the tables the admin panel reads. All four
+// are append-only logs or a tiny key/value store, so an e2e database that has
+// them but no rows renders exactly what a brand-new production database
+// renders: an empty list, not an error. That is the state worth testing.
+//
+// Same rule as above about `--` comments: none inside these strings.
+const SCHEMA_AUDIT_LOG = `
+  CREATE TABLE IF NOT EXISTS audit_log (
+    audit_id      TEXT PRIMARY KEY,
+    actor         TEXT NOT NULL,
+    actor_user_id TEXT,
+    action        TEXT NOT NULL,
+    target_type   TEXT,
+    target_id     TEXT,
+    org_id        TEXT,
+    metadata_json TEXT,
+    created_at    INTEGER NOT NULL
+  )
+`;
+const SCHEMA_AUDIT_LOG_INDEX = `
+  CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log (created_at DESC)
+`;
+const SCHEMA_WEBHOOK_DELIVERIES = `
+  CREATE TABLE IF NOT EXISTS webhook_deliveries (
+    delivery_id   TEXT PRIMARY KEY,
+    event_id      TEXT,
+    event_type    TEXT NOT NULL,
+    org_id        TEXT,
+    outcome       TEXT NOT NULL,
+    error_message TEXT,
+    received_at   INTEGER NOT NULL
+  )
+`;
+const SCHEMA_EMAIL_SENDS = `
+  CREATE TABLE IF NOT EXISTS email_sends (
+    send_id   TEXT PRIMARY KEY,
+    recipient TEXT NOT NULL,
+    template  TEXT NOT NULL,
+    org_id    TEXT,
+    outcome   TEXT NOT NULL,
+    reason    TEXT,
+    sent_at   INTEGER NOT NULL
+  )
+`;
+const SCHEMA_FEATURE_FLAGS = `
+  CREATE TABLE IF NOT EXISTS feature_flags (
+    flag_key    TEXT PRIMARY KEY,
+    enabled     INTEGER NOT NULL DEFAULT 0,
+    rollout_pct INTEGER NOT NULL DEFAULT 100,
+    description TEXT,
+    updated_by  TEXT,
+    updated_at  INTEGER NOT NULL
+  )
+`;
 
 export async function seedHandler(request, env) {
   // Hard 404 in any environment that does not opt in.
@@ -218,6 +275,11 @@ export async function seedHandler(request, env) {
     await env.DB.exec(SCHEMA_MEMBERSHIPS.replace(/\s+/g, " ").trim());
     await env.DB.exec(SCHEMA_API_KEYS.replace(/\s+/g, " ").trim());
     await env.DB.exec(SCHEMA_MONITORS.replace(/\s+/g, " ").trim());
+    await env.DB.exec(SCHEMA_AUDIT_LOG.replace(/\s+/g, " ").trim());
+    await env.DB.exec(SCHEMA_AUDIT_LOG_INDEX.replace(/\s+/g, " ").trim());
+    await env.DB.exec(SCHEMA_WEBHOOK_DELIVERIES.replace(/\s+/g, " ").trim());
+    await env.DB.exec(SCHEMA_EMAIL_SENDS.replace(/\s+/g, " ").trim());
+    await env.DB.exec(SCHEMA_FEATURE_FLAGS.replace(/\s+/g, " ").trim());
     for (const sql of USERS_BACKFILL_COLUMNS.concat(RUNS_BACKFILL_COLUMNS, ORGS_BACKFILL_COLUMNS, MONITORS_BACKFILL_COLUMNS)) {
       try { await env.DB.exec(sql); } catch { /* column already present */ }
     }

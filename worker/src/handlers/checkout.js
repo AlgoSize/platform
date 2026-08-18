@@ -170,7 +170,9 @@ export async function checkoutSuccessHandler(request, env) {
     subStatus: "active",
   });
 
-  const token  = await issueJWT(env, user.userId, user.email, user.subStatus);
+  const token  = await issueJWT(env, user.userId, user.email, user.subStatus, {
+    request, authMethod: "checkout",
+  });
   const cookie = buildSessionCookie(env, token, { secure: !env.SITE_ORIGIN.startsWith("http://localhost") });
 
   return new Response(null, {
