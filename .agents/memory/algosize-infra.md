@@ -38,6 +38,12 @@ to `wrangler secret put` without printing them. A newly uploaded JWT may briefly
 produce a 500 at the API route before propagation; retrying after propagation
 returned the expected 401 for a request without a token.
 
+The configured Wrangler token cannot list or delete production KV keys, but the
+added Cloudflare connector can read them. Use the connector for temporary admin
+magic-token discovery; do not print the token. The verification session cleanup
+path may return `invalid_token`, so confirm the session state before reusing this
+flow.
+
 ## Secret binding names
 Price IDs must be Cloudflare secrets rather than `[env.*.vars]` entries. Cloudflare rejects `secret put` when a deployed plaintext var already uses the same binding name, so remove the vars and redeploy before uploading same-named secrets.
 
