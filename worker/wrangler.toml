@@ -129,26 +129,27 @@ EMAIL_DELEGATED_USER = "noreply@algosize.com"
 ADMIN_EMAILS         = "guillaumelauzier@gmail.com"
 
 # ----------------------------------------------------------------------------
-# Free-tier quota counter (see src/usage-counter.js).
+# NO top-level `[[durable_objects.bindings]]` / `[[migrations]]` for USAGE.
 #
-# Declared here on the DEFAULT env as well as on production and staging so
-# `wrangler dev` and the Playwright suite enforce the quota the same way the
-# deployed Worker does. Without it, src/quota.js falls back to a non-atomic KV
-# counter that concurrent requests defeat outright — so local dev would be
-# running materially different gate semantics from production, and the one
-# behaviour worth testing here (that the limit actually holds under a burst)
-# would be untestable in the only environment the e2e suite exercises.
+# Tried it, and it broke the deploy. The USAGE Durable Object (src/quota.js,
+# src/usage-counter.js) is declared under [env.production] and [env.staging]
+# only. Adding a matching pair up here looks like it would just give
+# `wrangler dev` the same quota semantics production has — and `wrangler
+# deploy --dry-run` accepts it for both envs — but the top-level `name` on
+# line 1 is ALSO "algosize", so the default env and the production env target
+# the same Worker script. That leaves two migration chains each declaring
+# `new_sqlite_classes = ["UsageCounter"]` against one script, and the remote
+# apply fails where the dry-run cannot (dry-run never contacts the migration
+# state, so this is invisible until Workers Builds tries it for real).
 #
-# Per-environment blocks do not inherit top-level ones, which is why the same
-# pair is repeated under [env.production] and [env.staging] below.
+# Consequence to know about: without the binding, a bare `wrangler dev` falls
+# back to the non-atomic KV counter in src/quota.js, so the free-tier limit
+# does NOT hold under concurrency locally the way it does in production. That
+# is a dev/prod semantic difference, and it is deliberate rather than
+# overlooked. Use `wrangler dev --env production` to exercise the real gate;
+# the DO's behaviour itself is covered by scripts/test-quota-concurrency.mjs,
+# which stubs the namespace and does not need a binding.
 # ----------------------------------------------------------------------------
-[[durable_objects.bindings]]
-name       = "USAGE"
-class_name = "UsageCounter"
-
-[[migrations]]
-tag             = "v1"
-new_sqlite_classes = ["UsageCounter"]
 
 # ----------------------------------------------------------------------------
 # Production overrides (used by `wrangler deploy --env production`).
