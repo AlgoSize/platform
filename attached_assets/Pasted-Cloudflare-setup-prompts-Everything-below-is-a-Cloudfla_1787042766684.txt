@@ -1,0 +1,72 @@
+Cloudflare setup prompts
+Everything below is a Cloudflare product you are not yet using. Run these as Replit agent tasks or by hand — each ends with a verification step, because a binding that silently isn't there is how this platform already lost a week.
+
+CF-1 · Bindings and resources
+wrangler.toml
+Provision the Cloudflare resources this roadmap needs, and wire the bindings
+into worker/wrangler.toml for BOTH [env.production] and [env.staging].
+
+Run from worker/ :
+  wrangler r2 bucket create algosize-reports
+  wrangler r2 bucket create algosize-reports-staging
+  wrangler queues create algosize-scans
+  wrangler queues create algosize-scans-staging
+
+Then add to wrangler.toml, per environment:
+  [[r2_buckets]]      binding = "REPORTS"  bucket_name = "algosize-reports"
+  [[queues.producers]] binding = "SCAN_QUEUE" queue = "algosize-scans"
+  [[queues.consumers]] queue = "algosize-scans" max_batch_size = 10 max_retries = 3
+  [[durable_objects.bindings]] name = "USAGE" class_name = "UsageCounter"
+  [triggers] crons = ["0 3 * * *"]
+
+Add a migrations block for the Durable Object class on first deploy.
+
+IMPORTANT: every wrangler command in this repo must pass --config wrangler.toml.
+A wrangler.jsonc at the repo root shadows worker/wrangler.toml otherwise — that
+already caused a production incident here.
+
+Verify: wrangler deploy --config wrangler.toml --dry-run --env production
+must list REPORTS, SCAN_QUEUE, USAGE, DB, SESSIONS and USERS. If it prints
+"No bindings found", the wrong config was loaded — stop and fix that first.
+CF-2 · Secrets, and getting off the current fire
+urgent
+The production Worker is currently missing its secrets — /api/me returns 500
+because JWT_SECRET is unset, and Stripe checkout fails on STRIPE_PRICE_ID.
+Set them, then verify.
+
+cd worker
+wrangler secret put JWT_SECRET             --env production   # 32+ random bytes
+wrangler secret put STRIPE_SECRET_KEY      --env production
+wrangler secret put STRIPE_WEBHOOK_SECRET  --env production
+wrangler secret put STRIPE_PRICE_ID        --env production
+wrangler secret put GOOGLE_CLIENT_ID       --env production
+wrangler secret put GOOGLE_CLIENT_SECRET   --env production
+wrangler secret list --env production
+
+Rotating JWT_SECRET signs every existing session out — unavoidable if the old
+value is gone.
+
+Also in Google Cloud Console, set the authorized redirect URI to exactly
+  https://algosize.com/api/auth/google/callback
+Google rejects the callback on any mismatch, so sign-in stays broken until this
+matches SITE_ORIGIN.
+
+Verify: curl -i https://algosize.com/api/me  ->  401 with JSON, not 500.
+CF-3 · Abuse, WAF and audit logging
+F-11
+Harden the public surface now that there is money behind it.
+
+- Turnstile on the signup and magic-link forms; verify the token server-side in
+  handlers/auth_magic.js before sending any email. Free signup is currently an
+  unauthenticated email-send primitive.
+- WAF rate-limiting rule on /api/* at the zone level as a second layer above the
+  KV limiter in middleware/rate-limit.js.
+- Enable Logpush for Worker trace events to R2, 90-day retention. This is the
+  audit trail the first customer questionnaire will ask for.
+- Replace the ADMIN_EMAILS var with an admins table in D1, and write an
+  admin_audit row (actor, action, target, timestamp) on every /api/admin/* call.
+- Turn on Cloudflare Access in front of site/admin.html rather than relying on
+  the email allowlist alone.
+
+Verify: an admin roster view appears in admin_audit; a scripted signup burst is
+blocked by WAF before it reaches the Worker.
