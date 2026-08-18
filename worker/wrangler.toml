@@ -129,6 +129,29 @@ EMAIL_DELEGATED_USER = "noreply@algosize.com"
 ADMIN_EMAILS         = "guillaumelauzier@gmail.com"
 
 # ----------------------------------------------------------------------------
+# NO top-level `[[durable_objects.bindings]]` / `[[migrations]]` for USAGE.
+#
+# Tried it, and it broke the deploy. The USAGE Durable Object (src/quota.js,
+# src/usage-counter.js) is declared under [env.production] and [env.staging]
+# only. Adding a matching pair up here looks like it would just give
+# `wrangler dev` the same quota semantics production has — and `wrangler
+# deploy --dry-run` accepts it for both envs — but the top-level `name` on
+# line 1 is ALSO "algosize", so the default env and the production env target
+# the same Worker script. That leaves two migration chains each declaring
+# `new_sqlite_classes = ["UsageCounter"]` against one script, and the remote
+# apply fails where the dry-run cannot (dry-run never contacts the migration
+# state, so this is invisible until Workers Builds tries it for real).
+#
+# Consequence to know about: without the binding, a bare `wrangler dev` falls
+# back to the non-atomic KV counter in src/quota.js, so the free-tier limit
+# does NOT hold under concurrency locally the way it does in production. That
+# is a dev/prod semantic difference, and it is deliberate rather than
+# overlooked. Use `wrangler dev --env production` to exercise the real gate;
+# the DO's behaviour itself is covered by scripts/test-quota-concurrency.mjs,
+# which stubs the namespace and does not need a binding.
+# ----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
 # Production overrides (used by `wrangler deploy --env production`).
 # Cookie name stays the same; SITE_ORIGIN points to the deployed site/worker.
 # Update SITE_ORIGIN once the marketing site has its own domain so CORS,

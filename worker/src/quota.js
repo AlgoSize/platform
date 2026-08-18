@@ -81,18 +81,97 @@ export async function getMonthlyUsage(env, userId, now = new Date()) {
 /**
  * Increment the user's month counter by 1 and return the new value.
  *
- * KV is eventually consistent and has no atomic increment, so two requests
- * landing in the same millisecond can both read N and both write N+1 — i.e.
- * we may under-count by one in a true race. That's acceptable for a free
- * quota: it errs in the user's favor (they get one extra free run) and
- * never errs against them. A strict atomic counter would require D1 (see
- * follow-up Task #25).
+ * LEGACY / FALLBACK PATH — not atomic. Two requests can both read N and both
+ * write N+1, and under real concurrency the shortfall is unbounded rather than
+ * off-by-one: 20 concurrent callers all read 0 and all write 1. Metering no
+ * longer runs through here when the USAGE Durable Object is bound, which is
+ * the case in every deployed environment; see reserveRun below. It remains for
+ * the no-DO case (bare `wrangler dev`, unit tests) and as the seed the DO
+ * migrates from.
  */
 export async function incrementMonthlyUsage(env, userId, now = new Date()) {
   const key  = quotaKey(userId, now);
   const next = (await getMonthlyUsage(env, userId, now)) + 1;
   await env.USERS.put(key, String(next), { expirationTtl: QUOTA_TTL_SECONDS });
   return next;
+}
+
+// ---------------------------------------------------------------------------
+// Atomic reserve / release, via the USAGE Durable Object.
+// ---------------------------------------------------------------------------
+
+/**
+ * Call one op on the meter's Durable Object.
+ *
+ * `idFromName(meterId)` is what makes this correct: every request for one
+ * account routes to the same object, so the object's single-threaded execution
+ * is a global lock on that account's counter. A different meter id gets a
+ * different object and never contends.
+ *
+ * Returns null when there is no USAGE binding, so callers fall back to KV.
+ */
+async function usageOp(env, meterId, op, now, extra = {}) {
+  if (!env || !env.USAGE || !meterId) return null;
+  try {
+    const stub = env.USAGE.get(env.USAGE.idFromName(meterId));
+    const res  = await stub.fetch("https://usage.internal/", {
+      method:  "POST",
+      headers: { "content-type": "application/json" },
+      body:    JSON.stringify({ op, meterId, month: currentMonthKey(now), ...extra }),
+    });
+    if (!res.ok) throw new Error(`usage counter returned ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    // Fall back to KV rather than failing the request. A DO outage should
+    // degrade the guarantee, not take the analyzers down — and the KV path,
+    // weak as it is, still stops the sequential case.
+    console.warn("quota: USAGE durable object unavailable, falling back to KV", err && err.message);
+    return null;
+  }
+}
+
+/**
+ * Atomically claim one run against the month's limit.
+ *
+ * Returns `{ allowed, used }` where `used` is the post-reservation count when
+ * allowed, and the current count when refused. The caller must release on any
+ * non-200 from the handler it went on to run — see releaseRun.
+ */
+export async function reserveRun(env, meterId, now = new Date(), limit = FREE_MONTHLY_LIMIT) {
+  const viaDo = await usageOp(env, meterId, "reserve", now, { limit });
+  if (viaDo) return { allowed: !!viaDo.allowed, used: viaDo.used, atomic: true };
+
+  // KV fallback: check-then-act, and knowingly racy. Kept so the analyzers
+  // still meter at all in an environment with no DO binding.
+  const used = await getMonthlyUsage(env, meterId, now);
+  if (used >= limit) return { allowed: false, used, atomic: false };
+  const next = await incrementMonthlyUsage(env, meterId, now);
+  return { allowed: true, used: next, atomic: false };
+}
+
+/**
+ * Hand back a reservation whose run did not succeed.
+ *
+ * Floors at zero on both paths, so a duplicated release can never mint quota.
+ */
+export async function releaseRun(env, meterId, now = new Date()) {
+  const viaDo = await usageOp(env, meterId, "release", now);
+  if (viaDo) return viaDo.used;
+
+  const used = await getMonthlyUsage(env, meterId, now);
+  const next = Math.max(0, used - 1);
+  await env.USERS.put(quotaKey(meterId, now), String(next), { expirationTtl: QUOTA_TTL_SECONDS });
+  return next;
+}
+
+/**
+ * Current month's count for display (/api/me), from whichever store is
+ * authoritative in this environment.
+ */
+export async function peekUsage(env, meterId, now = new Date()) {
+  const viaDo = await usageOp(env, meterId, "peek", now);
+  if (viaDo) return viaDo.used;
+  return getMonthlyUsage(env, meterId, now);
 }
 
 // ---------------------------------------------------------------------------
@@ -176,16 +255,32 @@ function jsonResponse(body, status = 200) {
  *      never increment the counter). A cancelled subscriber stays entitled
  *      until the end of the period they paid for, then stops.
  *   3. Otherwise (free, cancelled-and-expired, or no user row at all):
- *      a. Read the current month's count. If >= 5 → return 402
- *         `{ error: "quota_exceeded", monthlyRunsUsed, monthlyRunsLimit,
- *            upgradeUrl }` WITHOUT calling the handler.
- *      b. Otherwise call the handler. If it returns 200, queue an
- *         increment via ctx.waitUntil (non-blocking — the response goes
- *         out immediately, the KV write happens in the background).
+ *      a. RESERVE one run atomically. If the month is already at the limit
+ *         → return 402 `{ error: "quota_exceeded", monthlyRunsUsed,
+ *           monthlyRunsLimit, upgradeUrl }` WITHOUT calling the handler.
+ *      b. Otherwise call the handler. On any non-200 (or a throw), RELEASE
+ *         the reservation so the failed run costs the user nothing.
  *
- * Increment-on-success means a validation error (400) or sandbox crash
- * (500) doesn't burn the user's free quota — they only "spend" a run when
- * they actually got a successful analysis back.
+ * RESERVE-BEFORE-RUN IS THE WHOLE POINT. This used to read the counter, run
+ * the handler, and increment afterwards on a 200 — which is check-then-act
+ * with the handler's entire execution time as the race window. Because these
+ * handlers run analyzer code in a sandbox, that window is hundreds of ms to
+ * seconds, and it did not hold: 20 concurrent requests from a fresh free user
+ * produced 20 successful runs and left the counter at 1, making the burst
+ * repeatable forever. Reserving collapses the decision and the write into one
+ * atomic step against the USAGE Durable Object (src/usage-counter.js), so a
+ * concurrent caller at the boundary observes the post-reservation count.
+ *
+ * The cost of that is this function no longer knows the run succeeded when it
+ * charges for it, hence the release on the failure path. Net behaviour for a
+ * user is unchanged from the increment-on-success design — a validation error
+ * (400) or sandbox crash (500) still doesn't burn a free run — but it is now
+ * two writes on the failure path instead of zero, which is the right place to
+ * spend it.
+ *
+ * Without a USAGE binding (bare `wrangler dev`, unit tests) reserveRun falls
+ * back to the old non-atomic KV path. Same observable behaviour sequentially,
+ * same race under concurrency; deployed environments all bind the DO.
  *
  * `now` is injectable for tests that need to assert month-boundary
  * behavior without time-travelling the system clock.
@@ -226,9 +321,12 @@ export function enforceQuota(handler, { now, sendTransactional: sendTxOverride }
       return handler(request, env, ctx);
     }
 
-    // Free tier — gate on the month counter.
-    const used = await getMonthlyUsage(env, meterId, ts);
-    if (used >= FREE_MONTHLY_LIMIT) {
+    // Free tier — claim a run atomically BEFORE the handler runs. Reserving
+    // at the gate is what closes the race: the decision and the write are one
+    // step, so a concurrent caller at the boundary sees the post-reservation
+    // count rather than the value this request read.
+    const { allowed, used } = await reserveRun(env, meterId, ts, FREE_MONTHLY_LIMIT);
+    if (!allowed) {
       return jsonResponse(
         {
           error:             "quota_exceeded",
@@ -241,32 +339,43 @@ export function enforceQuota(handler, { now, sendTransactional: sendTxOverride }
       );
     }
 
-    const response = await handler(request, env, ctx);
-    if (response && response.status === 200) {
-      // Fire-and-forget increment + (at the boundary) the warning email.
-      // Both must run AFTER the response flushes, but the email send must
-      // see the *post-increment* count, so they're chained inside one
-      // ctx.waitUntil promise. In single-Worker dev mode (no ctx) we
-      // still await so the test suite sees the new count and the spy.
+    let response;
+    try {
+      response = await handler(request, env, ctx);
+    } catch (err) {
+      // A throwing handler is a crashed run, not a consumed one. Give the
+      // reservation back before re-throwing so the error still surfaces.
+      await releaseRun(env, meterId, ts);
+      throw err;
+    }
+
+    if (!response || response.status !== 200) {
+      // Validation error, sandbox crash, upstream 502 — the user did not get
+      // an analysis, so they do not spend a run. This preserves the behaviour
+      // the increment-on-success design had; reserving at the gate is what
+      // makes the release necessary rather than free.
+      const giveBack = releaseRun(env, meterId, ts);
+      if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(giveBack);
+      else await giveBack;
+      return response;
+    }
+
+    // The run counted. `used` is already the post-reservation count, so the
+    // warning email needs no second read — and it is the count this request
+    // actually claimed, not a re-read that a concurrent run could have moved.
+    // Skipped early off the boundary, so the typical path costs nothing extra.
+    if (used === QUOTA_WARN_AT_RUNS) {
       const work = (async () => {
-        const next = await incrementMonthlyUsage(env, meterId, ts);
-        // Skipped early when `next !== QUOTA_WARN_AT_RUNS`, so the typical
-        // run path costs zero extra KV ops.
-        if (next === QUOTA_WARN_AT_RUNS) {
-          // A session has the member's own row; an API key has no member —
-          // fall back to the org's billing owner. If even that has no email
-          // on file (shouldn't happen; every org has an owner), the free
-          // run itself is still granted — a missing warning is not a reason
-          // to fail the request that earned it.
-          const recipient = user || await orgBillingRecipient(env, org?.orgId);
-          if (recipient) await maybeSendQuotaWarning(env, ctx, recipient, next, ts, sendTxOverride);
-        }
+        // A session has the member's own row; an API key has no member —
+        // fall back to the org's billing owner. If even that has no email
+        // on file (shouldn't happen; every org has an owner), the free
+        // run itself is still granted — a missing warning is not a reason
+        // to fail the request that earned it.
+        const recipient = user || await orgBillingRecipient(env, org?.orgId);
+        if (recipient) await maybeSendQuotaWarning(env, ctx, recipient, used, ts, sendTxOverride);
       })();
-      if (ctx && typeof ctx.waitUntil === "function") {
-        ctx.waitUntil(work);
-      } else {
-        await work;
-      }
+      if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(work);
+      else await work;
     }
     return response;
   };

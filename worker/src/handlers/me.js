@@ -18,7 +18,7 @@
 // separate question and is NOT guessed — see below.
 
 import { resolveEntitlement } from "../entitlement.js";
-import { getMonthlyUsage, FREE_MONTHLY_LIMIT } from "../quota.js";
+import { peekUsage, FREE_MONTHLY_LIMIT } from "../quota.js";
 
 export async function meHandler(request, env, ctx) {
   const sessionUser = request.user || {};
@@ -41,7 +41,10 @@ export async function meHandler(request, env, ctx) {
   let monthlyRunsUsed  = null;
   let monthlyRunsLimit = null;
   if (plan === "free" && sessionUser.userId) {
-    monthlyRunsUsed  = await getMonthlyUsage(env, sessionUser.userId);
+    // peekUsage, not getMonthlyUsage: once the USAGE Durable Object is bound
+    // it is the authoritative counter, and reading KV here would show a
+    // stale number that disagrees with the gate the user just hit.
+    monthlyRunsUsed  = await peekUsage(env, sessionUser.userId);
     monthlyRunsLimit = FREE_MONTHLY_LIMIT;
   }
 
