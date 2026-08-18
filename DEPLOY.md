@@ -1477,6 +1477,7 @@ exactly this reason: a skip is not evidence of health.
 
 | Group | Requests | Proves |
 |---|---|---|
+| Reachability | one `GET` to an unrouted path, expecting the Worker's own `{"error":"not_found"}` | `SITE_ORIGIN` reaches **this Worker**, not something in front of it. A failure here stops the run. |
 | Schema | `GET /api/admin/schema-check` | Every migration `0001`–`0008` is applied, checked per table **and per column**. The authoritative migration check. |
 | Routes deployed | `GET /api/me`, `/api/org`, `/api/monitors`, `/api/keys`, `/api/ci/snippet` with **no** cookie | Each route is registered and reachable in the deployed bundle. A `404` means the deploy predates the route; a `500` means the Worker throws before auth; a `200` means the endpoint is not gated at all. |
 | Handlers reach D1 | The same endpoints **with** the admin session | The handlers run and their tables exist. This is the group where a `500` really does mean a missing table. |
@@ -1507,6 +1508,8 @@ in a minute.
 
 | Failure | Fix |
 |---|---|
+| `origin reachable — HTTP 403 from something in front of the Worker` | Cloudflare Access on the hostname, a WAF rule, or an egress proxy between you and Cloudflare is answering instead of the Worker. Nothing after it can run. Check from a network that reaches the origin directly, or allowlist the host. |
+| `origin reachable — expected the Worker's 404 JSON` | `SITE_ORIGIN` is probably pointing at the static site rather than the `/api/*` route (§4). |
 | `migrations applied — pending: 0007, 0008` | Apply them: `wrangler d1 execute algosize --env production --remote --file=migrations/<file>.sql`. The script prints the exact missing table/column under each pending migration. |
 | `404 — route not registered` | The deployed bundle is older than the code. Redeploy (§2.6). |
 | `HTTP 500 — likely a missing table` | A migration for that handler's table is missing. The script names which one. |

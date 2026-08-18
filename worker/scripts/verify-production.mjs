@@ -8,9 +8,14 @@
 //
 // WHAT EACH PROBE CAN AND CANNOT PROVE
 //
-// The three groups below answer genuinely different questions, and it is worth
-// being precise about which, because the obvious reading of the unauthenticated
-// group is wrong:
+// The groups below answer genuinely different questions, and it is worth being
+// precise about which, because the obvious reading of the unauthenticated group
+// is wrong:
+//
+//   0. Reachability — one request to an unrouted path, expecting the Worker's
+//                     own 404 JSON. Proves SITE_ORIGIN reaches THIS Worker and
+//                     not something in front of it. A failure here stops the
+//                     run, because everything after it would fail identically.
 //
 //   1. Schema      — GET /api/admin/schema-check. The only probe that inspects
 //                    the database directly, per migration, per column. This is
@@ -146,6 +151,55 @@ async function probe(path, { method = "GET", cookie = null, body = null, accept 
 /** First line of a response body, trimmed — enough to identify an error page. */
 const snippet = (res, n = 120) =>
   (res.text || "").replace(/\s+/g, " ").trim().slice(0, n) || "(empty body)";
+
+// ---------------------------------------------------------------------------
+// 0. Reachability — is SITE_ORIGIN actually this Worker?
+// ---------------------------------------------------------------------------
+
+/**
+ * Confirm the origin answers as the Worker before probing anything else.
+ *
+ * The router's catch-all returns `{"error":"not_found"}` for an unrouted path,
+ * which is a cheap and unambiguous fingerprint: it proves DNS resolved, TLS
+ * completed, the request reached the Worker, and the router is running.
+ *
+ * Without this, anything sitting in FRONT of the Worker — Cloudflare Access on
+ * a staging hostname, a corporate egress proxy, a WAF rule — answers every
+ * probe with the same status, and the run reports six identical failures whose
+ * text describes the symptom ("expected 401, got 403") rather than the cause.
+ * That happened on the first real run of this script, against a workers.dev
+ * preview URL blocked by an egress allowlist. One clear failure beats six
+ * misleading ones, so a failure here short-circuits the rest of the run.
+ *
+ * Returns true when the probes below are worth attempting.
+ */
+async function checkReachable() {
+  console.log("\nReachability");
+  const res = await probe("/api/__verify_probe_404");
+  if (res.error) {
+    fail("origin reachable", `request failed: ${res.error} — check SITE_ORIGIN and DNS`);
+    return false;
+  }
+  if (res.status === 404 && res.json && res.json.error === "not_found") {
+    pass("origin reachable", "the Worker's router is answering");
+    return true;
+  }
+  // A 404 that is not the Worker's own means something else served it.
+  if (res.status === 403 || res.status === 401 || res.status === 407) {
+    fail("origin reachable",
+         `HTTP ${res.status} from something in front of the Worker — Cloudflare Access, ` +
+         `a WAF rule, or an egress proxy. Body: ${snippet(res)}`);
+    return false;
+  }
+  if (res.status >= 500) {
+    fail("origin reachable", `HTTP ${res.status} — the origin is erroring: ${snippet(res)}`);
+    return false;
+  }
+  fail("origin reachable",
+       `expected the Worker's 404 JSON, got HTTP ${res.status}: ${snippet(res)}. ` +
+       `Is SITE_ORIGIN pointing at the Worker rather than the static site?`);
+  return false;
+}
 
 // ---------------------------------------------------------------------------
 // 1. Schema
@@ -304,10 +358,14 @@ async function main() {
     ? "Admin session: provided"
     : "\x1b[33mAdmin session: absent — schema and authenticated checks will be skipped\x1b[0m");
 
-  await checkSchema();
-  await checkUnauthenticated();
-  await checkAuthenticated();
-  await checkCheckout();
+  if (await checkReachable()) {
+    await checkSchema();
+    await checkUnauthenticated();
+    await checkAuthenticated();
+    await checkCheckout();
+  } else {
+    console.log("\nSkipping the remaining checks — they would all fail the same way.");
+  }
 
   const failed  = results.filter((r) => r.state === "fail");
   const skipped = results.filter((r) => r.state === "skip");
