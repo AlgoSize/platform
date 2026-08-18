@@ -2,3 +2,4 @@
 - [DO migration format](do-migration-format.md) — use new_sqlite_classes not new_classes; KV-backed DO namespaces are no longer supported (error 10099).
 - [algosize.com infrastructure](algosize-infra.md) — zone ID, workers.dev URL, Workers route, GitHub Pages origin, key IDs.
 - [Stripe checkout API contract](stripe-checkout-api.md) — createCheckoutSession takes priceId/seatPriceId; checkout handler reads `tier` (plan is compat alias).
+- [Optional integrations](optional-integrations.md) — OpenAI and Google service-account features are intentionally deferred; graceful degradation is acceptable.
