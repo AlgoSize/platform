@@ -683,8 +683,22 @@ console.log("\nCheckout session body shape\n");
   }
 }
 
-// 28. automatic_tax and customer_update are present in every session body.
-//     Both are required for Stripe Tax to apply the correct VAT/GST rate.
+// 28. automatic_tax and billing_address_collection are present in every
+//     session body, and customer_update is NOT — Stripe rejects that field on
+//     session create unless the request also carries an existing `customer`
+//     id, which this code never has (every call here creates a brand-new
+//     customer as part of the session). That combination shipped to
+//     production and broke every checkout with a live 400 until this test
+//     was corrected to actually assert on it.
+//
+// A stub this permissive — `ok: true` regardless of what's in `init.body` —
+// cannot by itself catch a body Stripe's real API would 400 on; it can only
+// assert that a name we expect IS or IS NOT present, which is what this test
+// now does for both directions. It caught nothing the first time because it
+// was asserting FOR the very param the request should never have carried.
+// Nothing short of hitting the real API (or a mock that encodes Stripe's
+// validation rules) closes that gap completely — see DEPLOY.md §8 /
+// verify-production.mjs, which does hit the real API, for the layer that can.
 {
   let sent = null;
   const realFetch = globalThis.fetch;
@@ -701,12 +715,20 @@ console.log("\nCheckout session body shape\n");
   } finally { globalThis.fetch = realFetch; }
 
   const p = new URLSearchParams(sent || "");
-  const taxEnabled    = p.get("automatic_tax[enabled]") === "true";
-  const addrAuto      = p.get("customer_update[address]") === "auto";
-  if (taxEnabled && addrAuto) {
-    ok("automatic_tax[enabled]=true and customer_update[address]=auto present in every session");
+  const taxEnabled  = p.get("automatic_tax[enabled]") === "true";
+  const addrRequired = p.get("billing_address_collection") === "required";
+  const noCustomerUpdate = p.get("customer_update[address]") === null;
+  const noCustomer    = p.get("customer") === null;
+  if (taxEnabled && addrRequired && noCustomerUpdate && noCustomer) {
+    ok("automatic_tax[enabled]=true and billing_address_collection=required present; " +
+       "customer_update and customer are absent (no existing customer to reference)");
   } else {
-    fail(`tax params missing: automatic_tax[enabled]=${p.get("automatic_tax[enabled]")} customer_update[address]=${p.get("customer_update[address]")}`);
+    fail(
+      `tax params wrong: automatic_tax[enabled]=${p.get("automatic_tax[enabled]")} ` +
+      `billing_address_collection=${p.get("billing_address_collection")} ` +
+      `customer_update[address]=${p.get("customer_update[address]")} (must be absent) ` +
+      `customer=${p.get("customer")} (must be absent)`,
+    );
   }
 }
 

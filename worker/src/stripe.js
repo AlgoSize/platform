@@ -171,12 +171,26 @@ export function createCheckoutSession(env, {
     success_url:            successUrl,
     cancel_url:             cancelUrl,
     allow_promotion_codes:  "true",
-    // Stripe Tax needs to know the customer's billing address to apply the
-    // right VAT/GST rate. `customer_update[address]=auto` lets Stripe collect
-    // it during checkout; `automatic_tax[enabled]=true` activates the
-    // calculation. Both are required — either alone is a no-op.
-    "automatic_tax[enabled]":     "true",
-    "customer_update[address]":   "auto",
+    // Stripe Tax needs a billing address to apply the right VAT/GST rate.
+    // `automatic_tax[enabled]=true` turns on the calculation;
+    // `billing_address_collection=required` is what actually gets an address
+    // out of the buyer.
+    //
+    // NOT `customer_update[address]=auto` — that field means something
+    // different from what the name suggests, and shipping it here broke every
+    // checkout in production for however long this went undetected: Stripe
+    // rejects `customer_update` on session CREATE unless the request also
+    // carries an existing `customer` id, because there is no customer object
+    // yet to update. This code has never passed one — every call here creates
+    // a brand-new customer as part of the session — so this parameter was
+    // structurally invalid on every single checkout request. The 400 reads
+    // ``customer_update` can only be used with `customer` or
+    // `customer_account``, which is exact but easy to misread as a
+    // configuration gap rather than "this session will never work."
+    // `billing_address_collection` is the field for the no-existing-customer
+    // case and needs no `customer` id to be valid.
+    "automatic_tax[enabled]":       "true",
+    "billing_address_collection":   "required",
   };
 
   if (seatPriceId) {
