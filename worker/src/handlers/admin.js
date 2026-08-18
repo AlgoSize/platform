@@ -8,8 +8,10 @@
 //   GET /api/admin/users          — JSON list of all users (paginated)
 //   GET /api/admin/users.csv      — CSV export of the same data
 //   GET /api/admin/schema-check   — which migrations the live database has
+//   GET /api/admin/stripe-check   — Stripe account config the code depends on
 
 import { requireAuth } from "../auth.js";
+import { stripeFetch, StripeError } from "../stripe.js";
 
 function jsonResponse(body, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
@@ -291,5 +293,201 @@ export async function adminSchemaCheckHandler(request, env) {
     note: "Reports schema STATE, not migration history — there is no ledger table. " +
           "A database built another way (e.g. the e2e seed endpoint) can match a " +
           "signature without the .sql file ever having run.",
+  }, 200);
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/admin/stripe-check
+// ---------------------------------------------------------------------------
+//
+// Two pieces of Stripe ACCOUNT configuration that the code depends on, that
+// live outside the repo, and that fail in ways nothing in CI can see.
+//
+// Neither is expressible as a secret or a wrangler.toml entry — both are
+// dashboard state — so the only way to know they are right is to ask Stripe.
+// Both failures are also invisible until a real customer hits them:
+//
+//   Portal configuration  /api/billing/portal calls
+//                         POST /billing_portal/sessions, which 400s with "No
+//                         configuration provided" until a default exists in
+//                         THIS mode. Every "Manage billing" click fails, and
+//                         it fails for the first paying customer rather than
+//                         in any test.
+//
+//   Webhook endpoint      The webhook is the only thing that writes
+//                         subscription state back. Without a live endpoint
+//                         pointed at this deployment, checkout still works —
+//                         the customer pays — but the renewal, cancellation
+//                         and payment_failed events never arrive, so
+//                         entitlement silently drifts from what Stripe thinks.
+//                         A cancelled subscriber keeps their access forever.
+//
+// MODE IS REPORTED BECAUSE IT DECIDES WHAT WAS ACTUALLY CHECKED. Stripe's
+// live and test modes are separate worlds: separate portal configurations,
+// separate webhook endpoints, separate prices. A green result in test mode
+// says nothing about live. The mode comes from the key prefix rather than an
+// API call, so the answer is available even when the key is rejected.
+
+/** Events the webhook handler acts on (handlers/webhook.js). */
+const REQUIRED_WEBHOOK_EVENTS = Object.freeze([
+  "checkout.session.completed",
+  "customer.subscription.created",
+  "customer.subscription.updated",
+  "customer.subscription.deleted",
+  "customer.subscription.trial_will_end",
+  "invoice.paid",
+  "invoice.payment_failed",
+]);
+
+/**
+ * Which Stripe mode a key belongs to, from its prefix alone.
+ *
+ * `sk_` is a standard secret key, `rk_` a restricted one; both carry the mode
+ * in the same position. Anything else is reported as "unknown" rather than
+ * guessed — a wrong mode label is worse than an absent one, because the whole
+ * point of this field is telling the reader which of the two worlds the rest
+ * of the response describes.
+ */
+export function stripeKeyMode(key) {
+  if (typeof key !== "string") return "unknown";
+  if (/^[sr]k_live_/.test(key)) return "live";
+  if (/^[sr]k_test_/.test(key)) return "test";
+  return "unknown";
+}
+
+/** Compare two webhook URLs the way Stripe does: host case-insensitive, no trailing slash. */
+function sameUrl(a, b) {
+  const norm = (u) => {
+    try {
+      const parsed = new URL(u);
+      return `${parsed.protocol}//${parsed.host.toLowerCase()}${parsed.pathname.replace(/\/$/, "")}`;
+    } catch {
+      return String(u || "").replace(/\/$/, "");
+    }
+  };
+  return norm(a) === norm(b);
+}
+
+/** Dashboard deep link for the mode actually in use — test URLs carry /test/. */
+function dashboardUrl(mode, path) {
+  return `https://dashboard.stripe.com/${mode === "test" ? "test/" : ""}${path}`;
+}
+
+export async function adminStripeCheckHandler(request, env) {
+  if (!env || !env.STRIPE_SECRET_KEY) {
+    return jsonResponse(
+      { ok: false, error: "not_configured", message: "STRIPE_SECRET_KEY is not set on this environment." },
+      500,
+    );
+  }
+
+  const mode = stripeKeyMode(env.STRIPE_SECRET_KEY);
+
+  let configurations, endpoints;
+  try {
+    // Two calls, not one — Stripe has no combined endpoint, and both lists are
+    // small enough that limit=100 is the whole set for any real account.
+    [configurations, endpoints] = await Promise.all([
+      stripeFetch(env, "/billing_portal/configurations?limit=100", { method: "GET" }),
+      stripeFetch(env, "/webhook_endpoints?limit=100", { method: "GET" }),
+    ]);
+  } catch (err) {
+    // A rejected key is a broken deployment, not a failed check — same
+    // distinction schema-check draws between "cannot read" and "read, and
+    // here is what is missing". 500 so `curl -f` separates the two.
+    const isStripe = err instanceof StripeError;
+    return jsonResponse(
+      {
+        ok:    false,
+        error: "stripe_unreachable",
+        mode,
+        message: isStripe && err.status === 401
+          ? "Stripe rejected the configured STRIPE_SECRET_KEY (401). It is wrong, revoked, or a restricted key without read access to billing settings."
+          : `Could not reach the Stripe API: ${(err && err.message) || "unknown error"}`,
+      },
+      500,
+    );
+  }
+
+  // --- 1. Customer Portal default configuration ---------------------------
+  const configs      = (configurations && configurations.data) || [];
+  const defaultConfig = configs.find((c) => c && c.is_default && c.active !== false);
+  const portalCheck = defaultConfig
+    ? { ok: true, detail: `Default configuration ${defaultConfig.id} is active.` }
+    : {
+        ok: false,
+        detail: configs.length === 0
+          ? "No Customer Portal configuration exists in this mode."
+          : `${configs.length} configuration(s) exist but none is both default and active.`,
+        fix: `Open ${dashboardUrl(mode, "settings/billing/portal")} and press Save once. ` +
+             "Until then every /api/billing/portal call 400s with \"No configuration provided\".",
+      };
+
+  // --- 2. Webhook endpoint pointed at this deployment ---------------------
+  const origin   = (env.SITE_ORIGIN || "").replace(/\/$/, "");
+  const expected = origin ? `${origin}/api/stripe/webhook` : null;
+  const all      = (endpoints && endpoints.data) || [];
+
+  let webhookCheck;
+  if (!expected) {
+    // Without SITE_ORIGIN there is no URL to look for, and reporting the
+    // first endpoint found would be a guess. Say so instead.
+    webhookCheck = {
+      ok: false,
+      detail: "SITE_ORIGIN is not set, so the expected webhook URL cannot be determined.",
+      fix: "Set SITE_ORIGIN in wrangler.toml for this environment.",
+    };
+  } else {
+    const match = all.find((e) => e && sameUrl(e.url, expected));
+    if (!match) {
+      webhookCheck = {
+        ok: false,
+        expected,
+        detail: all.length === 0
+          ? "No webhook endpoints exist in this mode."
+          : `${all.length} endpoint(s) exist, none pointed at this deployment. Found: ${all.map((e) => e.url).join(", ")}.`,
+        fix: `Create one at ${dashboardUrl(mode, "webhooks")} for ${expected}, subscribed to: ` +
+             `${REQUIRED_WEBHOOK_EVENTS.join(", ")}. Then push its signing secret as STRIPE_WEBHOOK_SECRET.`,
+      };
+    } else {
+      // `["*"]` is Stripe's "everything" wildcard and satisfies every event.
+      const enabled = match.enabled_events || [];
+      const missing = enabled.includes("*")
+        ? []
+        : REQUIRED_WEBHOOK_EVENTS.filter((e) => !enabled.includes(e));
+      const disabled = match.status !== "enabled";
+      webhookCheck = {
+        ok: !disabled && missing.length === 0,
+        id: match.id,
+        url: match.url,
+        status: match.status,
+        missingEvents: missing,
+        detail: disabled
+          ? `Endpoint ${match.id} exists but its status is "${match.status}".`
+          : missing.length
+            ? `Endpoint ${match.id} is enabled but is not subscribed to: ${missing.join(", ")}.`
+            : `Endpoint ${match.id} is enabled and subscribed to all ${REQUIRED_WEBHOOK_EVENTS.length} events the worker handles.`,
+        ...(disabled || missing.length
+          ? { fix: `Edit it at ${dashboardUrl(mode, "webhooks")} — an endpoint that exists but is disabled or missing events fails silently: checkout still succeeds and the customer is charged, but subscription state never updates.` }
+          : {}),
+      };
+    }
+  }
+
+  const failing = [
+    !portalCheck.ok  ? "customer portal" : null,
+    !webhookCheck.ok ? "webhook endpoint" : null,
+  ].filter(Boolean);
+
+  return jsonResponse({
+    ok: failing.length === 0,
+    mode,
+    summary: failing.length === 0
+      ? `Stripe ${mode} mode is correctly configured: portal default present, webhook endpoint enabled.`
+      : `Stripe ${mode} mode is missing: ${failing.join(" and ")}.`,
+    checks: { portalConfiguration: portalCheck, webhookEndpoint: webhookCheck },
+    note: "Live and test are separate Stripe modes with separate portal configurations, " +
+          "webhook endpoints and prices. This reports only the mode the deployed " +
+          "STRIPE_SECRET_KEY belongs to.",
   }, 200);
 }

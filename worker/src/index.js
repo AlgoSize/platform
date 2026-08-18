@@ -58,6 +58,7 @@ import {
   adminListUsersHandler,
   adminUsersCsvHandler,
   adminSchemaCheckHandler,
+  adminStripeCheckHandler,
   requireAdmin,
 } from "./handlers/admin.js";
 import { pageviewPixelHandler } from "./handlers/pageview.js";
@@ -155,6 +156,10 @@ router.get( "/api/admin/users.csv",  requireAdmin, adminUsersCsvHandler);
 // outside the Cloudflare account that production has the schema the code
 // expects — see adminSchemaCheckHandler for what it can and cannot prove.
 router.get( "/api/admin/schema-check", requireAdmin, adminSchemaCheckHandler);
+// Stripe ACCOUNT configuration the code depends on but cannot carry in the
+// repo — the portal default and the webhook endpoint both live in the Stripe
+// dashboard, and both fail only once a real customer hits them.
+router.get( "/api/admin/stripe-check", requireAdmin, adminStripeCheckHandler);
 
 // ---- Session routes (Task #8) ---------------------------------------------
 router.post("/api/logout",          requireAuth, logoutHandler);

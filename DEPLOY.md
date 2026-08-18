@@ -836,6 +836,100 @@ and emits a single warn-level log line — no Sentry spam. Local
 exercise the real send path locally, paste the JSON into
 `worker/.dev.vars` (gitignored — see `.dev.vars.example`).
 
+### 3.7 Google sign-in (OAuth 2.0)
+
+The landing page offers two ways in: a magic link, and **Sign in with
+Google**. The Google button is a plain link to `/api/auth/google/start`,
+and that endpoint redirects straight back to `/?auth=google_not_configured`
+— rendering *"Google sign-in isn't set up yet. Use the email link option
+for now."* — unless **both** of these are set on the environment:
+
+| Name | Secret? | Notes |
+|---|---|---|
+| `GOOGLE_CLIENT_ID` | yes (by convention) | Not actually confidential — it appears in the consent-screen URL every user sees. Stored as a secret only so it sits alongside its partner rather than in `wrangler.toml`. |
+| `GOOGLE_CLIENT_SECRET` | **yes** | Genuinely confidential. Never commit it. |
+
+This is **separate from §3.6**. That one is a Workspace *service account*
+for sending mail as `noreply@`; this is an *OAuth client* for signing
+users in. Different credential, different console page, different failure
+mode — do not reuse one for the other.
+
+#### One-time provisioning
+
+1. **Pick the Google Cloud project.** Reuse the §3.6 project or make a
+   new one — either is fine, they are independent.
+2. **Configure the OAuth consent screen** at
+   <https://console.cloud.google.com/apis/credentials/consent>.
+   - User type **External** (unless every user will be on your Workspace
+     tenant, which for a commercial product they will not be).
+   - App name, support email, developer contact. Scopes: the defaults
+     (`openid`, `email`, `profile`) are exactly what the handler
+     requests — do not add more.
+   - **Publish the app.** While it is in *Testing*, only accounts you
+     explicitly add as test users can sign in; everyone else gets
+     `access_denied`, which surfaces as `/?auth=google_access_denied`.
+     This is the single most common reason Google sign-in "works for me
+     but not for customers."
+3. **Create the OAuth client** at
+   <https://console.cloud.google.com/apis/credentials> →
+   **Create credentials → OAuth client ID** → Application type
+   **Web application**.
+   - **Authorised redirect URIs** — add exactly:
+     ```
+     https://algosize.com/api/auth/google/callback
+     ```
+     This is built in code as `${SITE_ORIGIN}/api/auth/google/callback`,
+     so it must match `SITE_ORIGIN` for the environment **character for
+     character**: scheme, host, no trailing slash. A mismatch fails at
+     Google's end with `redirect_uri_mismatch` before your Worker is
+     ever reached, so nothing appears in `wrangler tail`.
+   - Add the staging URI too if staging should support Google sign-in:
+     `https://staging.algosize.com/api/auth/google/callback`. One client
+     can hold several redirect URIs.
+4. **Push both values as Worker secrets:**
+   ```bash
+   cd worker
+   ./node_modules/.bin/wrangler secret put GOOGLE_CLIENT_ID     --config wrangler.toml --env production
+   ./node_modules/.bin/wrangler secret put GOOGLE_CLIENT_SECRET --config wrangler.toml --env production
+   ```
+   Repeat with `--env staging` if you added the staging redirect URI.
+
+#### Verify
+
+```bash
+# Unconfigured → 302 back to the site with the banner code.
+# Configured   → 302 to accounts.google.com.
+curl -s -o /dev/null -D - https://algosize.com/api/auth/google/start \
+  | grep -i '^location:'
+```
+
+`location: https://accounts.google.com/o/oauth2/v2/auth?...` means it is
+working. `location: https://algosize.com/?auth=google_not_configured`
+means one or both secrets are still missing.
+
+#### The `?auth=` codes, and what each one means
+
+Every failure path redirects to the site with a code that
+`site/assets/js/auth-banner.js` renders as a banner. When a user reports
+that sign-in failed, the code in their URL bar identifies the cause:
+
+| Code | Cause |
+|---|---|
+| `google_not_configured` | One or both secrets missing on this environment. |
+| `google_access_denied` | User declined consent — **or** the consent screen is still in *Testing* and they are not a listed test user (step 2). |
+| `expired_or_invalid` | CSRF state missing or already redeemed. State lives 10 min in `SESSIONS` KV and is single-use, so this is usually a stale tab or a double-click on the callback. |
+| `google_token_failed` | Code-for-token exchange rejected. Almost always a wrong `GOOGLE_CLIENT_SECRET` or a `redirect_uri` that does not match the registered one. |
+| `email_not_verified` | Google reports `email_verified: false`. Refused deliberately — an unverified address must never mint a session. |
+| `google_no_email` | The profile carried no email; the `email` scope was not granted. |
+
+#### Local dev
+
+Leave both unset and the button degrades to the banner above — magic-link
+still works, so `wrangler dev` needs no Google setup. To exercise the real
+flow locally, put both values in `worker/.dev.vars` and register
+`http://localhost:8787/api/auth/google/callback` as an additional
+redirect URI on the same client.
+
 ---
 
 ## 4. DNS — point `algosize.com/api/*` at the Worker
@@ -1478,6 +1572,7 @@ exactly this reason: a skip is not evidence of health.
 | Group | Requests | Proves |
 |---|---|---|
 | Reachability | one `GET` to an unrouted path, expecting the Worker's own `{"error":"not_found"}` | `SITE_ORIGIN` reaches **this Worker**, not something in front of it. A failure here stops the run. |
+| Stripe account | `GET /api/admin/stripe-check` | The Customer Portal default configuration and the webhook endpoint both exist in the mode the deployed key belongs to. See §8.4. |
 | Schema | `GET /api/admin/schema-check` | Every migration `0001`–`0008` is applied, checked per table **and per column**. The authoritative migration check. |
 | Routes deployed | `GET /api/me`, `/api/org`, `/api/monitors`, `/api/keys`, `/api/ci/snippet` with **no** cookie | Each route is registered and reachable in the deployed bundle. A `404` means the deploy predates the route; a `500` means the Worker throws before auth; a `200` means the endpoint is not gated at all. |
 | Handlers reach D1 | The same endpoints **with** the admin session | The handlers run and their tables exist. This is the group where a `500` really does mean a missing table. |
@@ -1521,6 +1616,43 @@ Run it against staging too, with `SITE_ORIGIN` pointing at the staging
 hostname (§7). Staging having the same schema as production is the whole
 point of having a staging environment.
 
+### 8.4 Stripe account configuration (`GET /api/admin/stripe-check`)
+
+Two things the billing code depends on live in the **Stripe dashboard**, not
+in this repo. Neither is a secret or a `wrangler.toml` entry, so nothing in
+CI can see them, and both fail only once a real customer arrives:
+
+| Missing | Symptom |
+|---|---|
+| Customer Portal default configuration | Every "Manage billing" click 400s — `POST /billing_portal/sessions` returns *"No configuration provided"*. Fails for your **first paying customer**, not in any test. |
+| Webhook endpoint for this deployment | Checkout still works and the customer **is charged**, but renewals, cancellations and `payment_failed` dunning never arrive. Entitlement silently drifts from Stripe: a cancelled subscriber keeps access indefinitely. |
+
+The endpoint checks both and is included in the §8 run. Standalone:
+
+```bash
+curl -s https://algosize.com/api/admin/stripe-check \
+  -H "Cookie: algosize_session=<token>" | jq
+```
+
+**`mode` is part of the answer, not decoration.** Stripe's live and test modes
+are separate worlds with separate portal configurations, webhook endpoints and
+prices. A green result in test mode says *nothing* about live. The mode is read
+from the key prefix (`sk_live_` / `sk_test_`, and the `rk_` restricted
+equivalents), so it is reported even when Stripe rejects the key.
+
+The webhook check goes further than "does an endpoint exist": it also verifies
+the endpoint is `enabled` and subscribed to **every** event `handlers/webhook.js`
+acts on. An endpoint that exists and looks healthy in the dashboard but is
+missing `customer.subscription.deleted` breaks cancellations silently, which is
+precisely the class of failure this check is for. Missing events are listed in
+`checks.webhookEndpoint.missingEvents`.
+
+Fixes are in the response's `fix` fields, mode-correct (test-mode dashboard
+URLs carry `/test/`). A 500 with `error: "stripe_unreachable"` means the key
+itself is wrong, revoked, or a restricted key without read access to billing
+settings — a broken deployment rather than a failed check, the same distinction
+§8.2's schema group draws.
+
 ---
 
 ## Appendix A — secret/binding reference
@@ -1535,6 +1667,8 @@ provision:
 | `STRIPE_WEBHOOK_SECRET` | secret  | `worker/src/handlers/webhook.js` — HMAC verify   |
 | `STRIPE_PRICE_ID`       | secret  | `worker/src/stripe.js` — `line_items[0][price]`  |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | secret | `worker/src/email/google.js` — Workspace service-account JSON for Gmail-API send (Task #56). Optional — when unset, sendTransactional no-ops. |
+| `GOOGLE_CLIENT_ID`      | secret  | `worker/src/handlers/auth_google.js` — OAuth client for "Sign in with Google" (§3.7). Optional — when unset the button redirects to `/?auth=google_not_configured` and magic-link still works. **Not** the same credential as `GOOGLE_SERVICE_ACCOUNT_JSON`. |
+| `GOOGLE_CLIENT_SECRET`  | secret  | `worker/src/handlers/auth_google.js` — partner of the above; genuinely confidential. Both must be set or Google sign-in stays off. |
 | `SITE_ORIGIN`           | var     | `worker/src/cors.js`, `handlers/checkout.js` — CORS allow + redirect targets |
 | `COOKIE_NAME`           | var     | `worker/src/auth.js` — session cookie name (`algosize_session`) |
 | `EMAIL_FROM`            | var     | `worker/src/email/transactional.js` — From: header on transactional mail (Task #56) |

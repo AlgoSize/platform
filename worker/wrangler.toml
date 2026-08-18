@@ -247,8 +247,22 @@ name       = "USAGE"
 class_name = "UsageCounter"
 
 [[env.production.migrations]]
-tag             = "v1"
-new_sqlite_classes = ["UsageCounter"]
+# `new_classes`, NOT `new_sqlite_classes`. A migration tag's contents are
+# history, not intent: v1 was applied to the live script when this line read
+# `new_classes`, so that is what the config must keep saying. Commit d5d38d5
+# rewrote it in place, which is the kind of edit that is silently accepted
+# (remote tag == config tag means wrangler sends no migrations at all and never
+# compares the contents) right up until something does compare them. Moving
+# UsageCounter to SQLite-backed storage needs a NEW tag with a rename/transfer,
+# never an edit to an applied one.
+#
+# Restored here on a hypothesis that this was also breaking the
+# "Workers Builds: algosize" check — it was NOT. That check still fails with
+# this reverted, and it fails on a Markdown-only commit too, so its cause is
+# environmental and still unidentified as of this writing. Keep the revert
+# (it is correct on its own terms); do not read it as the fix for that check.
+tag         = "v1"
+new_classes = ["UsageCounter"]
 
 # Scheduled monitoring — see the [triggers]/[[queues]] block near the top for
 # why this is split into a cron + a queue, and for the provisioning steps.
@@ -334,8 +348,22 @@ name       = "USAGE"
 class_name = "UsageCounter"
 
 [[env.staging.migrations]]
-tag             = "v1"
-new_sqlite_classes = ["UsageCounter"]
+# `new_classes`, NOT `new_sqlite_classes`. A migration tag's contents are
+# history, not intent: v1 was applied to the live script when this line read
+# `new_classes`, so that is what the config must keep saying. Commit d5d38d5
+# rewrote it in place, which is the kind of edit that is silently accepted
+# (remote tag == config tag means wrangler sends no migrations at all and never
+# compares the contents) right up until something does compare them. Moving
+# UsageCounter to SQLite-backed storage needs a NEW tag with a rename/transfer,
+# never an edit to an applied one.
+#
+# Restored here on a hypothesis that this was also breaking the
+# "Workers Builds: algosize" check — it was NOT. That check still fails with
+# this reverted, and it fails on a Markdown-only commit too, so its cause is
+# environmental and still unidentified as of this writing. Keep the revert
+# (it is correct on its own terms); do not read it as the fix for that check.
+tag         = "v1"
+new_classes = ["UsageCounter"]
 
 # Staging monitors run on their own queue so a staging sweep can never send
 # mail about a production org's repositories. Same 03:00 UTC cadence.

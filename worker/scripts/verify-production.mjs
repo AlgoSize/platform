@@ -22,6 +22,12 @@
 //                    the authoritative answer to "are the migrations applied?"
 //                    Needs an admin session.
 //
+//   1b. Stripe     — GET /api/admin/stripe-check. Stripe ACCOUNT state that
+//                    lives in the dashboard rather than the repo: the Customer
+//                    Portal default and the webhook endpoint. Both fail only
+//                    when a real customer hits them, which is why they need a
+//                    probe at all. Needs an admin session.
+//
 //   2. Unauthed    — GET the authed endpoints with no credentials, expect 401.
 //                    This proves the ROUTE IS DEPLOYED: registered, reachable,
 //                    and short-circuiting at auth. It does NOT prove the tables
@@ -249,6 +255,49 @@ async function checkSchema() {
 }
 
 // ---------------------------------------------------------------------------
+// 1b. Stripe account configuration
+// ---------------------------------------------------------------------------
+
+async function checkStripe() {
+  console.log("\nStripe account — GET /api/admin/stripe-check");
+  if (!COOKIE) {
+    skip("stripe configured",
+         "no ADMIN_SESSION_COOKIE; set it to verify the portal and webhook config");
+    return;
+  }
+  const res = await probe("/api/admin/stripe-check", { cookie: COOKIE });
+  if (res.error) return fail("stripe configured", `request failed: ${res.error}`);
+
+  if (res.status === 404) {
+    return fail("stripe configured",
+                "404 — the deployed Worker predates /api/admin/stripe-check. Redeploy.");
+  }
+  if (res.status === 401 || res.status === 403) {
+    return fail("stripe configured",
+                `${res.status} — admin session rejected (see the schema check above for which).`);
+  }
+  if (res.status !== 200 || !res.json) {
+    const mode = res.json && res.json.mode ? ` (key mode: ${res.json.mode})` : "";
+    return fail("stripe configured", `HTTP ${res.status}${mode}: ${snippet(res)}`);
+  }
+
+  const { ok: allOk, mode, checks } = res.json;
+  if (allOk) {
+    // The mode is part of the pass, not decoration: a green result in test
+    // mode says nothing about live, and the two are separate Stripe worlds.
+    pass("stripe configured", `${mode} mode — portal default and webhook endpoint both present`);
+  } else {
+    fail("stripe configured", `${mode} mode — ${res.json.summary}`);
+    for (const [name, c] of Object.entries(checks || {})) {
+      if (c && !c.ok) {
+        console.log(`      ${name}: ${c.detail}`);
+        if (c.fix) console.log(`        fix: ${c.fix}`);
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 2. Unauthenticated — routes are deployed
 // ---------------------------------------------------------------------------
 
@@ -360,6 +409,7 @@ async function main() {
 
   if (await checkReachable()) {
     await checkSchema();
+    await checkStripe();
     await checkUnauthenticated();
     await checkAuthenticated();
     await checkCheckout();

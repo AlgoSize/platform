@@ -39,3 +39,18 @@ STRIPE_PRICE_ID=price_replace_me
 # path, paste the full JSON of a service-account key (one line, with
 # embedded \n inside the private_key string preserved):
 # GOOGLE_SERVICE_ACCOUNT_JSON={"type":"service_account","project_id":"...","private_key":"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n","client_email":"algosize-mailer@<proj>.iam.gserviceaccount.com",...}
+
+# Google sign-in — OAuth 2.0 client (DEPLOY.md §3.7).
+# A DIFFERENT credential from GOOGLE_SERVICE_ACCOUNT_JSON above: that one is a
+# service account for sending mail, this one is an OAuth client for signing
+# users in. Leave both UNSET locally and the "Sign in with Google" button
+# redirects to /?auth=google_not_configured — magic-link still works, so dev
+# needs no Google setup at all.
+#
+# To exercise the real flow locally, register
+#   http://localhost:8787/api/auth/google/callback
+# as an additional authorised redirect URI on the same OAuth client. The URI
+# must match ${SITE_ORIGIN}/api/auth/google/callback character for character,
+# or Google fails with redirect_uri_mismatch before the Worker is reached.
+# GOOGLE_CLIENT_ID=<id>.apps.googleusercontent.com
+# GOOGLE_CLIENT_SECRET=GOCSPX-replace_me
