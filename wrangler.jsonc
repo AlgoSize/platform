@@ -14,6 +14,44 @@
   // so this file also shadows worker/wrangler.toml for any wrangler command
   // run from inside `worker/`. Every wrangler invocation in the repo
   // therefore passes `--config wrangler.toml` explicitly. See DEPLOY.md §2.0.
+  //
+  // THIS CONFIG CANNOT DEPLOY FROM CI AS THINGS STAND, and the failing
+  // "Workers Builds: algosize" check on every branch is exactly that. The
+  // build log:
+  //
+  //   Executing user deploy command: npx wrangler versions upload
+  //   ✘ [ERROR] The directory specified by the "assets.directory" field in
+  //     your configuration file does not exist:
+  //       /opt/buildhome/repo/_site_build
+  //
+  // `_site_build` is a LOCAL artifact — the only thing that creates it is
+  // start.sh (`bundle exec jekyll build --destination ../_site_build`), which
+  // is the Replit dev startup script. It is not committed and nothing in CI
+  // produces it. The Cloudflare build trigger ("Deploy non-production
+  // branches": root directory `/`, branch includes `*` except main) has an
+  // EMPTY build command and goes straight to `npx wrangler versions upload`,
+  // so wrangler looks for a directory that was never built.
+  //
+  // Nothing in this repo can make that build pass — the build command lives in
+  // the Cloudflare dashboard, not here. Run by hand from a tree where start.sh
+  // has already produced _site_build, `npx wrangler versions upload` succeeds
+  // and uploads a VERSION of algosize-site (it does not route traffic; that
+  // needs `wrangler versions deploy`), which is the same command failing in CI
+  // purely for want of the directory.
+  //
+  // Worth checking before "fixing" this in the repo: the live marketing site
+  // is built by .github/workflows/jekyll.yml and served by GitHub Pages
+  // (DEPLOY.md §1), with only /api/* routed to the real Worker — so this
+  // config is very likely deploying a second copy of a site nobody reads.
+  // Confirm with `wrangler deployments list --name algosize-site` plus a check
+  // for zone routes bound to it; if it holds no routes, this file earns
+  // nothing but a red check on every PR and the shadowing hazard above.
+  //
+  // Two ways out, both dashboard-side: delete the trigger (nothing is lost —
+  // Pages already deploys the site and .github/workflows/worker.yml already
+  // deploys the API), or give it a real build command
+  // (`cd site && bundle install && bundle exec jekyll build -d ../_site_build`)
+  // if per-branch site previews are actually wanted.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "algosize-site",
   "compatibility_date": "2026-05-11",
