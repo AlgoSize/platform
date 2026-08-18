@@ -40,7 +40,7 @@ database_id   = "00000000-0000-0000-0000-000000000000"
 # this customer" a prefix delete rather than a scan.
 #
 # Provision once per account before deploying:
-#   wrangler r2 bucket create algosize-reports
+#   wrangler r2 bucket create algosize-reports --config wrangler.toml
 #
 # EVERY READ AND WRITE TOLERATES THIS BINDING BEING ABSENT (see
 # src/reports/store.js). Until the bucket exists the report route renders on
@@ -77,8 +77,8 @@ service = "algosize-sandbox"
 #
 # BEFORE DEPLOYING: the queue must exist, or `wrangler deploy` fails with
 # "queue not found" — creating it is not implied by this config.
-#   wrangler queues create algosize-scans
-#   wrangler queues create algosize-scans-staging
+#   wrangler queues create algosize-scans --config wrangler.toml
+#   wrangler queues create algosize-scans-staging --config wrangler.toml
 # Queues also require a paid Workers plan. If the queue binding is absent at
 # runtime the sweep refuses to run monitors inline and captures instead — see
 # sweepDueMonitors — so a half-provisioned deploy is loud rather than
@@ -210,7 +210,7 @@ database_name = "algosize"
 database_id   = "cfe388b1-8423-48ec-b1ec-358e3a8127d8"
 
 # Rendered reports (Task #P-6). Same bucket name in production; create with
-#   wrangler r2 bucket create algosize-reports
+#   wrangler r2 bucket create algosize-reports --config wrangler.toml
 [[env.production.r2_buckets]]
 binding     = "REPORTS"
 bucket_name = "algosize-reports"
@@ -218,6 +218,14 @@ bucket_name = "algosize-reports"
 [[env.production.services]]
 binding = "SANDBOX"
 service = "algosize-sandbox"
+
+[[env.production.durable_objects.bindings]]
+name       = "USAGE"
+class_name = "UsageCounter"
+
+[[env.production.migrations]]
+tag         = "v1"
+new_classes = ["UsageCounter"]
 
 # Scheduled monitoring — see the [triggers]/[[queues]] block near the top for
 # why this is split into a cron + a queue, and for the provisioning steps.
@@ -297,6 +305,14 @@ bucket_name = "algosize-reports-staging"
 [[env.staging.services]]
 binding = "SANDBOX"
 service = "algosize-sandbox-staging"
+
+[[env.staging.durable_objects.bindings]]
+name       = "USAGE"
+class_name = "UsageCounter"
+
+[[env.staging.migrations]]
+tag         = "v1"
+new_classes = ["UsageCounter"]
 
 # Staging monitors run on their own queue so a staging sweep can never send
 # mail about a production org's repositories. Same 03:00 UTC cadence.

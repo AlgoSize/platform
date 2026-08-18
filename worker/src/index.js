@@ -60,6 +60,7 @@ import { seedHandler } from "./handlers/_seed.js";
 import { enforceQuota } from "./quota.js";
 import { makeRateLimit, makeApiKeyRateLimit } from "./middleware/rate-limit.js";
 import { captureException } from "./observability.js";
+export { UsageCounter } from "./usage-counter.js";
 
 const router = Router();
 
