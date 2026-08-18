@@ -28,7 +28,7 @@ import { getActiveOrg } from "./_orgs.js";
 import { toSarif } from "../analyzers/sarif.js";
 import { toCycloneDX } from "../analyzers/cyclonedx.js";
 import { reportHtmlFor } from "../reports/render.js";
-import { createShare, readShare, revokeShare, DEFAULT_SHARE_DAYS, MAX_SHARE_DAYS } from "../reports/share.js";
+import { createShare, readShare, revokeShare, listShares, DEFAULT_SHARE_DAYS, MAX_SHARE_DAYS } from "../reports/share.js";
 
 const json = (body, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -62,6 +62,9 @@ export function newRunId() {
   const rand = crypto.randomUUID().replace(/-/g, "").slice(0, 8);
   return `${ts}_${rand}`;
 }
+
+/** The analyzers a run can belong to — closed set, used to gate the SQL filter. */
+export const ANALYZERS = Object.freeze(["cost", "vuln", "algo", "arch"]);
 
 /**
  * One-line headline metric for the dashboard list. Kept analyzer-specific
@@ -213,7 +216,7 @@ function decodeCursor(cursor) {
  * Items older than RUN_TTL_SECONDS are filtered out at read time — same
  * user-visible behavior as the old KV TTL, just enforced by a WHERE clause.
  */
-export async function listRuns(env, scope, { limit = 20, cursor = null, source = null } = {}) {
+export async function listRuns(env, scope, { limit = 20, cursor = null, source = null, analyzer = null } = {}) {
   // Back-compat: callers that pass a bare user id keep working.
   const { userId = null, orgId = null } = typeof scope === "string" ? { userId: scope } : (scope || {});
   if (!env || !env.DB || (!userId && !orgId)) return { items: [], nextCursor: null };
@@ -234,6 +237,16 @@ export async function listRuns(env, scope, { limit = 20, cursor = null, source =
   // never write one.
   if (source === "ci")     scopeSql += " AND source = 'ci'";
   if (source === "manual") scopeSql += " AND source IS NULL";
+
+  // Analyzer filter. Needed by the architecture X-ray's run-over-run diff,
+  // which has to find the PREVIOUS architecture run — filtering client-side
+  // would mean over-fetching a page of cost and vuln runs and hoping an
+  // architecture one survived the cut. Whitelisted rather than interpolated:
+  // this lands in SQL, and the set of analyzers is closed.
+  if (ANALYZERS.includes(analyzer)) {
+    scopeSql += " AND analyzer = ?";
+    scopeArgs.push(analyzer);
+  }
 
   // Fetch (cap+1) rows to determine whether there's a next page.
   let result;
@@ -361,8 +374,13 @@ export async function listRunsHandler(request, env) {
   // ?source=ci|manual — anything else (including absent) means no filter.
   const rawSource = url.searchParams.get("source");
   const source = rawSource === "ci" || rawSource === "manual" ? rawSource : null;
+  // ?analyzer=cost|vuln|algo|arch — anything else (including absent) means no
+  // filter. Whitelisted against ANALYZERS rather than passed through, because
+  // the value reaches a SQL predicate.
+  const rawAnalyzer = url.searchParams.get("analyzer");
+  const analyzer = ANALYZERS.includes(rawAnalyzer) ? rawAnalyzer : null;
 
-  const result = await listRuns(env, scope, { limit, cursor, source });
+  const result = await listRuns(env, scope, { limit, cursor, source, analyzer });
   return json(result, 200);
 }
 
@@ -558,8 +576,59 @@ export async function revokeRunShareHandler(request, env) {
     return json({ error: "not_found", message: "No share link with that token on this organisation." }, 404);
   }
 
-  await revokeShare(env, token);
+  // Pass the runId so the per-run index is pruned too, not just the token row.
+  await revokeShare(env, token, runId);
   return json({ ok: true, revoked: true });
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/runs/:id/shares  — the links minted for this report
+// ---------------------------------------------------------------------------
+//
+// Without this, a link is visible exactly once: in the response that minted
+// it. Anyone who closed the dialog had no way to see what was still live, and
+// no way to revoke a link they could no longer name — which made revocation
+// theoretical for the one case it exists for (a report sent to the wrong
+// client).
+//
+// Tokens are returned in full. They are already in the recipient's inbox, the
+// caller is the org that minted them, and a truncated token cannot be revoked
+// — there is nothing to protect here that is not already known to everyone
+// who matters.
+//
+// Expired rows are included with `expired: true` rather than filtered, so the
+// list distinguishes "this link stopped working" from "this link was never
+// made". Both are answers; only one of them is silence.
+export async function listRunSharesHandler(request, env) {
+  const scope = await runScopeFor(request, env);
+  if (!scope) return json({ error: "unauthorized" }, 401);
+
+  const runId = request.params && request.params.id;
+  if (!runId) return json({ error: "invalid_request", message: "No run id supplied." }, 400);
+
+  // Same ownership gate the mint path uses: prove the caller can read the run
+  // before disclosing which links exist for it.
+  if (!(await getRun(env, scope, runId))) {
+    return json({ error: "not_found", message: "No run with that id on this organisation." }, 404);
+  }
+
+  const origin = (env.SITE_ORIGIN || "").replace(/\/$/, "");
+  const shares = await listShares(env, runId);
+
+  return json({
+    runId,
+    count: shares.length,
+    shares: shares.map((s) => ({
+      token:     s.token,
+      // Same shape the mint path returns — /api/share/:token, not /r/:token.
+      // A list whose URLs differ from the one the user already copied would
+      // read as two different links to the same report.
+      url:       `${origin}/api/share/${s.token}`,
+      createdAt: s.createdAt,
+      expiresAt: s.expiresAt,
+      expired:   s.expired,
+    })),
+  });
 }
 
 // ---------------------------------------------------------------------------

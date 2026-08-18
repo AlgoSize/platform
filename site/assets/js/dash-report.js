@@ -8,11 +8,13 @@
 //   GET    /api/runs/:id                     the stored run (result + input)
 //   GET    /api/runs/:id/report?format=…     html | sarif | cyclonedx
 //   POST   /api/runs/:id/share               mint a read-only link
-//   DELETE /api/runs/:id/share/:token        revoke it
+//   GET    /api/runs/:id/shares              the links already minted
+//   DELETE /api/runs/:id/share/:token        revoke one
 //
-// The share list the original mock proposed (views counter, all active
-// links) has no backing endpoint — links are shown when minted, and revoke
-// works on the link just created. No fabricated UI over missing data.
+// The share list now has a backing endpoint (src/reports/share.js keeps a
+// per-run index), so the modal opens on what is already live rather than
+// only on the create form. A view counter is still absent: nothing records
+// share reads, and a "0 views" that means "not measured" would be a lie.
 
 (function () {
   "use strict";
@@ -354,6 +356,89 @@
     if (resultStage) resultStage.hidden = true;
     setShareDays(7);
     core.openModal("modal-share");
+    loadShares();
+  }
+
+  /**
+   * Show the links already live for this report.
+   *
+   * Best-effort: a failure here hides the section rather than blocking the
+   * modal. Being unable to list existing links must not stop someone minting
+   * a new one — the create path is the reason they opened this.
+   */
+  function loadShares() {
+    var stage = document.getElementById("share-existing-stage");
+    var list  = document.getElementById("share-existing-list");
+    if (!stage || !list || !state.runId) return;
+    stage.hidden = true;
+
+    callApi("/api/runs/" + encodeURIComponent(state.runId) + "/shares", null, "GET")
+      .then(function (res) {
+        var shares = (res && res.shares) || [];
+        while (list.firstChild) list.removeChild(list.firstChild);
+        if (!shares.length) { stage.hidden = true; return; }
+
+        shares.forEach(function (sh) {
+          var li = el("li", { class: "share-item" });
+          li.appendChild(el("span", { class: "mono share-item-url" }, sh.url || ""));
+
+          // Expired links are listed, not hidden: "this stopped working on the
+          // 4th" is a different answer from "you never shared this", and the
+          // person chasing a client who says the link is dead needs the first.
+          var when = sh.expiresAt
+            ? new Date(sh.expiresAt * 1000).toLocaleDateString("en-US",
+                { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" })
+            : "—";
+          li.appendChild(el("span",
+            { class: "chip " + (sh.expired ? "chip-muted" : "chip-ok") },
+            sh.expired ? "expired " + when : "expires " + when));
+
+          var copyBtn = el("button",
+            { type: "button", class: "btn btn-ghost btn-sm" }, "Copy");
+          copyBtn.addEventListener("click", function () {
+            if (navigator.clipboard) navigator.clipboard.writeText(sh.url || "").catch(function () {});
+            copyBtn.textContent = "Copied";
+            setTimeout(function () { copyBtn.textContent = "Copy"; }, 1500);
+          });
+          li.appendChild(copyBtn);
+
+          // An expired link needs no revoking — it already grants nothing.
+          if (!sh.expired) {
+            var rev = el("button",
+              { type: "button", class: "btn btn-ghost btn-sm share-item-revoke" }, "Revoke");
+            rev.addEventListener("click", function () { revokeListed(sh, rev); });
+            li.appendChild(rev);
+          }
+          list.appendChild(li);
+        });
+        stage.hidden = false;
+      })
+      .catch(function () { stage.hidden = true; });
+  }
+
+  /** Revoke one link from the list, then re-read rather than patching the DOM. */
+  function revokeListed(sh, btn) {
+    if (!window.confirm(
+      "Revoke this link? Anyone who already has it — including a client you sent " +
+      "it to — loses access immediately. This cannot be undone.")) return;
+    setBusy(btn, true, "Revoking…");
+    callApi("/api/runs/" + encodeURIComponent(state.runId) + "/share/" +
+            encodeURIComponent(sh.token), null, "DELETE")
+      .then(function () {
+        // If the link just revoked is the one shown in the result stage, drop
+        // that too — leaving it on screen would offer a copy button for a dead
+        // link.
+        if (state.share && state.share.token === sh.token) {
+          state.share = null;
+          var resultStage = document.getElementById("share-result-stage");
+          var createStage = document.getElementById("share-create-stage");
+          if (resultStage) resultStage.hidden = true;
+          if (createStage) createStage.hidden = false;
+        }
+        loadShares();
+      })
+      .catch(function (e) { window.alert((e && e.message) || "Could not revoke the link"); })
+      .then(function () { setBusy(btn, false); });
   }
 
   function createShare(btn) {
@@ -378,6 +463,7 @@
         if (resultStage) resultStage.hidden = false;
         var copyBtn = document.getElementById("share-copy-btn");
         if (copyBtn) copyBtn.focus();
+        loadShares();
       })
       .catch(function (e) {
         if (err) { err.textContent = e.message || "Could not create the link."; err.hidden = false; }
@@ -394,7 +480,7 @@
         state.share = null;
         core.closeModal("modal-share");
       })
-      .catch(function (e) { window.alert(e.message || "Could not revoke the link"); })
+      .catch(function (e) { window.alert((e && e.message) || "Could not revoke the link"); })
       .then(function () { setBusy(btn, false); });
   }
 

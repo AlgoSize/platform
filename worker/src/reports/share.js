@@ -25,6 +25,7 @@
 //   our own clock rather than by the storage layer's housekeeping.
 
 const SHARE_PREFIX  = "runShare:";
+const INDEX_PREFIX  = "runShareIndex:";
 const TOKEN_BYTES   = 32;
 
 export const DEFAULT_SHARE_DAYS = 7;
@@ -45,6 +46,23 @@ export function newShareToken() {
 }
 
 export const shareKey = (token) => `${SHARE_PREFIX}${token}`;
+
+/**
+ * Per-run index of minted tokens.
+ *
+ * The token row is the source of truth and is keyed by token alone, because
+ * that is the only thing a public reader presents. But the OWNER needs the
+ * opposite lookup — "which links did I mint for this report, and are they
+ * still live?" — and KV cannot answer that from the token rows without a
+ * prefix scan over every share on the account.
+ *
+ * So the index is a second, deliberately lossy copy: one row per run holding
+ * the tokens minted for it. It can drift (a token row can age out of KV while
+ * the index still lists it), which is why listShares re-reads every token
+ * rather than trusting the index's contents — the index narrows the search,
+ * it does not answer the question.
+ */
+export const shareIndexKey = (runId) => `${INDEX_PREFIX}${runId}`;
 
 /**
  * Clamp a requested lifetime to something defensible.
@@ -82,6 +100,20 @@ export async function createShare(env, { runId, orgId, createdBy = null, expires
     expirationTtl: days * DAY_SECONDS + DAY_SECONDS,
   });
 
+  // Index write is best-effort and deliberately non-fatal: a link that works
+  // but is missing from the owner's list is a worse outcome than a link that
+  // does not exist, so the token row is never rolled back on an index failure.
+  try {
+    const tokens = await readShareIndex(env, runId);
+    if (!tokens.includes(token)) {
+      await env.SESSIONS.put(
+        shareIndexKey(runId),
+        JSON.stringify([...tokens, token]),
+        { expirationTtl: MAX_SHARE_DAYS * DAY_SECONDS + DAY_SECONDS },
+      );
+    }
+  } catch { /* the link still works; only the listing is poorer */ }
+
   return { token, expiresAt, expiresInDays: days, record };
 }
 
@@ -114,9 +146,94 @@ export async function readShare(env, token, { now = null } = {}) {
   return { ok: true, share };
 }
 
-/** Revoke a share link. Deleting the row is the revocation. */
-export async function revokeShare(env, token) {
+/**
+ * Revoke a share link. Deleting the token row is the revocation.
+ *
+ * `runId` is optional and only prunes the index. Revocation is complete
+ * without it — listShares re-reads every token and drops the ones that are
+ * gone — so a caller that does not know the run id still revokes correctly,
+ * it just leaves a stale entry for the index to shed on its next read.
+ */
+export async function revokeShare(env, token, runId = null) {
   if (!env || !env.SESSIONS || !token) return false;
   await env.SESSIONS.delete(shareKey(token));
+  if (runId) {
+    try {
+      const tokens = await readShareIndex(env, runId);
+      const left   = tokens.filter((t) => t !== token);
+      if (left.length !== tokens.length) {
+        if (left.length) {
+          await env.SESSIONS.put(shareIndexKey(runId), JSON.stringify(left), {
+            expirationTtl: MAX_SHARE_DAYS * DAY_SECONDS + DAY_SECONDS,
+          });
+        } else {
+          await env.SESSIONS.delete(shareIndexKey(runId));
+        }
+      }
+    } catch { /* stale index entry; listShares filters it out anyway */ }
+  }
   return true;
+}
+
+/** Token ids recorded against a run. Never trusted for liveness — see listShares. */
+async function readShareIndex(env, runId) {
+  const raw = await env.SESSIONS.get(shareIndexKey(runId));
+  if (!raw) return [];
+  try {
+    const list = JSON.parse(raw);
+    return Array.isArray(list) ? list.filter((t) => typeof t === "string") : [];
+  } catch { return []; }
+}
+
+/**
+ * Every live share link for one run, newest first.
+ *
+ * Each indexed token is re-read, so a row that has aged out of KV or been
+ * revoked simply does not appear — the index is a search hint, not a record of
+ * what exists. Expired-but-present rows are returned with `expired: true`
+ * rather than hidden: "this link stopped working on the 4th" is a different
+ * and more useful answer than the link silently vanishing from the list.
+ *
+ * The index is rewritten when this read finds it stale, so listing is also
+ * how the index stays honest — there is no sweeper.
+ */
+export async function listShares(env, runId, { now = null } = {}) {
+  if (!env || !env.SESSIONS || !runId) return [];
+
+  const nowSec = typeof now === "number" ? now : Math.floor(Date.now() / 1000);
+  const tokens = await readShareIndex(env, runId);
+  if (!tokens.length) return [];
+
+  const rows = await Promise.all(tokens.map(async (token) => {
+    const raw = await env.SESSIONS.get(shareKey(token));
+    if (!raw) return null;
+    let share;
+    try { share = JSON.parse(raw); } catch { return null; }
+    if (!share || share.runId !== runId) return null;
+    return {
+      token,
+      createdAt: share.createdAt || null,
+      createdBy: share.createdBy || null,
+      expiresAt: share.expiresAt || null,
+      expired:   typeof share.expiresAt === "number" && nowSec >= share.expiresAt,
+    };
+  }));
+
+  const live = rows.filter(Boolean);
+
+  if (live.length !== tokens.length) {
+    try {
+      if (live.length) {
+        await env.SESSIONS.put(
+          shareIndexKey(runId),
+          JSON.stringify(live.map((s) => s.token)),
+          { expirationTtl: MAX_SHARE_DAYS * DAY_SECONDS + DAY_SECONDS },
+        );
+      } else {
+        await env.SESSIONS.delete(shareIndexKey(runId));
+      }
+    } catch { /* next read tries again */ }
+  }
+
+  return live.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 }

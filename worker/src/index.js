@@ -19,6 +19,7 @@ import {
   getOrgHandler,
   inviteMemberHandler,
   acceptInviteHandler,
+  revokeInviteHandler,
   removeMemberHandler,
   updateOrgBrandingHandler,
 } from "./handlers/org.js";
@@ -47,6 +48,7 @@ import {
   getRunHandler,
   getRunReportHandler,
   createRunShareHandler,
+  listRunSharesHandler,
   revokeRunShareHandler,
   sharedReportHandler,
 } from "./handlers/runs.js";
@@ -177,6 +179,9 @@ router.get(   "/api/runs/:id/report",         requireAuth, getRunReportHandler);
 // following one requires nothing at all, which is the point — the reader is
 // the customer's client and will never have an account here.
 router.post(  "/api/runs/:id/share",          requireAuth, createRunShareHandler);
+// The links already minted for this report. Registered before /api/runs/:id so
+// the literal segment wins over the id pattern.
+router.get(   "/api/runs/:id/shares",         requireAuth, listRunSharesHandler);
 router.delete("/api/runs/:id/share/:token",   requireAuth, revokeRunShareHandler);
 router.get(   "/api/runs/:id",                requireAuth, getRunHandler);
 
@@ -208,6 +213,11 @@ router.post("/api/billing/portal",  requireAuth, billingPortalHandler);
 router.get(   "/api/org",                  requireAuth, getOrgHandler);
 router.post(  "/api/org/invite",           signupRateLimit, requireAuth, inviteMemberHandler);
 router.post(  "/api/org/invite/accept",    requireAuth, acceptInviteHandler);
+// Withdraw an unaccepted invite. POST rather than DELETE because the target is
+// an email address, and putting one in a path segment invites encoding bugs
+// for exactly the addresses (plus-tags, unicode domains) most likely to be
+// mistyped and need revoking.
+router.post(  "/api/org/invite/revoke",    requireAuth, revokeInviteHandler);
 router.delete("/api/org/members/:userId",  requireAuth, removeMemberHandler);
 // White-label report branding. Owner/admin AND top tier — the tier check is
 // inside the handler, where the org is already resolved.

@@ -28,7 +28,42 @@
   var SEV_MARK = { critical: "▲▲", high: "▲", medium: "●", low: "·" };
   var LENSES = ["all", "speed", "cost", "security"];
 
+  // Severity is encoded three ways over, so it survives grayscale printing and
+  // colour-blind reading: hatch DENSITY (6px pitch for critical up to none for
+  // low), GLYPH COUNT (▲▲ / ▲ / ● / ·), and the WORD itself in the badge. Hue
+  // is the fourth channel, not the only one — a reader who cannot separate red
+  // from amber still gets the ordering from the other three.
+  var SEV_HATCH = { critical: 6, high: 7, medium: 9 };   // low: no fill at all
+
   var SVG_NS = "http://www.w3.org/2000/svg";
+  /**
+   * Diagonal hatch patterns, one per severity that gets one.
+   *
+   * Defined per-SVG rather than once in the document because the PNG export
+   * serialises this element on its own — a pattern living in a shared <defs>
+   * elsewhere on the page would resolve on screen and come out blank in the
+   * exported image.
+   */
+  function hatchDefs() {
+    var defs = svgEl("defs", null);
+    Object.keys(SEV_HATCH).forEach(function (sev) {
+      var pitch = SEV_HATCH[sev];
+      var pat = svgEl("pattern", {
+        id: "arch-hatch-" + sev, width: pitch, height: pitch,
+        patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)",
+      });
+      pat.appendChild(svgEl("rect", {
+        width: pitch, height: pitch, fill: SEV_EDGE[sev], "fill-opacity": "0.10",
+      }));
+      pat.appendChild(svgEl("rect", {
+        width: Math.max(1.2, pitch / 3), height: pitch,
+        fill: SEV_EDGE[sev], "fill-opacity": "0.34",
+      }));
+      defs.appendChild(pat);
+    });
+    return defs;
+  }
+
   function svgEl(tag, attrs) {
     var n = document.createElementNS(SVG_NS, tag);
     if (attrs) for (var k in attrs) if (Object.prototype.hasOwnProperty.call(attrs, k)) n.setAttribute(k, attrs[k]);
@@ -38,9 +73,16 @@
   var state = {
     result: null,
     lens: "all",
-    level: 0,          // 0 = clusters, 1 = nodes of state.cluster
+    level: 0,          // 0 = clusters, 1 = nodes of state.cluster, 2 = one node pinned
     cluster: null,     // cluster id at level 1
     selected: null,    // node id (level 1) or cluster id (level 0)
+    pinned: null,      // node id at level 2 — its edges stay lit, everything else dims
+    // Findings present in this run and absent from the previous one, as a Set
+    // of finding keys. Null means no comparison was possible (no earlier
+    // architecture run), which renders as no diff affordance at all rather
+    // than as "nothing changed" — an unmeasured diff is not an empty one.
+    newKeys: null,
+    prevRunAt: null,
     files: [],         // pending picker files as {path, content}
   };
 
@@ -99,6 +141,80 @@
     });
   }
 
+  /**
+   * A stable identity for one finding, for comparing two runs.
+   *
+   * target + lens + title, because ids are per-run and would make every
+   * finding look new on every sweep. Two runs that report the same problem on
+   * the same node under the same lens are the same finding even when the
+   * surrounding numbers moved.
+   */
+  function findingKey(f) {
+    return [f.target || "", f.lens || "", f.title || ""].join("\u0000");
+  }
+
+  /** How many of these findings are new since the previous run. 0 when unknown. */
+  function countNew(findings) {
+    if (!state.newKeys) return 0;
+    var n = 0;
+    (findings || []).forEach(function (f) { if (state.newKeys[findingKey(f)]) n++; });
+    return n;
+  }
+
+  /**
+   * Compare this result against the previous architecture run for the org.
+   *
+   * Best-effort and entirely optional: no previous run, a failed fetch, or a
+   * result we cannot parse all leave newKeys null, which renders as no diff
+   * affordance rather than as "nothing is new". Claiming a clean diff we did
+   * not measure would be worse than showing none.
+   *
+   * Done client-side because the comparison needs two whole result blobs and
+   * the runs API already serves them; a server-side diff would mean storing a
+   * second copy of something already stored.
+   */
+  function loadDiff(currentRunId) {
+    state.newKeys = null;
+    state.prevRunAt = null;
+
+    // "arch" is the analyzer key the Worker persists (handlers/analyze.js),
+    // not "architecture" — the route name and the stored value differ.
+    callApi("/api/runs?analyzer=arch&limit=5", null, "GET")
+      .then(function (res) {
+        var items = (res && res.items) || [];
+        var prev = null;
+        for (var i = 0; i < items.length; i++) {
+          if (!items[i] || !items[i].id) continue;
+          // With a known current id, exclude it. Without one — the fresh
+          // analysis path, where the response carries no runId — the newest
+          // row IS the run just persisted, so skip the first and take the
+          // next. Both land on "the architecture run before this one".
+          if (currentRunId ? items[i].id !== currentRunId : i > 0) { prev = items[i]; break; }
+        }
+        if (!prev) return null;
+        return callApi("/api/runs/" + encodeURIComponent(prev.id), null, "GET")
+          .then(function (full) { return { run: prev, full: full }; });
+      })
+      .then(function (got) {
+        if (!got || !got.full) return;
+        var prevResult = got.full.result || (got.full.run && got.full.run.result);
+        var prevFindings = prevResult && prevResult.findings;
+        if (!Array.isArray(prevFindings)) return;
+
+        var seen = {};
+        prevFindings.forEach(function (f) { seen[findingKey(f)] = true; });
+        var fresh = {};
+        (state.result.findings || []).forEach(function (f) {
+          var k = findingKey(f);
+          if (!seen[k]) fresh[k] = true;
+        });
+        state.newKeys = fresh;
+        state.prevRunAt = got.run.createdAt || null;
+        render();
+      })
+      .catch(function () { /* no diff is a fine outcome; leave newKeys null */ });
+  }
+
   function worstSeverity(findings) {
     var worst = null;
     findings.forEach(function (f) {
@@ -133,13 +249,33 @@
       "data-arch-act": opts.act,
       style: "cursor:pointer;outline:none",
     });
+    // Dimming rather than hiding at level 2: the pinned node keeps the shape
+    // of the cluster around it instead of floating alone with no context.
+    if (opts.dimmed) g.setAttribute("opacity", "0.2");
+
     var stroke = opts.selected ? C.accent : (opts.stripe || C.border);
     g.appendChild(svgEl("rect", {
       width: w, height: h, rx: 10,
       fill: C.panel, stroke: stroke, "stroke-width": opts.selected ? 2 : 1.25,
     }));
+    // Hatch overlay — the colour-independent half of the severity encoding.
+    if (opts.severity && SEV_HATCH[opts.severity]) {
+      g.appendChild(svgEl("rect", {
+        width: w, height: h, rx: 10,
+        fill: "url(#arch-hatch-" + opts.severity + ")", stroke: "none",
+      }));
+    }
     if (opts.stripe) {
       g.appendChild(svgEl("rect", { width: 4, height: h, rx: 2, fill: opts.stripe }));
+    }
+    // A teal ring marks a node carrying something new since the previous run.
+    // Permanent, not animated: the diff has to survive a PNG export and a
+    // reader who arrives after any animation would have finished.
+    if (opts.isNew) {
+      g.appendChild(svgEl("rect", {
+        width: w, height: h, rx: 10, fill: "none",
+        stroke: C.accent, "stroke-width": 1.5, "stroke-dasharray": "4 3",
+      }));
     }
     var title = svgEl("text", {
       x: 14, y: 24, fill: C.text, "font-size": "13", "font-weight": "600",
@@ -164,11 +300,14 @@
     return g;
   }
 
-  function edgeLine(a, b, label) {
+  function edgeLine(a, b, label, opts) {
+    opts = opts || {};
     var g = svgEl("g", null);
+    if (opts.dimmed) g.setAttribute("opacity", "0.2");
     g.appendChild(svgEl("line", {
       x1: a.x, y1: a.y, x2: b.x, y2: b.y,
-      stroke: C.borderSoft, "stroke-width": 1.25,
+      stroke: opts.emphasised ? C.accent : C.borderSoft,
+      "stroke-width": opts.emphasised ? 2 : 1.25,
     }));
     if (label) {
       var t = svgEl("text", {
@@ -201,9 +340,12 @@
 
     var svg = svgEl("svg", {
       xmlns: SVG_NS, role: "group",
-      "aria-label": state.level === 0 ? "System map, cluster level" : "Cluster detail",
+      "aria-label": state.level === 0
+        ? "System map, cluster level"
+        : (state.level === 2 ? "Node dependencies, pinned" : "Cluster detail"),
       style: "display:block;max-width:100%;height:auto",
     });
+    svg.appendChild(hatchDefs());
 
     var boxes, positions, H;
 
@@ -258,7 +400,8 @@
       boxes = groups.map(function (g, i) {
         return boxGroup(positions[i].x, positions[i].y, boxW, boxH, {
           id: g.id, act: g.act, title: g.title, sub: g.sub, badge: g.badge,
-          stripe: g.stripe, selected: state.selected === g.id,
+          stripe: g.stripe, severity: g.severity || null, isNew: !!g.isNew,
+          selected: state.selected === g.id,
           aria: g.title + ", " + g.sub + ", " + g.badge + ". Press Enter to open.",
         });
       });
@@ -266,6 +409,20 @@
       var nodes = state.cluster === "__shared__"
         ? ungroupedNodes()
         : (graph.nodes || []).filter(function (n) { return n.cluster === state.cluster; });
+
+      // Level 2 pins one node: its direct neighbours stay lit, everything else
+      // drops to 20%. Computed here so both the edges and the boxes below can
+      // ask the same question.
+      var pinnedId = state.level === 2 ? state.pinned : null;
+      var lit = null;
+      if (pinnedId) {
+        lit = {};
+        lit[pinnedId] = true;
+        (graph.edges || []).forEach(function (e) {
+          if (e.from === pinnedId) lit[e.to] = true;
+          if (e.to === pinnedId) lit[e.from] = true;
+        });
+      }
 
       var perRow2 = Math.min(3, Math.max(1, nodes.length));
       var boxW2 = 272, boxH2 = 88;
@@ -277,10 +434,14 @@
       var pos = {}; nodes.forEach(function (n, i) { pos[n.id] = positions[i]; });
       (graph.edges || []).forEach(function (e) {
         if (!pos[e.from] || !pos[e.to]) return;
+        // An edge is lit only when the pinned node is one of its ends — an
+        // edge between two neighbours is not part of "what this touches".
+        var touches = !pinnedId || e.from === pinnedId || e.to === pinnedId;
         svg.appendChild(edgeLine(
           { x: pos[e.from].cx, y: pos[e.from].cy },
           { x: pos[e.to].cx, y: pos[e.to].cy },
-          e.kind || ""));
+          e.kind || "",
+          { dimmed: pinnedId && !touches, emphasised: pinnedId && touches }));
       });
 
       boxes = nodes.map(function (n, i) {
@@ -289,14 +450,26 @@
         var flags = [];
         if (n.publiclyReachable) flags.push("public");
         if (n.shared) flags.push("shared");
+        var nNew = countNew(fs);
         return boxGroup(positions[i].x, positions[i].y, boxW2, boxH2, {
           id: n.id, act: "select",
           title: n.name || n.id,
           sub: (n.kind || "node") + (flags.length ? " · " + flags.join(" · ") : ""),
-          badge: fs.length ? (SEV_MARK[worst] || "") + " " + fs.length + " finding" + (fs.length === 1 ? "" : "s") : "clean in lens",
+          // The word is the third severity channel, alongside hatch and glyph.
+          badge: fs.length
+            ? (SEV_MARK[worst] || "") + " " + fs.length + " " + (worst || "finding") +
+              (nNew ? " · +" + nNew + " new" : "")
+            : "clean in lens",
           stripe: worst ? SEV_EDGE[worst] : null,
-          selected: state.selected === n.id,
-          aria: (n.name || n.id) + ", " + (n.kind || "node") + ", " + fs.length + " findings. Press Enter to inspect.",
+          severity: worst || null,
+          isNew: nNew > 0,
+          dimmed: !!(pinnedId && !lit[n.id]),
+          selected: state.selected === n.id || n.id === pinnedId,
+          aria: (n.name || n.id) + ", " + (n.kind || "node") + ", " +
+                fs.length + " findings" + (worst ? ", worst " + worst : "") +
+                (nNew ? ", " + nNew + " new since the last run" : "") +
+                (n.id === pinnedId ? ". Pinned. Press Enter to unpin."
+                                   : ". Press Enter to pin and see what it touches."),
         });
       });
     }
@@ -470,11 +643,24 @@
     var rootBtn = el("button", { type: "button", class: "seg-btn" + (state.level === 0 ? " xray-crumb-here" : "") }, "System");
     rootBtn.addEventListener("click", function () { go(0, null); });
     crumb.appendChild(rootBtn);
-    if (state.level === 1) {
+    if (state.level >= 1) {
       crumb.appendChild(el("span", { class: "mono xray-crumb-sep", "aria-hidden": "true" }, "›"));
       var cluster = (result.graph.clusters || []).find(function (c) { return c.id === state.cluster; });
-      crumb.appendChild(el("span", { class: "seg-btn xray-crumb-here" },
-        state.cluster === "__shared__" ? "Shared resources" : (cluster ? cluster.name : state.cluster)));
+      var clusterLabel = state.cluster === "__shared__"
+        ? "Shared resources" : (cluster ? cluster.name : state.cluster);
+      if (state.level === 2) {
+        // Clickable at level 2 — it is the way back out of a pin, and the
+        // breadcrumb should behave like one rather than being decoration.
+        var upBtn = el("button", { type: "button", class: "seg-btn" }, clusterLabel);
+        upBtn.addEventListener("click", function () { go(1, state.cluster); });
+        crumb.appendChild(upBtn);
+        var pinnedNode = (result.graph.nodes || []).find(function (n) { return n.id === state.pinned; });
+        crumb.appendChild(el("span", { class: "mono xray-crumb-sep", "aria-hidden": "true" }, "›"));
+        crumb.appendChild(el("span", { class: "seg-btn xray-crumb-here" },
+          (pinnedNode && pinnedNode.name) || state.pinned));
+      } else {
+        crumb.appendChild(el("span", { class: "seg-btn xray-crumb-here" }, clusterLabel));
+      }
     }
     bar.appendChild(crumb);
 
@@ -501,7 +687,20 @@
     wrap.appendChild(el("p", { class: "mono xray-hint" },
       state.level === 0
         ? "Click a cluster to open it. Enter opens, Esc goes back up."
-        : "Click a node for its findings. Esc returns to the system view."));
+        : (state.level === 2
+            ? "Pinned — lit edges are what this node touches. Enter unpins, Esc goes back up."
+            : "Click a node to pin it and see what it touches. Esc returns to the system view.")));
+
+    // Diff line, only when a comparison actually happened. Absent rather than
+    // reading "no changes" when there was no previous run to compare against.
+    if (state.newKeys) {
+      var newCount = Object.keys(state.newKeys).length;
+      wrap.appendChild(el("p", { class: "panel-input-help mono" },
+        newCount
+          ? "◌ dashed outline = " + newCount + " finding" + (newCount === 1 ? "" : "s") +
+            " new since the previous run"
+          : "No new findings since the previous run."));
+    }
 
     wrap.appendChild(detailPanel());
     var recs = recommendationsPanel();
@@ -514,14 +713,32 @@
     state.level = level;
     state.cluster = cluster;
     state.selected = selected || null;
+    // Leaving a level always drops the pin. A pin that survived a jump back to
+    // the system map would silently dim a cluster the reader had not pinned.
+    if (level < 2) state.pinned = null;
     render();
   }
 
   function onCanvasActivate(target) {
     var id = target.getAttribute("data-arch-id");
     var act = target.getAttribute("data-arch-act");
-    if (act === "drill") go(1, id);
-    else if (act === "select") { state.selected = state.selected === id ? null : id; render(); }
+    if (act === "drill") { go(1, id); return; }
+    if (act !== "select") return;
+
+    // Selecting a node at level 1 pins it (level 2): its edges stay lit and
+    // everything else dims, answering "what does changing this touch?".
+    // Activating the pinned node again unpins — the same key that got you in
+    // gets you out, so the interaction never traps.
+    if (state.level === 2 && state.pinned === id) {
+      state.level = 1;
+      state.pinned = null;
+      state.selected = id;
+    } else {
+      state.level = 2;
+      state.pinned = id;
+      state.selected = id;
+    }
+    render();
   }
 
   // ---------------------------------------------------------------------
@@ -600,9 +817,14 @@
     callApi("/api/analyze/architecture", { files: state.files })
       .then(function (result) {
         state.result = result;
-        state.level = 0; state.cluster = null; state.selected = null; state.lens = "all";
+        state.level = 0; state.cluster = null; state.selected = null;
+        state.pinned = null; state.lens = "all";
         render();
         core.loadRuns();
+        // A run just persisted is the newest one, so the diff compares against
+        // whatever came before it. Fired after render so the map appears
+        // immediately and the "new" markers arrive when the comparison lands.
+        loadDiff(result && result.runId);
       })
       .catch(function (e) {
         var out = document.getElementById("output-arch");
@@ -654,11 +876,15 @@
         onCanvasActivate(g);
         return;
       }
-      if (event.key === "Escape" && state.result && state.level === 1) {
+      if (event.key === "Escape" && state.result && state.level > 0) {
         var canvasWrap = document.getElementById("xray-canvas");
         if (canvasWrap && canvasWrap.contains(document.activeElement)) {
           event.preventDefault();
-          go(0, null);
+          // One level at a time, mirroring the breadcrumb: pinned → cluster →
+          // system. Jumping straight to the top from level 2 would lose the
+          // cluster the reader was working in.
+          if (state.level === 2) { state.level = 1; state.pinned = null; render(); }
+          else go(0, null);
         }
       }
     });
@@ -673,8 +899,10 @@
         .then(function (run) {
           if (run && run.result && run.result.graph) {
             state.result = run.result;
-            state.level = 0; state.cluster = null; state.selected = null; state.lens = "all";
+            state.level = 0; state.cluster = null; state.selected = null;
+            state.pinned = null; state.lens = "all";
             render();
+            loadDiff(run.id || btn.dataset.runId);
             var panel = document.getElementById("panel-arch");
             if (panel && typeof panel.scrollIntoView === "function") {
               panel.scrollIntoView({ behavior: "smooth", block: "start" });

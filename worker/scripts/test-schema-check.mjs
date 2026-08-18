@@ -163,10 +163,19 @@ console.log("\npartial migration — the case this endpoint exists for\n");
   const res = await adminSchemaCheckHandler(adminRequest(), env);
   const body = await res.json();
 
-  expect(body.ok === false, "ok:false with 0007/0008 missing");
-  expect(JSON.stringify(body.pending) === JSON.stringify(["0007", "0008"]),
-    `pending names exactly the missing migrations (got ${JSON.stringify(body.pending)})`);
+  expect(body.ok === false, "ok:false with everything after 0006 missing");
+  // Derived from the fixture rather than hardcoded: this assertion previously
+  // named ["0007","0008"] literally and went red the moment 0009 landed, which
+  // is a maintenance tax with no diagnostic value — the fixture stops at 0006,
+  // so "pending" is by definition every manifest entry above it.
+  const expectedPending = body.migrations
+    .filter((m) => m.migration > "0006")
+    .map((m) => m.migration);
+  expect(JSON.stringify(body.pending) === JSON.stringify(expectedPending),
+    `pending names exactly the migrations above the fixture (got ${JSON.stringify(body.pending)})`);
   expect(body.appliedCount === 6, `six applied (got ${body.appliedCount})`);
+  expect(body.total === body.migrations.length && body.pending.length === body.total - 6,
+    "and the pending count is the manifest minus the six applied");
 
   // 0007's signature is a COLUMN on an existing table — a table-exists check
   // would have called this applied, which is the bug worth guarding.
