@@ -5,6 +5,7 @@ site/.jekyll-cache/
 site/.jekyll-metadata
 site/vendor/
 site/.sass-cache/
+_site_build/
 
 # Node / Wrangler
 node_modules/

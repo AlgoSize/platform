@@ -17,7 +17,14 @@ bundle exec jekyll build --destination ../_site_build --quiet
 cd ..
 echo "  Jekyll build complete."
 
-# 3. Start the unified Node.js server
-echo "[3/3] Starting API + static server on port 5000..."
+# 3. Install Node dependencies
+echo "[3/4] Installing Node dependencies..."
+cd worker
+npm ci --silent 2>/dev/null || npm ci
+cd ..
+echo "  Node modules ready."
+
+# 4. Start the unified Node.js server
+echo "[4/4] Starting API + static server on port 5000..."
 cd worker
 node server.js
