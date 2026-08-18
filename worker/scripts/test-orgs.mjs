@@ -511,8 +511,8 @@ console.log("\nGET /api/org, signup, and checkout quantity\n");
                         { status: 200, headers: { "content-type": "application/json" } });
   };
   try {
-    await createCheckoutSession(fakeEnv, { successUrl: "https://x/s", cancelUrl: "https://x/c", quantity: 7, orgId: "org_abc" });
-    await createCheckoutSession(fakeEnv, { successUrl: "https://x/s", cancelUrl: "https://x/c" });
+    await createCheckoutSession(fakeEnv, { successUrl: "https://x/s", cancelUrl: "https://x/c", priceId: "price_test_monthly", quantity: 7, orgId: "org_abc" });
+    await createCheckoutSession(fakeEnv, { successUrl: "https://x/s", cancelUrl: "https://x/c", priceId: "price_test_monthly" });
   } finally {
     globalThis.fetch = realFetch;
   }

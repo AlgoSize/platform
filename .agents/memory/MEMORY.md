@@ -1,1 +1,4 @@
 - [Cloudflare connector permissions](cloudflare-connector-permissions.md) — read access can work while R2/Queues provisioning fails unless the connected API key has write scopes.
+- [DO migration format](do-migration-format.md) — use new_sqlite_classes not new_classes; KV-backed DO namespaces are no longer supported (error 10099).
+- [algosize.com infrastructure](algosize-infra.md) — zone ID, workers.dev URL, Workers route, GitHub Pages origin, key IDs.
+- [Stripe checkout API contract](stripe-checkout-api.md) — createCheckoutSession takes priceId/seatPriceId; checkout handler reads `tier` (plan is compat alias).

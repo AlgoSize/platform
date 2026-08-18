@@ -116,54 +116,97 @@ export function resolvePrice(env, { plan, interval } = {}) {
  * `successUrl` MUST contain the literal `{CHECKOUT_SESSION_ID}` placeholder
  * — Stripe substitutes the real session id when redirecting the user back.
  *
- * `plan`/`interval` select the tier (see resolvePrice). Omit both to bill the
- * legacy single STRIPE_PRICE_ID.
+ * Callers are responsible for resolving `priceId` (and `seatPriceId` for
+ * per-seat tiers) before calling this function. Use `resolvePrice()` for that.
+ * Keeping resolution outside this function means the checkout handler can
+ * validate and reject unknown/unconfigured tiers with a precise error before
+ * making any outbound call.
+ *
+ * @param {object} options
+ * @param {string}  options.priceId      - Required. Stripe price ID for the
+ *                                         base subscription (or the only line
+ *                                         item on non-seat tiers).
+ * @param {string}  [options.seatPriceId] - Per-seat add-on price ID. When
+ *                                         present a second line item is added
+ *                                         at `quantity` seats; the base is
+ *                                         always billed at quantity 1.
+ * @param {number}  [options.quantity]   - Number of seats (default 1).
+ * @param {string}  [options.orgId]      - Organisation ID. Written to both
+ *                                         `client_reference_id` (visible on the
+ *                                         session) and
+ *                                         `subscription_data.metadata.org_id`
+ *                                         (visible on every subscription event)
+ *                                         so the webhook can resolve the org
+ *                                         without guessing from the email.
+ * @param {number}  [options.trialDays]  - Trial period in days. When set,
+ *                                         `subscription_data.trial_period_days`
+ *                                         is forwarded to Stripe so the first
+ *                                         invoice is deferred.
  */
-export function createCheckoutSession(env, { successUrl, cancelUrl, customerEmail, quantity, orgId, plan, interval } = {}) {
-  const price = resolvePrice(env, { plan, interval });
-  if (!price) {
+export function createCheckoutSession(env, {
+  successUrl,
+  cancelUrl,
+  customerEmail,
+  priceId,
+  seatPriceId,
+  quantity,
+  orgId,
+  trialDays,
+} = {}) {
+  if (!priceId) {
     throw new Error(
-      plan
-        ? `No Stripe price configured for plan "${plan}" (${interval || "monthly"}). See worker/.dev.vars.example.`
-        : "STRIPE_PRICE_ID is not set. See worker/.dev.vars.example.",
+      "createCheckoutSession: priceId is required. " +
+      "Resolve it with resolvePrice() before calling this function.",
     );
   }
 
-  // Seats. This was hardcoded to "1", which is why the product could not sell
-  // a team: the subscription Stripe billed for never had more than one seat on
-  // it no matter what the buyer wanted. Defaults to 1 so every existing caller
-  // behaves exactly as before.
+  // Seats default to 1. On per-seat tiers the base is always qty 1 and the
+  // seat line item carries this count. On flat tiers this quantity is on the
+  // only line item (buying 3 seats on a $49/mo flat plan is unusual but not
+  // forbidden — the pricing page caps it at MAX_SEATS_PER_CHECKOUT).
   const seats = Number.isInteger(quantity) && quantity > 0 ? quantity : 1;
 
   const body = {
-    mode: "subscription",
-    success_url: successUrl,
-    cancel_url: cancelUrl,
-    allow_promotion_codes: "true",
+    mode:                   "subscription",
+    success_url:            successUrl,
+    cancel_url:             cancelUrl,
+    allow_promotion_codes:  "true",
+    // Stripe Tax needs to know the customer's billing address to apply the
+    // right VAT/GST rate. `customer_update[address]=auto` lets Stripe collect
+    // it during checkout; `automatic_tax[enabled]=true` activates the
+    // calculation. Both are required — either alone is a no-op.
+    "automatic_tax[enabled]":     "true",
+    "customer_update[address]":   "auto",
   };
 
-  if (price.perSeat) {
-    // Base fee billed once, seats billed on their own line. A single line item
-    // cannot express "$149 plus $39 a seat", and folding the base into the
-    // seat price would overcharge every account past the first seat.
-    body["line_items[0][price]"]    = price.base;
+  if (seatPriceId) {
+    // Base fee billed once + per-seat fee. A single line item cannot express
+    // "$149 flat plus $39 per seat", and folding the base into the seat price
+    // would overcharge every account past the first seat.
+    body["line_items[0][price]"]    = priceId;
     body["line_items[0][quantity]"] = "1";
-    body["line_items[1][price]"]    = price.seat;
+    body["line_items[1][price]"]    = seatPriceId;
     body["line_items[1][quantity]"] = String(seats);
   } else {
-    body["line_items[0][price]"]    = price.base;
+    body["line_items[0][price]"]    = priceId;
     body["line_items[0][quantity]"] = String(seats);
   }
 
   if (customerEmail) body.customer_email = customerEmail;
+
   if (orgId) {
-    // Both locations on purpose: client_reference_id comes back on the
-    // checkout session, and the metadata copy rides on the subscription so
-    // later subscription.updated events can be resolved to an org without
-    // guessing from the email.
-    body.client_reference_id = orgId;
-    body["subscription_data[metadata][org_id]"] = orgId;
+    // Both locations on purpose: `client_reference_id` is available on the
+    // checkout.session.completed event; `subscription_data.metadata.org_id`
+    // rides on every subsequent subscription.* event so the webhook can
+    // resolve the org without an extra Stripe API call.
+    body.client_reference_id                      = orgId;
+    body["subscription_data[metadata][org_id]"]   = orgId;
   }
+
+  if (Number.isInteger(trialDays) && trialDays > 0) {
+    body["subscription_data[trial_period_days]"] = String(trialDays);
+  }
+
   return stripeFetch(env, "/checkout/sessions", { method: "POST", body });
 }
 

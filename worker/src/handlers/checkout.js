@@ -41,55 +41,63 @@ function wantsJson(request) {
  *    straight to the Stripe Checkout URL. This is a graceful fallback.
  */
 export async function checkoutHandler(request, env) {
-  // Optional {seats} for team purchases. The endpoint is public (it's the
-  // pricing page's button), so this is buyer-declared intent, not an
-  // entitlement — they are charged for exactly what they ask for. Clamped so a
-  // typo or a scripted request can't create a 10,000-seat Checkout Session.
-  let seats = 1;
-  // Optional {plan, interval} — which tier on the pricing page was clicked.
-  // Absent means the legacy single-price checkout, which is what every caller
-  // predating tiered pricing sends.
-  let plan = null;
+  // ---- Parse request body ------------------------------------------------
+  // The pricing page sends {tier, seats, interval}. The `plan` field is
+  // accepted as a legacy alias so callers predating the rename keep working.
+  // Absent means the legacy single-price checkout (STRIPE_PRICE_ID).
+  let tier     = null;
   let interval = "monthly";
+  let seats    = 1;
+  let orgId    = null;   // optional — lets the webhook resolve the org instantly
   try {
     const body = await request.clone().json();
-    if (body && Number.isInteger(body.seats)) {
-      seats = Math.min(Math.max(body.seats, 1), MAX_SEATS_PER_CHECKOUT);
+    if (body) {
+      // `tier` is canonical; `plan` is the backward-compat alias.
+      const rawTier = body.tier ?? body.plan;
+      if (typeof rawTier === "string") tier = rawTier.toLowerCase();
+      if (typeof body.interval === "string") interval = body.interval.toLowerCase();
+      // Seats: buyer-declared intent, not an entitlement. Clamped so a typo or
+      // a scripted request can't create a 10,000-seat Checkout Session.
+      if (Number.isInteger(body.seats)) {
+        seats = Math.min(Math.max(body.seats, 1), MAX_SEATS_PER_CHECKOUT);
+      }
+      if (typeof body.orgId === "string" && body.orgId) orgId = body.orgId;
     }
-    if (body && typeof body.plan === "string") plan = body.plan.toLowerCase();
-    if (body && typeof body.interval === "string") interval = body.interval.toLowerCase();
   } catch {
-    // No body, or a form POST — the default of one seat stands.
+    // No body or form POST — defaults stand.
   }
 
-  // Refuse an unknown tier, and refuse a known tier with no price configured,
-  // BEFORE talking to Stripe. Falling through to a different price would mean
-  // a buyer who clicked "$599/month" gets billed some other amount, which is a
-  // billing dispute rather than a bug report. A visible 400 is the better
-  // failure: it is obvious in testing and impossible to mistake for a sale.
-  if (plan && !resolvePrice(env, { plan, interval })) {
-    const known = PLANS.includes(plan) && INTERVALS.includes(interval);
-    return jsonResponse(
-      {
-        error: "plan_not_available",
-        message: known
-          ? `The ${plan} plan isn't available for ${interval} billing yet. Email hello@algosize.com and we'll set it up.`
-          : `Unknown plan "${plan}". Choose one of: ${PLANS.join(", ")}.`,
-        plan,
-        interval,
-      },
-      known ? 503 : 400,
-    );
+  // ---- Resolve price, refuse bad/unconfigured tiers BEFORE Stripe ----------
+  // Falling through to a different price would mean a buyer who clicked
+  // "$599/month" gets billed some other amount — a billing dispute rather than
+  // a bug report. Always 400 so the failure is loud in testing and impossible
+  // to mistake for a sale.
+  const price = resolvePrice(env, { plan: tier, interval });
+  if (!price) {
+    const knownTier     = tier ? PLANS.includes(tier)     : false;
+    const knownInterval = tier ? INTERVALS.includes(interval) : false;
+    let message;
+    if (!tier) {
+      message = "STRIPE_PRICE_ID is not set. See worker/.dev.vars.example.";
+    } else if (!knownTier) {
+      message = `Unknown tier "${tier}". Choose one of: ${PLANS.join(", ")}.`;
+    } else if (!knownInterval) {
+      message = `Unknown interval "${interval}". Choose one of: ${INTERVALS.join(", ")}.`;
+    } else {
+      message = `The ${tier} plan isn't available for ${interval} billing yet. Email hello@algosize.com.`;
+    }
+    return jsonResponse({ error: "plan_not_available", message, tier, interval }, 400);
   }
 
   let session;
   try {
     session = await createCheckoutSession(env, {
-      successUrl: `${env.SITE_ORIGIN}/api/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancelUrl:  `${env.SITE_ORIGIN}/#pricing`,
-      quantity:   seats,
-      plan,
-      interval,
+      successUrl:  `${env.SITE_ORIGIN}/api/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancelUrl:   `${env.SITE_ORIGIN}/#pricing`,
+      priceId:     price.base,
+      seatPriceId: price.seat || null,
+      quantity:    seats,
+      orgId:       orgId || null,
     });
   } catch (err) {
     console.error("checkout: stripe error", err);

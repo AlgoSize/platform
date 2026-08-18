@@ -192,6 +192,17 @@ PLAUSIBLE_ENDPOINT = "https://plausible.io"
 EMAIL_FROM           = "Algosize <noreply@algosize.com>"
 EMAIL_DELEGATED_USER = "noreply@algosize.com"
 ADMIN_EMAILS         = "guillaumelauzier@gmail.com"
+# Tiered pricing price IDs (test-mode). Replace with live-mode IDs before go-live.
+STRIPE_PRICE_SOLO_MONTHLY          = "price_1U5jTEFA2hGHNbZ5NfvGfNfk"
+STRIPE_PRICE_SOLO_ANNUAL           = "price_1U5jTFFA2hGHNbZ5Un2v2HwX"
+STRIPE_PRICE_PRACTICE_MONTHLY      = "price_1U5jTHFA2hGHNbZ5YE2aj50K"
+STRIPE_PRICE_PRACTICE_ANNUAL       = "price_1U5jTIFA2hGHNbZ5XFx4ldqK"
+STRIPE_PRICE_PRACTICE_MONTHLY_SEAT = "price_1U5jTKFA2hGHNbZ5b14jztio"
+STRIPE_PRICE_PRACTICE_ANNUAL_SEAT  = "price_1U5jTLFA2hGHNbZ5XlBm9Nia"
+STRIPE_PRICE_FIRM_MONTHLY          = "price_1U5jTNFA2hGHNbZ50LekndBp"
+STRIPE_PRICE_FIRM_ANNUAL           = "price_1U5jTOFA2hGHNbZ5T38KlYFr"
+STRIPE_PRICE_FIRM_MONTHLY_SEAT     = "price_1U5jTQFA2hGHNbZ5q6xmEDjY"
+STRIPE_PRICE_FIRM_ANNUAL_SEAT      = "price_1U5jTRFA2hGHNbZ5NeqO6SWq"
 
 [[env.production.kv_namespaces]]
 binding = "SESSIONS"
@@ -224,8 +235,8 @@ name       = "USAGE"
 class_name = "UsageCounter"
 
 [[env.production.migrations]]
-tag         = "v1"
-new_classes = ["UsageCounter"]
+tag             = "v1"
+new_sqlite_classes = ["UsageCounter"]
 
 # Scheduled monitoring — see the [triggers]/[[queues]] block near the top for
 # why this is split into a cron + a queue, and for the provisioning steps.
@@ -271,6 +282,17 @@ PLAUSIBLE_ENDPOINT = "https://plausible.io"
 EMAIL_FROM           = "Algosize Staging <noreply-staging@algosize.com>"
 EMAIL_DELEGATED_USER = "noreply-staging@algosize.com"
 ADMIN_EMAILS         = "guillaumelauzier@gmail.com"
+# Tiered pricing price IDs (test-mode, same catalog as production until go-live).
+STRIPE_PRICE_SOLO_MONTHLY          = "price_1U5jTEFA2hGHNbZ5NfvGfNfk"
+STRIPE_PRICE_SOLO_ANNUAL           = "price_1U5jTFFA2hGHNbZ5Un2v2HwX"
+STRIPE_PRICE_PRACTICE_MONTHLY      = "price_1U5jTHFA2hGHNbZ5YE2aj50K"
+STRIPE_PRICE_PRACTICE_ANNUAL       = "price_1U5jTIFA2hGHNbZ5XFx4ldqK"
+STRIPE_PRICE_PRACTICE_MONTHLY_SEAT = "price_1U5jTKFA2hGHNbZ5b14jztio"
+STRIPE_PRICE_PRACTICE_ANNUAL_SEAT  = "price_1U5jTLFA2hGHNbZ5XlBm9Nia"
+STRIPE_PRICE_FIRM_MONTHLY          = "price_1U5jTNFA2hGHNbZ50LekndBp"
+STRIPE_PRICE_FIRM_ANNUAL           = "price_1U5jTOFA2hGHNbZ5T38KlYFr"
+STRIPE_PRICE_FIRM_MONTHLY_SEAT     = "price_1U5jTQFA2hGHNbZ5q6xmEDjY"
+STRIPE_PRICE_FIRM_ANNUAL_SEAT      = "price_1U5jTRFA2hGHNbZ5NeqO6SWq"
 
 # KV namespace IDs are placeholders. Create the real ones with:
 #   wrangler kv namespace create SESSIONS --config wrangler.toml --env staging
@@ -311,8 +333,8 @@ name       = "USAGE"
 class_name = "UsageCounter"
 
 [[env.staging.migrations]]
-tag         = "v1"
-new_classes = ["UsageCounter"]
+tag             = "v1"
+new_sqlite_classes = ["UsageCounter"]
 
 # Staging monitors run on their own queue so a staging sweep can never send
 # mail about a production org's repositories. Same 03:00 UTC cadence.

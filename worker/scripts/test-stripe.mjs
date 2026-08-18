@@ -516,23 +516,21 @@ console.log("\nTiered pricing\n");
 }
 
 // 22. A per-seat tier bills the base once and the seats separately.
+//     createCheckoutSession now takes resolved priceId/seatPriceId directly.
 {
-  const env = makeEnv({
-    STRIPE_PRICE_PRACTICE_MONTHLY:      "price_practice_base",
-    STRIPE_PRICE_PRACTICE_MONTHLY_SEAT: "price_practice_seat",
-  });
   let sent = null;
-  env.FETCH = null;
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (_url, init) => {
     sent = init.body;
     return { ok: true, status: 200, json: async () => ({ id: "cs_1", url: "https://stripe/x" }) };
   };
   try {
-    await createCheckoutSession(env, {
-      successUrl: "http://x/s?session_id={CHECKOUT_SESSION_ID}",
-      cancelUrl: "http://x/c",
-      plan: "practice", interval: "monthly", quantity: 4,
+    await createCheckoutSession(makeEnv(), {
+      successUrl:  "http://x/s?session_id={CHECKOUT_SESSION_ID}",
+      cancelUrl:   "http://x/c",
+      priceId:     "price_practice_base",
+      seatPriceId: "price_practice_seat",
+      quantity:    4,
     });
   } finally { globalThis.fetch = realFetch; }
 
@@ -545,9 +543,11 @@ console.log("\nTiered pricing\n");
   else fail(`unexpected line items: ${sent}`);
 }
 
-// 23. checkoutHandler refuses an unconfigured tier instead of charging
-//     something else. This is the test that matters most: the failure mode it
+// 23. checkoutHandler refuses a known-but-unconfigured tier with 400 and never
+//     calls Stripe. This is the test that matters most: the failure mode it
 //     rules out is a silent wrong charge, which no user would report as a bug.
+//     (Previously 503; unified to 400 so "bad tier" always looks the same to
+//     callers regardless of whether the name is unknown or just not wired up.)
 {
   const env = makeEnv();   // no tier prices configured at all
   const realFetch = globalThis.fetch;
@@ -562,33 +562,152 @@ console.log("\nTiered pricing\n");
       new Request("http://x/api/checkout", {
         method: "POST",
         headers: { "Accept": "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify({ plan: "firm", interval: "monthly" }),
+        body: JSON.stringify({ tier: "firm", interval: "monthly" }),
       }),
       env,
     );
   } finally { globalThis.fetch = realFetch; }
 
   const body = await res.json();
-  if (res.status === 503 && body.error === "plan_not_available" && !stripeCalled) {
-    ok("checkoutHandler refuses an unconfigured tier with 503 and never calls Stripe");
-  } else { fail(`expected 503 plan_not_available, got ${res.status} ${JSON.stringify(body)} (stripe called: ${stripeCalled})`); }
+  if (res.status === 400 && body.error === "plan_not_available" && !stripeCalled) {
+    ok("checkoutHandler refuses an unconfigured tier with 400 and never calls Stripe");
+  } else { fail(`expected 400 plan_not_available, got ${res.status} ${JSON.stringify(body)} (stripe called: ${stripeCalled})`); }
 }
 
-// 24. An unknown plan name is a client error, not a config error.
+// 24. An unknown tier name is a client error — 400, never falls through.
+//     Also validates that the legacy `plan` field is accepted as an alias for `tier`.
 {
   const env = makeEnv();
   const res = await checkoutHandler(
     new Request("http://x/api/checkout", {
       method: "POST",
       headers: { "Accept": "application/json", "Content-Type": "application/json" },
-      body: JSON.stringify({ plan: "enterprise" }),
+      body: JSON.stringify({ plan: "enterprise" }),   // legacy alias
     }),
     env,
   );
   const body = await res.json();
   if (res.status === 400 && body.error === "plan_not_available") {
-    ok("checkoutHandler rejects an unknown plan name with 400");
+    ok("checkoutHandler rejects unknown tier name with 400 (legacy `plan` alias works)");
   } else { fail(`expected 400, got ${res.status} ${JSON.stringify(body)}`); }
+}
+
+// ---------------------------------------------------------------------------
+// New coverage: session body shape, org metadata, tax params
+// ---------------------------------------------------------------------------
+console.log("\nCheckout session body shape\n");
+
+// 25. Seat quantity reaches the Stripe session body on a per-seat tier.
+//     A quantity of 7 on a seated plan must produce qty=7 on the seat line
+//     item and qty=1 on the base line item — not qty=7 on both.
+{
+  let sent = null;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, init) => {
+    sent = init.body;
+    return { ok: true, status: 200, json: async () => ({ id: "cs_q", url: "https://stripe/q" }) };
+  };
+  try {
+    await createCheckoutSession(makeEnv(), {
+      successUrl:  "http://x/s?session_id={CHECKOUT_SESSION_ID}",
+      cancelUrl:   "http://x/c",
+      priceId:     "price_firm_base",
+      seatPriceId: "price_firm_seat",
+      quantity:    7,
+    });
+  } finally { globalThis.fetch = realFetch; }
+
+  const p = new URLSearchParams(sent || "");
+  const baseQty = p.get("line_items[0][quantity]");
+  const seatQty = p.get("line_items[1][quantity]");
+  if (baseQty === "1" && seatQty === "7") {
+    ok("seat quantity 7 reaches line_items[1][quantity]; base stays at 1");
+  } else {
+    fail(`wrong quantities: base=${baseQty} seat=${seatQty}`);
+  }
+}
+
+// 26. orgId appears in BOTH client_reference_id AND
+//     subscription_data[metadata][org_id] so the webhook can resolve the org
+//     from either event type (checkout.session.completed / subscription.updated).
+{
+  let sent = null;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, init) => {
+    sent = init.body;
+    return { ok: true, status: 200, json: async () => ({ id: "cs_org", url: "https://stripe/o" }) };
+  };
+  try {
+    await createCheckoutSession(makeEnv(), {
+      successUrl: "http://x/s?session_id={CHECKOUT_SESSION_ID}",
+      cancelUrl:  "http://x/c",
+      priceId:    "price_solo_monthly",
+      orgId:      "org_abc123",
+    });
+  } finally { globalThis.fetch = realFetch; }
+
+  const p = new URLSearchParams(sent || "");
+  const inClientRef = p.get("client_reference_id") === "org_abc123";
+  const inSubMeta   = p.get("subscription_data[metadata][org_id]") === "org_abc123";
+  if (inClientRef && inSubMeta) {
+    ok("orgId present in client_reference_id AND subscription_data[metadata][org_id]");
+  } else {
+    fail(`orgId missing: client_reference_id=${p.get("client_reference_id")} sub_meta=${p.get("subscription_data[metadata][org_id]")}`);
+  }
+}
+
+// 27. checkoutHandler: { tier: "solo" } with no price configured → 400
+//     (same shape as test 23, but using `tier` field explicitly and a
+//     different tier name to guard against accidental shared state)
+{
+  const env = makeEnv();   // no STRIPE_PRICE_SOLO_MONTHLY etc
+  const realFetch = globalThis.fetch;
+  let called = false;
+  globalThis.fetch = async () => { called = true; return { ok: true, status: 200, json: async () => ({}) }; };
+  let res;
+  try {
+    res = await checkoutHandler(
+      new Request("http://x/api/checkout", {
+        method: "POST",
+        headers: { "Accept": "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ tier: "solo", interval: "annual" }),
+      }),
+      env,
+    );
+  } finally { globalThis.fetch = realFetch; }
+  const b = await res.json();
+  if (res.status === 400 && b.error === "plan_not_available" && !called) {
+    ok("unknown/unconfigured tier via `tier` field → 400, Stripe never called");
+  } else {
+    fail(`expected 400 plan_not_available, got ${res.status} ${JSON.stringify(b)} stripe_called=${called}`);
+  }
+}
+
+// 28. automatic_tax and customer_update are present in every session body.
+//     Both are required for Stripe Tax to apply the correct VAT/GST rate.
+{
+  let sent = null;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, init) => {
+    sent = init.body;
+    return { ok: true, status: 200, json: async () => ({ id: "cs_tax", url: "https://stripe/t" }) };
+  };
+  try {
+    await createCheckoutSession(makeEnv(), {
+      successUrl: "http://x/s?session_id={CHECKOUT_SESSION_ID}",
+      cancelUrl:  "http://x/c",
+      priceId:    "price_any",
+    });
+  } finally { globalThis.fetch = realFetch; }
+
+  const p = new URLSearchParams(sent || "");
+  const taxEnabled    = p.get("automatic_tax[enabled]") === "true";
+  const addrAuto      = p.get("customer_update[address]") === "auto";
+  if (taxEnabled && addrAuto) {
+    ok("automatic_tax[enabled]=true and customer_update[address]=auto present in every session");
+  } else {
+    fail(`tax params missing: automatic_tax[enabled]=${p.get("automatic_tax[enabled]")} customer_update[address]=${p.get("customer_update[address]")}`);
+  }
 }
 
 console.log();
