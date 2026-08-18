@@ -247,8 +247,18 @@ name       = "USAGE"
 class_name = "UsageCounter"
 
 [[env.production.migrations]]
-tag             = "v1"
-new_sqlite_classes = ["UsageCounter"]
+# `new_classes`, NOT `new_sqlite_classes` — load-bearing, do not "modernise".
+# Tag v1 was APPLIED to the live script as a regular class; a migration tag's
+# contents are history, not intent, and the config must describe what actually
+# ran. A commit that rewrote this line in place to new_sqlite_classes broke
+# every "Workers Builds: algosize" deploy from that commit forward (the build
+# validates the chain against the script's real migration history and refuses
+# the rewrite), while GitHub Actions' `wrangler deploy --env production` kept
+# passing — remote tag == config tag means it sends no migrations at all, so
+# it never notices the lie. Moving UsageCounter to SQLite-backed storage needs
+# a NEW tag with a rename/transfer, not an edit to v1.
+tag         = "v1"
+new_classes = ["UsageCounter"]
 
 # Scheduled monitoring — see the [triggers]/[[queues]] block near the top for
 # why this is split into a cron + a queue, and for the provisioning steps.
@@ -334,8 +344,18 @@ name       = "USAGE"
 class_name = "UsageCounter"
 
 [[env.staging.migrations]]
-tag             = "v1"
-new_sqlite_classes = ["UsageCounter"]
+# `new_classes`, NOT `new_sqlite_classes` — load-bearing, do not "modernise".
+# Tag v1 was APPLIED to the live script as a regular class; a migration tag's
+# contents are history, not intent, and the config must describe what actually
+# ran. A commit that rewrote this line in place to new_sqlite_classes broke
+# every "Workers Builds: algosize" deploy from that commit forward (the build
+# validates the chain against the script's real migration history and refuses
+# the rewrite), while GitHub Actions' `wrangler deploy --env production` kept
+# passing — remote tag == config tag means it sends no migrations at all, so
+# it never notices the lie. Moving UsageCounter to SQLite-backed storage needs
+# a NEW tag with a rename/transfer, not an edit to v1.
+tag         = "v1"
+new_classes = ["UsageCounter"]
 
 # Staging monitors run on their own queue so a staging sweep can never send
 # mail about a production org's repositories. Same 03:00 UTC cadence.
