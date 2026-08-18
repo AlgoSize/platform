@@ -1439,6 +1439,87 @@ can land risky changes here first.
 
 ---
 
+## 8. Verify the deployment (run this last)
+
+Everything above provisions something. This step checks that the
+provisioning actually took, against the live deployment, over HTTPS —
+no Cloudflare dashboard access required.
+
+```bash
+cd worker
+SITE_ORIGIN=https://algosize.com \
+ADMIN_SESSION_COOKIE='<paste the algosize_session cookie value>' \
+  npm run verify:production
+```
+
+Exit code is `0` when nothing failed, `1` otherwise, so this is safe to
+gate a release on.
+
+### 8.1 Getting the admin session cookie
+
+The script's most valuable checks need an authenticated admin session.
+"Admin" here means an email listed in the `ADMIN_EMAILS` var (§3) —
+being signed in is not enough.
+
+1. Sign in to <https://algosize.com/dashboard/> with an admin email.
+2. Open devtools → Application → Cookies → `https://algosize.com`.
+3. Copy the **value** of the `algosize_session` cookie.
+
+Either the bare token or the full `algosize_session=<token>` pair works.
+The cookie is a live session — treat it like a password, and don't paste
+it into a shared terminal history or a CI log.
+
+Without it the run still works, but the schema and authenticated-read
+checks are **skipped**. The summary distinguishes skipped from passed for
+exactly this reason: a skip is not evidence of health.
+
+### 8.2 What it checks, and what each check proves
+
+| Group | Requests | Proves |
+|---|---|---|
+| Schema | `GET /api/admin/schema-check` | Every migration `0001`–`0008` is applied, checked per table **and per column**. The authoritative migration check. |
+| Routes deployed | `GET /api/me`, `/api/org`, `/api/monitors`, `/api/keys`, `/api/ci/snippet` with **no** cookie | Each route is registered and reachable in the deployed bundle. A `404` means the deploy predates the route; a `500` means the Worker throws before auth; a `200` means the endpoint is not gated at all. |
+| Handlers reach D1 | The same endpoints **with** the admin session | The handlers run and their tables exist. This is the group where a `500` really does mean a missing table. |
+| Billing | `POST /api/checkout {plan:"solo"}` | The Solo tier price resolves and Stripe accepts it. |
+
+> **The unauthenticated group does not test the database.** `requireAuth`
+> returns `401` before any handler runs, so a database missing every
+> table still passes it cleanly. That group verifies routing; the schema
+> and authenticated groups verify data. This is why the admin cookie is
+> worth providing.
+
+Two results are reported as **skipped rather than failed**, because in
+both cases the deployment is behaving correctly:
+
+- **`503 plan_not_available`** on checkout — `STRIPE_PRICE_SOLO_MONTHLY`
+  is not set. The endpoint refusing to fall back to some other price is
+  the intended behaviour (§3); a buyer must never be charged an amount
+  they didn't click. Set the secret if you meant to sell that tier.
+- **No admin cookie** — see §8.1.
+
+`POST /api/checkout` creates a **real Stripe Checkout Session** when a
+price is configured. Nothing is charged and unused sessions expire on
+their own, but they do appear in the Stripe dashboard, and the endpoint
+is rate-limited to 10/min — a `429` is reported as a skip, so just rerun
+in a minute.
+
+### 8.3 When a check fails
+
+| Failure | Fix |
+|---|---|
+| `migrations applied — pending: 0007, 0008` | Apply them: `wrangler d1 execute algosize --env production --remote --file=migrations/<file>.sql`. The script prints the exact missing table/column under each pending migration. |
+| `404 — route not registered` | The deployed bundle is older than the code. Redeploy (§2.6). |
+| `HTTP 500 — likely a missing table` | A migration for that handler's table is missing. The script names which one. |
+| `401 — session cookie rejected` | The session expired or was revoked. Sign in again and re-copy it. |
+| `403 — email is not in ADMIN_EMAILS` | The cookie is valid but the account isn't an admin on this deployment. Add the email to `ADMIN_EMAILS` (§3) and redeploy. |
+| `200 without credentials` | An authentication hole — an endpoint behind `requireAuth` answered anonymously. Stop and investigate before announcing the deploy. |
+
+Run it against staging too, with `SITE_ORIGIN` pointing at the staging
+hostname (§7). Staging having the same schema as production is the whole
+point of having a staging environment.
+
+---
+
 ## Appendix A — secret/binding reference
 
 For grep'ability, here is the exhaustive list the operator must
