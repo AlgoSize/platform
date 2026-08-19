@@ -1,0 +1,137 @@
+We need a ONE-TIME, READ-FIRST Cloudflare diagnosis for the algosize Worker.
+
+This is not a product feature. Do not add an API route, UI, cron job, scheduled
+monitor, deployment workflow, Wrangler configuration, or permanent script unless
+explicitly requested later.
+
+Objective
+---------
+Find out whether a Cloudflare Workers Builds Git trigger is attached to the
+`algosize` Worker and is deploying the wrong bundle on every Git push.
+
+The suspected trigger may be causing deployments that overwrite the Worker’s
+runtime configuration or secrets. Do not assume this is true; first inspect the
+trigger and report evidence.
+
+Available Replit Secrets
+------------------------
+Use these only through environment variables:
+
+- CLOUDFLARE_API_TOKEN
+- CLOUDFLARE_ACCOUNT_ID
+
+Never print either value. Never print the Authorization header. Never echo all
+environment variables. Never write either secret to a file, Git commit, artifact,
+log, exception, or response.
+
+Pre-flight
+----------
+Before making any request:
+1. Confirm that both environment variables are present without printing their
+   values. Report only `present` or `missing`.
+2. Confirm that the target Worker name is exactly `algosize`.
+3. Do not run Wrangler.
+4. Do not push or commit anything.
+5. Do not access, list, modify, rotate, or print Worker runtime secrets.
+6. Do not access or modify the account-level Cloudflare/GitHub connection.
+
+Read-only API request
+---------------------
+Make exactly this read-only request using a short-lived in-memory command or
+script:
+
+GET
+https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/builds/workers/algosize/triggers
+
+Headers:
+Authorization: Bearer $CLOUDFLARE_API_TOKEN
+Content-Type: application/json
+
+Do not use shell tracing such as `set -x`.
+Do not print the command after variable expansion.
+Capture the HTTP status and sanitized response body.
+
+Failure handling
+----------------
+If the response is HTTP 403, HTTP 9109, or an authentication/permission error:
+- Stop immediately.
+- Do not retry with another token.
+- Do not widen permissions.
+- Report the exact sanitized Cloudflare response body, excluding any token,
+  Authorization header, secret, or sensitive environment value.
+- Tell the user the token may need the Workers CI Read permission in Cloudflare.
+- Do not attempt deletion.
+
+If the response is successful:
+- Do not delete anything yet.
+- Parse and display one concise record for every returned trigger containing only:
+  - trigger_uuid
+  - repository owner/name
+  - branch
+  - build command
+  - deploy command
+  - path_includes
+  - created_on
+- If a field is absent, show `not returned`.
+- Preserve the full trigger JSON in memory only if needed for analysis. Do not
+  write it to disk or logs.
+- Explain whether the trigger appears to build the correct `worker/` bundle or
+  the wrong `site/` bundle.
+- If there is exactly one trigger and its purpose is uncertain, explicitly say
+  that it must not be deleted without user confirmation.
+
+Mandatory confirmation gate
+---------------------------
+After the read-only listing, STOP and ask the user:
+
+"Which trigger_uuid should be deleted? I will delete only the UUID you explicitly
+confirm."
+
+Do not infer the target from branch name, repository name, or the fact that only
+one trigger exists.
+
+Deletion, only after explicit confirmation
+------------------------------------------
+After the user explicitly confirms one exact trigger_uuid, verify that:
+- It is one of the UUIDs returned by the immediately preceding read-only listing.
+- The target is a per-Worker Workers Builds trigger.
+- The target is not an account-level GitHub connection.
+- The UUID has not changed.
+
+Then ask for confirmation one more time if the target or command has changed.
+
+Only after confirmation, send:
+
+DELETE
+https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/builds/triggers/{confirmed_trigger_uuid}
+
+Header:
+Authorization: Bearer $CLOUDFLARE_API_TOKEN
+
+Do not include secrets in output.
+
+Post-deletion verification
+--------------------------
+After deletion:
+1. Report only the HTTP status and sanitized response.
+2. Repeat the original GET request.
+3. Confirm whether the specific UUID is gone.
+4. Do not modify anything else.
+5. Do not run Wrangler or deploy a replacement bundle.
+
+Cleanup
+-------
+Do not create a permanent file. If a temporary script is required, delete it after
+the operation and confirm that it was not committed. Never store Cloudflare
+tokens, trigger responses, or Worker secrets in the repository.
+
+Final report
+------------
+Report:
+- whether both required Replit secrets were present
+- read-only HTTP status
+- returned trigger summaries
+- whether a trigger was deleted
+- deletion HTTP status, if applicable
+- post-deletion trigger status
+- any remaining uncertainty
