@@ -249,6 +249,109 @@ permalink: /dashboard/
         </div>
       </section>
 
+      <!-- ================= INFRASTRUCTURE COST ESTIMATOR ================= -->
+      <!-- Upload-triggered or manually entered ONLY. There is deliberately no
+           "connect your cloud account" affordance anywhere in this panel: the
+           product never asks for, stores, or uses a customer's cloud account key,
+           and the security note below says so in the user's own words rather
+           than burying it in a policy page. -->
+      <section class="panel" id="panel-estimate">
+        <header class="panel-head">
+          <div class="panel-heading">
+            <span class="panel-tag">Cost est.</span>
+            <h2>Infrastructure Cost Estimator</h2>
+            <p class="panel-desc">Price a Kubernetes manifest, a Compose file, a Terraform plan, or a hand-entered stack across providers — before you deploy it. Every number is an estimate from published list prices, and every range names the assumption behind it.</p>
+          </div>
+          <div class="panel-actions">
+            <button type="button" class="btn btn-ghost btn-sm" id="est-sample-btn">Load sample</button>
+            <button type="button" class="btn btn-primary btn-sm" id="est-run-btn">Estimate →</button>
+          </div>
+        </header>
+        <div class="panel-body">
+
+          <!-- Required security note. Verbatim, above the input, so it is read
+               before anything is uploaded rather than after. -->
+          <p class="est-privacy" id="est-privacy-note">
+            <span class="est-privacy-mark" aria-hidden="true">🔒</span>
+            We estimate from the configuration you provide. We do not connect to or access your cloud account.
+          </p>
+
+          <label class="panel-input-label" for="est-input-type">Input · what are you pricing?</label>
+          <div class="est-controls">
+            <select id="est-input-type" class="panel-input est-select">
+              <option value="kubernetes">Kubernetes manifest (YAML)</option>
+              <option value="compose">Docker Compose file</option>
+              <option value="terraform-plan">Terraform plan (JSON)</option>
+              <option value="manual">Enter resources manually</option>
+            </select>
+            <select id="est-duration" class="panel-input est-select" aria-label="Period to price">
+              <option value="1:month" selected>Per month</option>
+              <option value="1:day">Per day</option>
+              <option value="1:hour">Per hour</option>
+            </select>
+            <select id="est-basis" class="panel-input est-select" aria-label="Capacity basis">
+              <option value="requests" selected>Use requests / reservations</option>
+              <option value="limits">Use limits</option>
+            </select>
+          </div>
+
+          <!-- File / paste input, for the three document types. -->
+          <div id="est-doc-input">
+            <div class="file-picker">
+              <input type="file" id="est-file" hidden
+                     accept=".yaml,.yml,.json,.tf,.txt,text/yaml,application/json,text/plain">
+              <button type="button" class="btn btn-ghost" id="est-file-btn">Choose file…</button>
+              <span class="file-picker-name mono" id="est-file-name">No file selected.</span>
+            </div>
+            <label class="panel-input-label" for="est-paste">…or paste it</label>
+            <textarea id="est-paste" class="panel-input mono est-textarea" rows="8"
+              placeholder="Paste your manifest, Compose file, or `terraform show -json plan.out` output here."></textarea>
+            <p class="panel-input-help">
+              Terraform must be the JSON plan (<code>terraform show -json</code>), not raw
+              <code>.tf</code> — HCL needs full evaluation to resolve variables, and guessing
+              at unresolved values would produce a confident wrong number.
+              Files are processed in memory and are not stored.
+            </p>
+          </div>
+
+          <!-- Manual entry, shown only for inputType=manual. -->
+          <div id="est-manual-input" hidden>
+            <div class="est-table-wrap">
+              <table class="est-table" id="est-manual-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Name</th>
+                    <th scope="col">Type</th>
+                    <th scope="col">vCPU</th>
+                    <th scope="col">Memory (GiB)</th>
+                    <th scope="col">Storage (GiB)</th>
+                    <th scope="col">Egress (GiB)</th>
+                    <th scope="col">Count</th>
+                    <th scope="col"><span class="sr-only">Remove</span></th>
+                  </tr>
+                </thead>
+                <tbody id="est-manual-rows"></tbody>
+              </table>
+            </div>
+            <button type="button" class="btn btn-ghost btn-sm" id="est-add-row">+ Add resource</button>
+            <p class="panel-input-help">
+              Numbers are read in the unit each column names — <strong>4</strong> under
+              Memory (GiB) means 4 GiB. Suffixed values like <code>512Mi</code> also work.
+            </p>
+          </div>
+
+          <label class="panel-input-label" for="est-providers">Providers to compare</label>
+          <div class="est-providers" id="est-providers">
+            <span class="panel-empty">Loading providers…</span>
+          </div>
+
+          <label class="panel-input-label" for="output-estimate">Estimate</label>
+          <div id="output-estimate" class="panel-output">
+            <div class="panel-empty">Choose a file (or click <em>Load sample</em>) and run an estimate.</div>
+          </div>
+        </div>
+      </section>
+
     </div><!-- /view-workspace -->
 
     <!-- ================= MONITORS & CI (D-3) ================= -->
@@ -623,4 +726,5 @@ permalink: /dashboard/
 <script src="{{ '/assets/js/dash-monitors.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-report.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-arch.js' | relative_url }}" defer></script>
+<script src="{{ '/assets/js/dash-estimate.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-router.js' | relative_url }}" defer></script>

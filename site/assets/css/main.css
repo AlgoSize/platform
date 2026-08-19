@@ -2630,3 +2630,245 @@ input.panel-input {
   height: 44px;
   resize: none;
 }
+
+/* ==========================================================================
+   Infrastructure Cost Estimator (panel-estimate)
+   ==========================================================================
+   Two things carry real weight here and are styled to be unmissable rather
+   than tasteful: the privacy note (we never touch the customer's cloud
+   account, and they should read that before uploading) and the unsupported-
+   resource block (a resource we could not price must never be mistaken for a
+   free one). Everything else stays quiet so those two read loudest. */
+
+.est-privacy {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 18px;
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-radius: 6px;
+}
+.est-privacy-mark { flex: none; }
+.est-privacy-foot { margin: 18px 0 0; }
+
+.est-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.est-select { flex: 1 1 190px; min-width: 0; }
+
+.est-textarea {
+  width: 100%;
+  min-height: 150px;
+  height: auto;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+/* ---- provider picker ---------------------------------------------------- */
+.est-providers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.est-provider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  cursor: pointer;
+}
+.est-provider:hover { border-color: var(--border-soft); }
+.est-provider-body { display: flex; flex-direction: column; gap: 1px; }
+.est-provider-name { font-size: 13px; color: var(--text); }
+.est-provider-sub { font-size: 11px; color: var(--text-dim); }
+.est-provider-flag {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--accent-warm);
+}
+
+/* ---- tables ------------------------------------------------------------- */
+.est-table-wrap { overflow-x: auto; margin: 12px 0; }
+.est-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.est-table th,
+.est-table td {
+  padding: 7px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-soft);
+  white-space: nowrap;
+}
+.est-table th {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+/* Digits that stack in columns line up. */
+.est-table .mono,
+.est-total,
+.est-total-figure,
+.est-total-range { font-variant-numeric: tabular-nums; }
+.est-compare .est-total { font-size: 15px; color: var(--text); }
+/* An allocated line is priced at zero on purpose — the plan is the billed
+   figure. Dimming it keeps it visible as context without reading as a charge. */
+.est-line-allocated td { color: var(--text-dim); }
+.est-cell { min-width: 90px; }
+.est-row-del { padding: 2px 9px; line-height: 1.2; }
+
+/* ---- result header ------------------------------------------------------ */
+.est-result-head { margin-bottom: 16px; }
+.est-disclaimer {
+  margin: 0 0 6px;
+  padding: 9px 13px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent-warm) 9%, transparent);
+  border-left: 3px solid var(--accent-warm);
+  border-radius: 0 4px 4px 0;
+}
+.est-meta { margin: 0; font-size: 11px; color: var(--text-dim); }
+.est-meta-note { color: var(--accent-warm); }
+
+/* ---- provider card ------------------------------------------------------ */
+.est-card {
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+}
+.est-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.est-card-title { margin: 0; font-size: 15px; }
+.est-card-sub { margin: 2px 0 0; font-size: 11px; color: var(--text-dim); }
+.est-card-total { text-align: right; }
+.est-total-figure { font-size: 21px; color: var(--text); }
+.est-total-range { font-size: 12px; color: var(--text-muted); }
+
+.est-conf {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 2px 8px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+/* Colour is the second channel; the word is the first, so the badge still
+   reads correctly in grayscale or with any colour-vision deficiency. */
+.est-conf-high   { color: var(--accent-2);    border-color: color-mix(in srgb, var(--accent-2) 40%, transparent); }
+.est-conf-medium { color: var(--accent-warm); border-color: color-mix(in srgb, var(--accent-warm) 40%, transparent); }
+.est-conf-low    { color: #fb7185;            border-color: color-mix(in srgb, #fb7185 40%, transparent); }
+
+/* ---- unsupported: the block that must not read as "free" ---------------- */
+.est-unsupported {
+  margin: 10px 0;
+  padding: 11px 14px;
+  border-left: 3px solid #fb7185;
+  border-radius: 0 4px 4px 0;
+  background: color-mix(in srgb, #fb7185 8%, transparent);
+  font-size: 13px;
+}
+.est-unsupported-note { margin: 4px 0 6px; color: var(--text-muted); }
+.est-unsupported ul { margin: 0; padding-left: 18px; }
+.est-unsupported li { margin: 2px 0; }
+
+/* ---- assumptions -------------------------------------------------------- */
+.est-assumptions { margin-top: 12px; }
+.est-assumptions h4 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--text-dim);
+}
+.est-assumption-list { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.55; }
+.est-assumption-list li { margin: 4px 0; color: var(--text-muted); }
+.est-cause {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 7px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--text);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+.est-effect { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+
+.est-limitations,
+.est-warnings { margin-top: 12px; font-size: 13px; }
+.est-limitations summary,
+.est-warnings summary { cursor: pointer; color: var(--text-muted); }
+.est-limitations ul,
+.est-warn-list { margin: 8px 0 0; padding-left: 18px; color: var(--text-muted); line-height: 1.55; }
+.est-limitations li,
+.est-warn-list li { margin: 4px 0; }
+
+/* ---- export ------------------------------------------------------------- */
+.est-exports {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-soft);
+}
+.est-exports-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--text-dim);
+  margin-right: 4px;
+}
+.est-exports-note {
+  flex: 1 0 100%;
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.est-error {
+  padding: 12px 14px;
+  border-left: 3px solid #fb7185;
+  border-radius: 0 4px 4px 0;
+  background: color-mix(in srgb, #fb7185 8%, transparent);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.est-error p { margin: 5px 0 0; color: var(--text-muted); }
+.est-error-hint { color: var(--text-muted); }
+
+@media (max-width: 640px) {
+  .est-card-head { flex-direction: column; }
+  .est-card-total { text-align: left; }
+}
