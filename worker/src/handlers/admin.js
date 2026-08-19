@@ -26,7 +26,10 @@ function parseAdminEmails(env) {
   return raw.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
 }
 
-function isAdmin(env, email) {
+// Exported so /api/me can expose `isAdmin` to the dashboard without
+// re-deriving the allowlist check — one definition of "is this email an
+// admin", same as everything else in this file that reads ADMIN_EMAILS.
+export function isAdmin(env, email) {
   if (!email) return false;
   return parseAdminEmails(env).includes(email.toLowerCase());
 }
