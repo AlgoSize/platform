@@ -1,0 +1,104 @@
+name: Build and deploy site Worker
+
+# Deploys the marketing site to Cloudflare as a static-asset Worker
+# (algosize-site — see wrangler.jsonc at the repo root) on every push to main
+# that touches the site or its config. Same push-to-deploy shape as
+# worker.yml, reusing the same two repo secrets.
+#
+# This replaces jekyll.yml as the thing that puts the site somewhere real.
+# jekyll.yml is retired once the Cloudflare Workers Route + DNS cutover in
+# DEPLOY.md §9 is confirmed working — see that section for the staged
+# rollout and rollback plan. Until the cutover, this workflow only ever
+# publishes to algosize-site's workers.dev URL; algosize.com keeps being
+# served by GitHub Pages until a human flips the Route.
+#
+# This does NOT stop Cloudflare's own "Workers Builds" git integration,
+# which is a separate, still-connected trigger — see the long comment at
+# the top of wrangler.jsonc for what it does wrong (it deploys onto the API
+# Worker's service, not this one) and why it needs deleting in the
+# dashboard, a step this workflow cannot perform.
+#
+# Required GitHub repo secrets: the same CLOUDFLARE_API_TOKEN and
+# CLOUDFLARE_ACCOUNT_ID that worker.yml uses — see that file's header for how
+# to create them. No new secret is needed here.
+#
+# Ruby is pinned explicitly (ruby-version below), not auto-detected the way
+# Cloudflare's own "Workers Builds" image did. That auto-detection is what
+# broke this exact build when it silently picked up Ruby 3.4, which moved
+# `csv` and `base64` out of default gems — see the Gemfile comment and the
+# git history on wrangler.jsonc for the full story. Pinning here means a
+# future Ruby release can't do that again without this workflow's Ruby
+# version changing first, on purpose, in a diff someone reviews.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "wrangler.jsonc"
+      - ".github/workflows/site-worker.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: site-worker-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy site Worker to Cloudflare
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify Cloudflare credentials are set
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID must both be set as GitHub repo secrets. See .github/workflows/worker.yml header for instructions."
+            exit 1
+          fi
+
+      # Same Ruby version as jekyll.yml, so the two pipelines cannot drift
+      # apart while both exist. bundler-cache speeds up wrangler's own
+      # `bundle install` inside its build.command hook below — the gems are
+      # already resolved and cached by the time that hook runs.
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.2"
+          bundler-cache: true
+          working-directory: site
+
+      # wrangler is a devDependency under worker/, not installed at the repo
+      # root — same reasoning worker.yml documents for worker-sandbox: invoke
+      # the binary directly rather than `npx wrangler`, which would fetch
+      # whatever the latest major is on every run. The Cloudflare Workers
+      # Builds image did exactly that (npx wrangler@4.124.0, unpinned) — this
+      # installs the exact 3.x version worker/package-lock.json pins instead,
+      # the same one every local test in this repo's history has run against.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: worker/package-lock.json
+
+      - name: Install wrangler
+        working-directory: worker
+        run: npm ci
+
+      # `wrangler deploy`, not `versions upload` — this workflow's whole job
+      # is to actually go live, unlike the deleted Cloudflare Workers Builds
+      # trigger, which only ever uploaded inert versions. Runs from the repo
+      # root so wrangler picks up ./wrangler.jsonc; its `build.command` hook
+      # (cwd: site) runs Jekyll before `assets.directory` is read.
+      #
+      # This deploys algosize-site's CURRENT version and its workers.dev URL
+      # goes live immediately — but nothing routes algosize.com traffic here
+      # until the Workers Route in DEPLOY.md §9 exists, so this step alone
+      # has no effect on what algosize.com serves.
+      - name: Deploy algosize-site
+        run: worker/node_modules/.bin/wrangler deploy --config wrangler.jsonc

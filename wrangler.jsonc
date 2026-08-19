@@ -1,16 +1,44 @@
 {
-  // Static-asset Worker for the built Jekyll site, deployed by Cloudflare
-  // Workers Builds from the "Deploy non-production branches" trigger. Its
-  // job is per-branch previews: the trigger's deploy command is
-  // `npx wrangler versions upload`, which uploads a VERSION without routing
-  // traffic to it. Production traffic is unaffected by anything here.
+  // Static-asset Worker for the built Jekyll site. Deployed by
+  // .github/workflows/site-worker.yml on every push to main that touches
+  // `site/**` or this file — the same push-to-deploy shape as the API
+  // Worker's `worker.yml`, using the same two repo secrets
+  // (CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID). No new secrets needed.
+  //
+  // This is what algosize.com's non-/api/* traffic is served from — see
+  // DEPLOY.md §9 "Move algosize.com off GitHub Pages" for the full cutover
+  // (Workers Route + DNS + retiring the GitHub Pages deploy).
+  //
+  // It used to ALSO be deployed by Cloudflare's own "Workers Builds" git
+  // integration — past tense for what deploys THIS config; that trigger is
+  // still connected as of this writing and still fires on every push. It
+  // turned out to be bound to the WRONG service: it uploads this site's
+  // build as a version on `algosize`, the API Worker's service, not on
+  // `algosize-site`. Nothing has been routed from it — `versions upload`
+  // never routes traffic — but a version that is a static site sitting on
+  // the API Worker's service is one accidental promotion away from
+  // replacing the live API, and pushes to this repo keep adding more of
+  // them. It needs deleting in the Cloudflare dashboard (Workers & Pages →
+  // algosize → Settings → Build → disconnect the Git integration) — that
+  // is a manual step nothing in this repo can do, and it has NOT been done
+  // yet. Until it is, do not promote any version on the `algosize` service
+  // without first confirming from its content that it is the API, not this
+  // site — `wrangler versions list --name algosize` shows them all.
+  //
+  // The GitHub Actions workflow this file's header describes is a second,
+  // correct deploy path added alongside the still-live bad one, not a
+  // replacement for it yet. It runs `wrangler deploy` (not `versions
+  // upload`) against exactly this config, from a job that only ever
+  // touches the service this file names — so once the dashboard trigger is
+  // gone, this is what keeps `algosize-site` deploying.
   //
   // The service name MUST NOT be `algosize`. That is the API Worker's
-  // service (see worker/wrangler.toml), which GitHub Actions deploys from
-  // `.github/workflows/worker.yml`. With both configs named `algosize`, the
-  // two pipelines deploy different Workers to the same service and the last
-  // one to run wins — so an ordinary site change could silently replace the
-  // live API, and an API deploy could replace the site.
+  // service (see worker/wrangler.toml), deployed by `worker.yml`. With both
+  // configs named `algosize`, the two pipelines would deploy different
+  // Workers to the same service and the last one to run would win — so an
+  // ordinary site change could silently replace the live API, and an API
+  // deploy could replace the site. This is not a hypothetical: it is what
+  // the still-connected Workers Builds trigger is doing right now.
   //
   // Related: wrangler resolves its config by walking UP the directory tree,
   // so this file also shadows worker/wrangler.toml for any wrangler command
@@ -18,37 +46,33 @@
   // therefore passes `--config wrangler.toml` explicitly. See DEPLOY.md §2.0.
   //
   // ---------------------------------------------------------------------
-  // Why the `build` block below exists
+  // The `build` block
   //
-  // This check failed on every commit for weeks. The build log:
-  //
-  //   Executing user deploy command: npx wrangler versions upload
-  //   ✘ [ERROR] The directory specified by the "assets.directory" field in
-  //     your configuration file does not exist:
-  //       /opt/buildhome/repo/_site_build
-  //
-  // `_site_build` is a build artifact, not a committed directory (see
-  // .gitignore). The Cloudflare trigger has an EMPTY build command and goes
-  // straight to the deploy command, so wrangler looked for a directory that
-  // nothing had produced.
-  //
-  // The build command in the dashboard is one fix, but it is invisible from
-  // the repo and silently un-versioned. `build.command` here is wrangler's
-  // own custom-build hook and does the same job in a file that travels with
-  // the code: wrangler runs it BEFORE reading `assets.directory`, so the
-  // directory exists by the time it is needed.
+  // wrangler's own custom-build hook. It runs BEFORE wrangler reads
+  // `assets.directory`, so the directory exists by the time it is needed —
+  // `_site_build` is a gitignored artifact, not a committed one, and nothing
+  // else in CI produces it.
   //
   // It runs even though this Worker has no `main`. An assets-only config
   // resolves its entry point to wrangler's bundled templates/no-op-worker.js
-  // (see resolveEntryWithAssets), and runCustomBuild is called immediately
-  // after that resolution — the entry-point assertion then passes trivially
-  // because the no-op template always exists.
+  // (see resolveEntryWithAssets in the wrangler source), and runCustomBuild
+  // is called immediately after that resolution — the entry-point assertion
+  // then passes trivially because the no-op template always exists.
   //
   // The command mirrors .github/workflows/jekyll.yml exactly — same config
-  // pair, same JEKYLL_ENV — so a preview renders what GitHub Pages serves
-  // rather than a subtly different build. `cwd` is relative to the repo root,
-  // which is the trigger's root directory.
-  "$schema": "node_modules/wrangler/config-schema.json",
+  // pair, same JEKYLL_ENV — so what deploys here is identical to what the
+  // GitHub Pages build produces (Pages is still live; see `routes` below
+  // and DEPLOY.md §9 for the plan to retire it). `cwd` is relative to the
+  // repo root, which is where `wrangler deploy` is invoked from.
+  //
+  // The Ruby version this runs under is whatever site-worker.yml pins via
+  // ruby/setup-ruby — deliberately NOT auto-detected the way Cloudflare's
+  // build image did. Ruby 3.4 quietly moved `csv` and `base64` out of
+  // default gems into bundled ones, and this exact build broke on it with
+  // "cannot load such file -- csv" before site/Gemfile declared them
+  // explicitly. Pinning the Ruby version in CI is what stops that class of
+  // bug from recurring on some future Ruby release we haven't tested against.
+  "$schema": "worker/node_modules/wrangler/config-schema.json",
   "name": "algosize-site",
   "compatibility_date": "2026-05-11",
   "observability": {
@@ -59,8 +83,43 @@
     "command": "bundle install && JEKYLL_ENV=production bundle exec jekyll build --config _config.yml,_config.production.yml --destination ../_site_build"
   },
   "assets": {
-    "directory": "_site_build"
+    "directory": "_site_build",
+    // Jekyll's default permalinks are directory-style — a post at
+    // /blog/foo/ builds to blog/foo/index.html on disk. "auto-trailing-slash"
+    // is what makes a request for /blog/foo (no slash) or /blog/foo/ both
+    // resolve to that file, matching how GitHub Pages served the same build.
+    "html_handling": "auto-trailing-slash",
+    // site/404.html renders the real page for anything unmatched, instead of
+    // an empty 404 response with no body.
+    "not_found_handling": "404-page"
   },
+  // A Cloudflare Workers Route, applied on every `wrangler deploy` — the
+  // same mechanism worker/wrangler.toml already uses for
+  // `algosize.com/api/*` (see DEPLOY.md §4.2). No dashboard click: this
+  // config, reviewed in a diff, IS the route.
+  //
+  // Deliberately staging ONLY. `staging.algosize.com/api/*` already routes
+  // to the staging API Worker (worker/wrangler.toml [env.staging]) — more
+  // specific patterns win, so that keeps working unchanged; everything else
+  // on that hostname now comes from this Worker instead of falling through
+  // to GitHub Pages. This is DEPLOY.md §9.2, the full-flow rehearsal: it
+  // costs nothing (zero production traffic) and is safe to ship any time.
+  //
+  // Adding a THIRD entry here for `algosize.com/*` is §9.3 — the actual
+  // production cutover. Deliberately not in this diff: that entry is meant
+  // to land in its own reviewed commit, after the staging rehearsal above
+  // has been exercised, not as a side effect of an unrelated site change
+  // landing on main. See DEPLOY.md §9.3 before adding it.
+  "routes": [
+    { "pattern": "staging.algosize.com/*", "zone_name": "algosize.com" }
+  ],
+  // Explicit rather than relying on the default. Wrangler's default is
+  // `workers_dev = routes.length === 0` — true when routes is empty, false
+  // the moment a route is added. Without this, adding the staging route
+  // above would silently kill the workers.dev preview URL that DEPLOY.md
+  // §9.1 uses to confirm the Worker deploys and serves correctly on its own,
+  // independent of any route.
+  "workers_dev": true,
   "compatibility_flags": [
     "nodejs_compat"
   ]

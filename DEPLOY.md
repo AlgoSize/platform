@@ -140,6 +140,10 @@ curl -I https://algosize.com
 # expect HTTP/2 200 served by GitHub.com
 ```
 
+> Prefer serving the site from Cloudflare Workers instead of GitHub Pages —
+> one hosting provider instead of two? See §9, once §2–§4 have the Worker
+> and DNS in place.
+
 ---
 
 ## 2. Worker → `wrangler deploy`
@@ -1696,6 +1700,176 @@ URLs carry `/test/`). A 500 with `error: "stripe_unreachable"` means the key
 itself is wrong, revoked, or a restricted key without read access to billing
 settings — a broken deployment rather than a failed check, the same distinction
 §8.2's schema group draws.
+
+---
+
+## 9. Move algosize.com off GitHub Pages onto the site Worker
+
+Everything in §1 still works — this section is optional, and nothing here
+is required for the product to function. It exists because running the site
+on GitHub Pages and the API on Cloudflare Workers means two hosting
+providers, two deploy pipelines, and (as of the admin-panel PR) a real
+incident where a third, half-configured pipeline — Cloudflare's own
+"Workers Builds" git integration — uploaded a static-site build as a
+*version* on the API Worker's service. Nothing was ever routed from it, but
+it was one accidental promotion away from replacing the live API with the
+marketing site. That trigger has been deleted. This section replaces it
+with something safer: a GitHub Actions workflow that deploys the site the
+same way `worker.yml` deploys the API, and a plan for actually serving
+`algosize.com` from it instead of from GitHub Pages.
+
+Do this in order. Each stage is checked before moving to the next, and
+production (§9.3) is not touched until §9.2 has been verified on a hostname
+nobody's customers are looking at.
+
+### 9.1 Confirm the site Worker deploys on its own
+
+`.github/workflows/site-worker.yml` deploys `algosize-site` (root
+`wrangler.jsonc`) on every push to `main` that touches `site/**` or that
+file — same shape as `worker.yml`, same two repo secrets
+(`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`), no new secrets to create.
+
+```bash
+git push origin main      # or push any change under site/**
+```
+
+**Actions → Build and deploy site Worker** should go green. Then:
+
+```bash
+cd worker
+./node_modules/.bin/wrangler deployments list --name algosize-site
+```
+
+confirms a current deployment exists. `algosize-site` has no `routes` in
+`wrangler.jsonc`, so `workers_dev` defaults on
+(`deployToWorkersDev = config.workers_dev ?? routes.length === 0`) and the
+site is already live at its `workers.dev` URL — visible in the deploy job's
+log, or:
+
+```bash
+./node_modules/.bin/wrangler deployments list --name algosize-site --json \
+  | jq -r '.[0].url // empty'
+```
+
+Open it. You should see the same landing page GitHub Pages serves. **The
+dashboard and admin panel will not fully work yet** — their JS calls
+same-origin `/api/*`, and nothing proxies API calls to that `workers.dev`
+host. That's expected at this stage; §9.2 fixes it by testing under a
+hostname that already has an API route.
+
+### 9.2 Prove it end-to-end on `staging.algosize.com` first
+
+`staging.algosize.com/api/*` already routes to the staging Worker (§7).
+The staging catch-all route is **already checked into `wrangler.jsonc`** —
+same mechanism the API Worker's own `algosize.com/api/*` route uses (§4.2):
+a `routes` entry, applied by `wrangler deploy`, no dashboard click. It lets
+you test the full site + API + Stripe-test-mode flow on a hostname with
+zero production traffic, before algosize.com is touched at all. (More
+specific patterns win, so it coexists with the existing
+`staging.algosize.com/api/*` route without conflict — API calls still reach
+the staging Worker.)
+
+It goes live on the next `site-worker.yml` run — i.e. the next push to
+`main` touching `site/**` or `wrangler.jsonc`. If you need it live sooner,
+from the repo root (same invocation `site-worker.yml` uses):
+
+```bash
+worker/node_modules/.bin/wrangler deploy --config wrangler.jsonc
+```
+
+Verify:
+
+```bash
+curl -sI https://staging.algosize.com/ | head -1
+# expect HTTP/2 200, served by the Worker (not GitHub Pages — the Pages
+# custom domain is only algosize.com, so a Pages response here would mean
+# the route didn't take)
+
+curl -sI https://staging.algosize.com/api/me
+# expect the same 401 the staging Worker always returns unauthenticated
+```
+
+Then in a browser: sign in against staging, open `/dashboard/` and `/admin/`
+(with an address in staging's `ADMIN_EMAILS`), click around. Confirm
+requests in dev tools are same-origin (`staging.algosize.com/api/...`, no
+CORS preflights) and that Stripe actions hit test mode. This is the
+rehearsal — anything wrong here is wrong on production too, and costs
+nothing to fix while it's only staging.
+
+Leaving this route in place afterward is fine (it's genuinely useful — it's
+what makes staging's site match what's about to go on production) or remove
+it once you've moved on; either is safe.
+
+### 9.3 Cut production over
+
+Once §9.2 is confirmed working: add a THIRD `routes` entry to the root
+`wrangler.jsonc`, alongside the staging one —
+
+```jsonc
+"routes": [
+  { "pattern": "staging.algosize.com/*", "zone_name": "algosize.com" },
+  { "pattern": "algosize.com/*", "zone_name": "algosize.com" }
+],
+```
+
+— as its own commit, on its own, reviewed as the deliberate "go live" change
+it is. (`test-wrangler-config.mjs` asserts this entry is absent until you
+add it, specifically so it can't land as a side effect of an unrelated site
+change.) Push to `main`; `site-worker.yml` deploys it.
+
+The moment this route exists, Cloudflare stops falling through to the
+proxied GitHub Pages origin for anything that isn't `/api/*` — routed
+requests are handled entirely at the edge and never reach origin, so this
+takes effect on that push, without a DNS change. `algosize.com/api/*`
+continues to win over the new catch-all for its own requests, same
+specificity rule as staging.
+
+Verify immediately:
+
+```bash
+curl -sI https://algosize.com/ | head -1
+curl -s https://algosize.com/ | grep -o '<title>[^<]*' | head -1
+curl -sI https://algosize.com/api/me      # unauthenticated — expect 401
+curl -sI https://algosize.com/dashboard/
+curl -sI https://algosize.com/nonexistent-page   # expect 404, real 404.html body
+```
+
+Then check the product actually works from a browser: sign in, dashboard,
+`/admin/`. Nothing about auth, sessions, or cookies changes in this cutover
+— same hostname, same-origin API calls exactly as before — so a working
+staging rehearsal in §9.2 is a strong signal this will be uneventful.
+
+**Rollback, if anything looks wrong:** revert the commit that added the
+`algosize.com/*` entry (or delete that one line) and push — the reverse of
+how it went live. Fastest path if you don't want to wait for a full CI run:
+`worker/node_modules/.bin/wrangler deploy --config wrangler.jsonc` from the
+repo root, same as §9.2's manual command, run against the reverted config.
+GitHub Pages has been serving unmodified the entire time — nothing in
+§9.1–9.3 touches it — so removing the route is a complete revert either way,
+just gated on how fast you can get the reverted config deployed.
+
+### 9.4 Retire GitHub Pages
+
+Only after §9.3 has been live and quiet for a while. Skipping straight here
+from §9.3 removes your rollback path.
+
+1. Repo → **Settings → Pages** → change **Source** away from "GitHub
+   Actions" (or delete the custom domain) to stop Pages serving anything.
+2. Delete or disable `.github/workflows/jekyll.yml` — nothing depends on
+   it once Pages is off. (Leaving it enabled but pointed at a disabled Pages
+   site is harmless, just a wasted Actions run per push, if you'd rather
+   retire it in a separate diff someone reviews.)
+3. Remove the root `CNAME` and `site/CNAME` files — both exist only for
+   GitHub Pages' domain verification.
+4. Optional DNS hygiene: the apex A/AAAA records from §1.4 point at GitHub
+   Pages' IPs, but Workers Routes intercept before origin is ever consulted,
+   so they're now inert rather than wrong. Cloudflare's own guidance for a
+   domain fully served by Workers is a placeholder record, still proxied —
+   e.g. `@  A  192.0.2.1` (TEST-NET-1; never a real destination, harmless
+   as a proxied placeholder) — in place of the four GitHub Pages IPs. Not
+   required; the site works either way once the Route exists.
+5. §4.4's SPF/DKIM/DMARC records are for Workspace mail and are unrelated
+   to any of this — leave them as they are.
 
 ---
 

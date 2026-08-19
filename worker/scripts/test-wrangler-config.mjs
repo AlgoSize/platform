@@ -19,7 +19,7 @@
 //
 // Run with:  node scripts/test-wrangler-config.mjs
 
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -150,8 +150,50 @@ console.log("\nthe root wrangler.jsonc can actually build what it deploys\n");
     `the site Worker is not named "algosize" (got "${site.name}") — sharing the API Worker's ` +
     "service name would let a site deploy replace the live API");
 
+  // The $schema path is read by editors, not by wrangler, so a broken one
+  // fails silently — this repo shipped one for a while (it pointed at a
+  // root node_modules that has never existed; the real one is vendored
+  // under worker/).
+  const schemaPath = site.$schema;
+  expect(Boolean(schemaPath) && existsSync(join(__dirname, "..", "..", schemaPath)),
+    `$schema points at a file that actually exists ("${schemaPath}")`);
+
   const dir = site.assets && site.assets.directory;
   expect(Boolean(dir), "it declares an assets directory");
+
+  // A request wrangler cannot match falls through to whatever
+  // not_found_handling names. Left unset it is an empty 404 with no body —
+  // site/404.html exists specifically so visitors get the real page instead.
+  expect(site.assets && site.assets.not_found_handling === "404-page",
+    "assets.not_found_handling is \"404-page\"");
+  expect(existsSync(join(__dirname, "..", "..", "site", "404.html")),
+    "and site/404.html — the page that setting points at — exists");
+
+  // Jekyll's permalinks are directory-style (a post at /blog/foo/ builds to
+  // blog/foo/index.html on disk); without this a request for /blog/foo with
+  // no trailing slash 404s even though the page exists.
+  expect(site.assets && site.assets.html_handling === "auto-trailing-slash",
+    "assets.html_handling is \"auto-trailing-slash\", matching Jekyll's directory-style permalinks");
+
+  // The staged-cutover guard rail. DEPLOY.md §9 is only a safe plan if the
+  // production route lands in its own reviewed commit, deliberately, after
+  // the staging rehearsal — not as a side effect of an unrelated site change
+  // landing on main. This is the test that would catch that happening by
+  // accident: a production route showing up here fails loudly instead of
+  // silently going live on the next push to main.
+  const routes = (site.routes || []).map((r) => r.pattern);
+  expect(routes.includes("staging.algosize.com/*"),
+    "the staging route (DEPLOY.md §9.2) is present — zero production traffic, safe to ship any time");
+  expect(!routes.some((p) => /^algosize\.com\/\*?$/.test(p)),
+    "the production route (DEPLOY.md §9.3) is NOT present yet — that entry is a deliberate, " +
+    "separate, later commit, not something that should ride along with an unrelated change");
+
+  // routes.length === 0 is what makes workers_dev default true; the moment
+  // routes is non-empty that default flips, and without this key the
+  // workers.dev URL DEPLOY.md §9.1 relies on would silently go dark.
+  expect(site.workers_dev === true,
+    "workers_dev is explicitly true, so adding routes above didn't silently disable the " +
+    "workers.dev preview URL §9.1 depends on");
 
   const cmd = site.build && site.build.command;
   expect(Boolean(cmd),
@@ -188,14 +230,31 @@ console.log("\nthe root wrangler.jsonc can actually build what it deploys\n");
       "default gem on Ruby >= 3.4, which is what the Cloudflare build image runs");
   }
 
-  // A preview that renders differently from what GitHub Pages serves is worse
-  // than no preview: it invites decisions about a build nobody ships.
+  // A build that renders differently from what jekyll.yml produces is worse
+  // than no site: it invites decisions about a build nobody actually shipped.
+  // (jekyll.yml is still live — GitHub Pages retires in DEPLOY.md §9.4, not
+  // yet — so this is two ACTIVE pipelines that have to keep agreeing.)
   const workflow = readFileSync(
     join(__dirname, "..", "..", ".github", "workflows", "jekyll.yml"), "utf8");
   for (const flag of ["_config.yml,_config.production.yml", "JEKYLL_ENV"]) {
     expect(cmd.includes(flag) && workflow.includes(flag),
-      `the preview build and the Pages build agree on ${flag}`);
+      `the site Worker build and the still-live Pages build agree on ${flag}`);
   }
+
+  // site-worker.yml is what actually deploys this config now — the
+  // assertions above are inert if nothing in CI ever runs `wrangler deploy`
+  // against this file.
+  const deploy = readFileSync(
+    join(__dirname, "..", "..", ".github", "workflows", "site-worker.yml"), "utf8");
+  expect(deploy.includes("wrangler deploy") && deploy.includes("wrangler.jsonc"),
+    "site-worker.yml deploys (not just builds) this config");
+  // The comments legitimately mention `npx wrangler` (that is what the old
+  // Cloudflare image ran), so this checks the run: lines, not the whole file.
+  const runLines = deploy.split("\n").filter((l) => /^\s*run:/.test(l));
+  expect(runLines.some((l) => l.includes("wrangler")) && !runLines.some((l) => l.includes("npx wrangler")),
+    "and does it with the vendored wrangler binary, not `npx wrangler` — an unpinned npx " +
+    "install is exactly how the Cloudflare Workers Builds image picked up an untested Ruby " +
+    "and wrangler version in the first place");
 }
 
 // ---------------------------------------------------------------------------
