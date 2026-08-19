@@ -175,18 +175,16 @@ console.log("\nthe root wrangler.jsonc can actually build what it deploys\n");
   expect(site.assets && site.assets.html_handling === "auto-trailing-slash",
     "assets.html_handling is \"auto-trailing-slash\", matching Jekyll's directory-style permalinks");
 
-  // The staged-cutover guard rail. DEPLOY.md §9 is only a safe plan if the
-  // production route lands in its own reviewed commit, deliberately, after
-  // the staging rehearsal — not as a side effect of an unrelated site change
-  // landing on main. This is the test that would catch that happening by
-  // accident: a production route showing up here fails loudly instead of
-  // silently going live on the next push to main.
+  // The staged-cutover guard rail. Both routes are live now — DEPLOY.md §9.3
+  // (production) landed in its own commit, deliberately, after the staging
+  // rehearsal in §9.2, not as a side effect of an unrelated site change.
+  // This still asserts both are present and asserts the staging route was
+  // never dropped in the process of adding the production one.
   const routes = (site.routes || []).map((r) => r.pattern);
   expect(routes.includes("staging.algosize.com/*"),
-    "the staging route (DEPLOY.md §9.2) is present — zero production traffic, safe to ship any time");
-  expect(!routes.some((p) => /^algosize\.com\/\*?$/.test(p)),
-    "the production route (DEPLOY.md §9.3) is NOT present yet — that entry is a deliberate, " +
-    "separate, later commit, not something that should ride along with an unrelated change");
+    "the staging route (DEPLOY.md §9.2) is present");
+  expect(routes.some((p) => /^algosize\.com\/\*?$/.test(p)),
+    "the production route (DEPLOY.md §9.3) is present — algosize.com is served by this Worker");
 
   // routes.length === 0 is what makes workers_dev default true; the moment
   // routes is non-empty that default flips, and without this key the
