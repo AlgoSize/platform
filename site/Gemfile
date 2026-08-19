@@ -5,6 +5,22 @@ gem "webrick"
 gem "kramdown-parser-gfm", "~> 1.1"
 gem "rouge"
 
+# Ruby 3.4 moved these out of the DEFAULT gems and into bundled gems, so they
+# stopped being on the load path automatically. Nothing here requires them
+# directly — jekyll.rb requires "csv" and safe_yaml requires "base64" — but a
+# gem cannot load a bundled gem the Gemfile has not declared, so they have to
+# be named here or the build dies the moment it runs on Ruby >= 3.4:
+#
+#   bundler: failed to load command: jekyll
+#   'Kernel#require': cannot load such file -- csv (LoadError)
+#     from .../jekyll-4.3.4/lib/jekyll.rb:28
+#
+# This is invisible on older Rubies, where both are still defaults — which is
+# exactly how it reached CI: the local box runs 3.3 and Cloudflare's build
+# image runs 3.4.7.
+gem "csv"
+gem "base64"
+
 group :jekyll_plugins do
   gem "jekyll-feed"
   gem "jekyll-sitemap"

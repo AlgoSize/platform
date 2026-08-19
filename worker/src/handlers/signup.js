@@ -15,6 +15,7 @@ import { issueJWT, buildSessionCookie } from "../auth.js";
 import { createFreeUser } from "./_users.js";
 import { sendTransactional } from "../email/transactional.js";
 import { welcomeFreeSignup } from "../email/templates.js";
+import { recordEmailSend } from "../oplog.js";
 
 // Pragmatic email regex: requires `@` with non-empty local + domain parts
 // and a TLD. We're not trying to perfectly match RFC 5322 — Stripe (paid
@@ -63,7 +64,9 @@ export async function signupHandler(request, env, ctx) {
     );
   }
 
-  const token  = await issueJWT(env, user.userId, user.email, user.subStatus);
+  const token  = await issueJWT(env, user.userId, user.email, user.subStatus, {
+    request, authMethod: "signup",
+  });
   const cookie = buildSessionCookie(env, token, {
     secure: !env.SITE_ORIGIN.startsWith("http://localhost"),
   });
@@ -78,11 +81,14 @@ export async function signupHandler(request, env, ctx) {
     subject: welcome.subject,
     text:    welcome.text,
     html:    welcome.html,
-  });
+  }).then((result) =>
+    recordEmailSend(env, ctx, { recipient: user.email, template: "welcome_free", result })
+      .then(() => result),
+  );
   if (ctx && typeof ctx.waitUntil === "function") {
     ctx.waitUntil(emailPromise);
   } else {
-    void emailPromise;   // dev / test path with no ExecutionContext
+    void emailPromise.catch(() => {});   // dev / test path with no ExecutionContext
   }
 
   return jsonResponse(

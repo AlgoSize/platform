@@ -1,0 +1,11 @@
+-- 0011 — how each user actually signs in.
+--
+-- The Worker supports two paths (magic link, Google OAuth) and stored neither,
+-- so support could not answer "why can't this person log in" without guessing.
+-- It also makes the Google-OAuth rollout measurable: without this column the
+-- only way to know whether anyone uses it is to read the logs.
+--
+-- Nullable on purpose. Every row that predates this migration genuinely has an
+-- unknown method — backfilling a guess would make the column a liability the
+-- first time someone trusted it.
+ALTER TABLE users ADD COLUMN auth_method TEXT;

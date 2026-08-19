@@ -444,6 +444,50 @@ entitlement and price id — the columns are storage, not permission — so a
 lapsed Firm subscription stops white-labelling on its next report without
 anyone clearing the row.
 
+#### 2.5.10 Apply the remaining migrations (0009 – 0014)
+
+Everything from 0009 onward is applied as a block. Sections 2.5.3 and 2.5.9
+each documented a single migration, which does not scale — the authority on
+what a database is missing is `GET /api/admin/schema-check`, not this list.
+
+```bash
+cd worker
+for f in migrations/0009_*.sql migrations/001*.sql; do
+  echo "--- $f"
+  ./node_modules/.bin/wrangler d1 execute algosize --config wrangler.toml \
+    --env production --remote --file="$f"
+done
+```
+
+Every statement is `CREATE TABLE IF NOT EXISTS` or a single `ALTER TABLE …
+ADD COLUMN`, so re-running the block is safe except for the two `ALTER`
+statements (0011 and, on an older database, 0009), which fail with
+`duplicate column name` on a second run. That failure is the correct outcome
+and can be ignored.
+
+What each one is for:
+
+| Migration | Adds | Without it |
+| --- | --- | --- |
+| `0009_monitor_delta` | `monitors.last_delta_json` | The dashboard cannot show what a sweep found new |
+| `0010_audit_log` | `audit_log` | Nothing records who revoked what; the admin panel's audit page is empty |
+| `0011_user_auth_method` | `users.auth_method` | Support cannot tell whether an account uses Google or email links |
+| `0012_webhook_deliveries` | `webhook_deliveries` | A failing Stripe webhook leaves no trace outside the Stripe dashboard |
+| `0013_email_sends` | `email_sends` | An unconfigured mailer keeps no-opping silently — the failure mode that hid the magic-link outage |
+| `0014_feature_flags` | `feature_flags` | Every flag resolves to off (the module fails closed), so nothing gated ever ships |
+
+The Worker does **not** fail without these. Each write path swallows its own
+error so a missing table can never break the action it was describing — which
+means a skipped migration shows up as an admin panel that is quietly, wrongly
+empty rather than as an outage. Confirm with:
+
+```bash
+curl -s -H "Cookie: <admin session>" https://algosize.com/api/admin/schema-check | jq .pending
+```
+
+An empty array is the only acceptable answer. `worker/scripts/verify-production.mjs`
+checks the same thing as part of the post-deploy sweep.
+
 ### 2.6 Deploy
 
 > **CI handles this on every push (Task #24).** Once
@@ -1605,7 +1649,7 @@ in a minute.
 |---|---|
 | `origin reachable — HTTP 403 from something in front of the Worker` | Cloudflare Access on the hostname, a WAF rule, or an egress proxy between you and Cloudflare is answering instead of the Worker. Nothing after it can run. Check from a network that reaches the origin directly, or allowlist the host. |
 | `origin reachable — expected the Worker's 404 JSON` | `SITE_ORIGIN` is probably pointing at the static site rather than the `/api/*` route (§4). |
-| `migrations applied — pending: 0007, 0008` | Apply them: `wrangler d1 execute algosize --env production --remote --file=migrations/<file>.sql`. The script prints the exact missing table/column under each pending migration. |
+| `migrations applied — pending: 0012, 0013` | Apply them (§2.5.10): `wrangler d1 execute algosize --env production --remote --file=migrations/<file>.sql`. The script prints the exact missing table/column under each pending migration. A pending migration from 0010 onward does **not** produce errors anywhere — the write paths swallow their own failures so a missing table cannot break the action it describes — so this endpoint is the only thing that will tell you. |
 | `404 — route not registered` | The deployed bundle is older than the code. Redeploy (§2.6). |
 | `HTTP 500 — likely a missing table` | A migration for that handler's table is missing. The script names which one. |
 | `401 — session cookie rejected` | The session expired or was revoked. Sign in again and re-copy it. |

@@ -63,6 +63,20 @@ import {
   adminStripeCheckHandler,
   requireAdmin,
 } from "./handlers/admin.js";
+import {
+  adminOverviewHandler,
+  adminAccountsHandler,
+  adminAccountDetailHandler,
+  adminAccountInvoicesHandler,
+  adminUserDetailHandler,
+  adminRevokeSessionHandler,
+  adminBillingHandler,
+  adminAutomationHandler,
+  adminAuditHandler,
+  adminFlagsHandler,
+  adminSetFlagHandler,
+  adminSettingsHandler,
+} from "./handlers/admin_panel.js";
 import { pageviewPixelHandler } from "./handlers/pageview.js";
 import { seedHandler } from "./handlers/_seed.js";
 import { enforceQuota } from "./quota.js";
@@ -162,6 +176,27 @@ router.get( "/api/admin/schema-check", requireAdmin, adminSchemaCheckHandler);
 // repo — the portal default and the webhook endpoint both live in the Stripe
 // dashboard, and both fail only once a real customer hits them.
 router.get( "/api/admin/stripe-check", requireAdmin, adminStripeCheckHandler);
+
+// The control panel's own read surface. Everything below is behind the same
+// requireAdmin allowlist; there is no second, weaker gate anywhere on it.
+//
+// Ordering matters for the two-segment routes: itty-router matches in
+// declaration order, so a literal path has to be declared before the
+// parameterised one that would also match it.
+router.get(   "/api/admin/overview",                 requireAdmin, adminOverviewHandler);
+router.get(   "/api/admin/accounts",                 requireAdmin, adminAccountsHandler);
+router.get(   "/api/admin/accounts/:orgId/invoices", requireAdmin, adminAccountInvoicesHandler);
+router.get(   "/api/admin/accounts/:orgId",          requireAdmin, adminAccountDetailHandler);
+router.get(   "/api/admin/users/:userId",            requireAdmin, adminUserDetailHandler);
+// Signing another person out of their own account — one of only two writes
+// on this surface, and audited for that reason.
+router.delete("/api/admin/users/:userId/sessions/:sessionId", requireAdmin, adminRevokeSessionHandler);
+router.get(   "/api/admin/billing",                  requireAdmin, adminBillingHandler);
+router.get(   "/api/admin/automation",               requireAdmin, adminAutomationHandler);
+router.get(   "/api/admin/audit",                    requireAdmin, adminAuditHandler);
+router.get(   "/api/admin/flags",                    requireAdmin, adminFlagsHandler);
+router.patch( "/api/admin/flags/:key",               requireAdmin, adminSetFlagHandler);
+router.get(   "/api/admin/settings",                 requireAdmin, adminSettingsHandler);
 
 // ---- Session routes (Task #8) ---------------------------------------------
 router.post("/api/logout",          requireAuth, logoutHandler);

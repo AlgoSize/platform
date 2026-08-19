@@ -12,6 +12,7 @@
 
 import { requireAuth } from "../auth.js";
 import { stripeFetch, StripeError } from "../stripe.js";
+import { tierForOrg } from "../reports/branding.js";
 
 function jsonResponse(body, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
@@ -55,12 +56,22 @@ async function fetchAllUsers(env) {
   // No artificial cap — admin export should see everything. If the user
   // table grows past ~100k rows we'll need server-side pagination, but
   // for an early-stage product this is fine.
+  //
+  // The org join is a LEFT join through `active_org_id`, not through
+  // memberships: a user can belong to several orgs, and picking one of them
+  // arbitrarily would make the column silently wrong for exactly the accounts
+  // an operator is most likely to be investigating. `active_org_id` is the
+  // org the user is currently acting as, which is a fact rather than a guess.
   const result = await env.DB
     .prepare(
-      `SELECT user_id, email, plan, sub_status, stripe_customer_id,
-              created_at, updated_at
-         FROM users
-         ORDER BY created_at DESC`,
+      `SELECT u.user_id, u.email, u.plan, u.sub_status, u.stripe_customer_id,
+              u.auth_method, u.active_org_id, u.created_at, u.updated_at,
+              o.name AS org_name, o.sub_status AS org_sub_status, o.price_id AS org_price_id,
+              m.role AS org_role
+         FROM users u
+         LEFT JOIN organisations o ON o.org_id = u.active_org_id
+         LEFT JOIN memberships   m ON m.org_id = u.active_org_id AND m.user_id = u.user_id
+         ORDER BY u.created_at DESC`,
     )
     .all();
   return (result && result.results) || [];
@@ -74,7 +85,7 @@ export async function adminListUsersHandler(request, env) {
     return jsonResponse({ error: "not_configured", message: "Database is not configured." }, 500);
   }
   const rows = await fetchAllUsers(env);
-  const items = rows.map((r) => ({
+  let items = rows.map((r) => ({
     userId:           r.user_id,
     email:            r.email,
     plan:             r.plan || (r.stripe_customer_id ? "paid" : "free"),
@@ -82,8 +93,33 @@ export async function adminListUsersHandler(request, env) {
     stripeCustomerId: r.stripe_customer_id || null,
     createdAt:        r.created_at,
     updatedAt:        r.updated_at,
+    orgId:            r.active_org_id || null,
+    orgName:          r.org_name || null,
+    orgSubStatus:     r.org_sub_status || null,
+    // Null when the user has no active org, and also null for a user whose
+    // active_org_id points at an org they are not a member of — which is a
+    // real inconsistency worth being able to see rather than smoothing over.
+    role:             r.org_role || null,
+    tier:             tierForOrg(env, { priceId: r.org_price_id }),
+    authMethod:       r.auth_method || null,
+    // Rows predating migrations/0011 have not recorded a method. That is not
+    // the same as "this account has no sign-in method", and the panel needs
+    // to be able to tell the difference.
+    authMethodKnown:  Boolean(r.auth_method),
   }));
-  return jsonResponse({ count: items.length, items }, 200);
+
+  const url = new URL(request.url);
+  const q = (url.searchParams.get("q") || "").trim().toLowerCase();
+  if (q) {
+    items = items.filter((u) =>
+      u.email.toLowerCase().includes(q) ||
+      u.userId.toLowerCase().includes(q) ||
+      (u.orgName || "").toLowerCase().includes(q));
+  }
+  const plan = url.searchParams.get("plan");
+  if (plan) items = items.filter((u) => u.plan === plan);
+
+  return jsonResponse({ count: items.length, items, total: rows.length }, 200);
 }
 
 // ---------------------------------------------------------------------------
@@ -186,6 +222,16 @@ const MIGRATIONS = Object.freeze([
              { table: "organisations", column: "brand_logo_url" }] },
   { id: "0009", name: "monitor_delta",
     checks: [{ table: "monitors", column: "last_delta_json" }] },
+  { id: "0010", name: "audit_log",
+    checks: [{ table: "audit_log" }] },
+  { id: "0011", name: "user_auth_method",
+    checks: [{ table: "users", column: "auth_method" }] },
+  { id: "0012", name: "webhook_deliveries",
+    checks: [{ table: "webhook_deliveries" }] },
+  { id: "0013", name: "email_sends",
+    checks: [{ table: "email_sends" }] },
+  { id: "0014", name: "feature_flags",
+    checks: [{ table: "feature_flags" }] },
 ]);
 
 /** Plain SQLite identifier — the only shape we will interpolate into a PRAGMA. */

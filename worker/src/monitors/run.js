@@ -29,6 +29,7 @@ import {
   countBySeverityOrdered,
   hashKeySet,
 } from "./diff.js";
+import { recordEmailSend } from "../oplog.js";
 
 // Bound on how many monitors one sweep enqueues. Far above any plausible
 // near-term monitor count; it exists so a runaway row count can't turn one
@@ -193,6 +194,13 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
       isBaseline:    diff.isBaseline,
       dashboardUrl:  `${origin}/dashboard/`,
     }),
+  });
+
+  await recordEmailSend(env, ctx, {
+    recipient: to,
+    template:  "monitor_new_findings",
+    orgId:     monitor.orgId,
+    result:    sent,
   });
 
   return {

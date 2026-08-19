@@ -53,6 +53,8 @@ import {
 import { captureException, captureMessage } from "../observability.js";
 import { sendTransactional as defaultSendTransactional } from "../email/transactional.js";
 import { paymentFailed, trialEndingSoon } from "../email/templates.js";
+import { recordWebhookDelivery, recordEmailSend, WEBHOOK_OUTCOME } from "../oplog.js";
+import { writeAudit, AUDIT_ACTIONS, SYSTEM_ACTOR } from "../audit.js";
 
 // 7 days, a few days longer than Stripe's documented retry window. Picked
 // long enough that a delayed retry can't slip past the dedup table, short
@@ -95,6 +97,27 @@ function jsonResponse(body, status = 200) {
  * how many emails a given event produced without a Gmail credential. The
  * router calls this with three arguments and gets the real sender.
  */
+/**
+ * Best-effort org attribution for a delivery row.
+ *
+ * Every event we handle carries a Stripe customer somewhere on data.object,
+ * and the org is indexed by that customer id — so this is one indexed read,
+ * not a scan. Returning null is a fine outcome: an unattributed delivery
+ * still belongs in the global feed, and inventing an org for it would be
+ * worse than leaving the column empty.
+ */
+async function orgIdForEvent(env, event) {
+  try {
+    const obj = (event && event.data && event.data.object) || {};
+    const customerId = typeof obj.customer === "string" ? obj.customer : (obj.customer && obj.customer.id);
+    if (!customerId) return null;
+    const org = await getOrgByCustomerId(env, customerId);
+    return (org && org.orgId) || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function stripeWebhookHandler(request, env, ctx, { sendTransactional: sendTxOverride } = {}) {
   const send = sendTxOverride || defaultSendTransactional;
   if (!env.STRIPE_WEBHOOK_SECRET) {
@@ -140,6 +163,13 @@ export async function stripeWebhookHandler(request, env, ctx, { sendTransactiona
   // handle, just with `deduped: true` so operators can grep for replay
   // activity in logs.
   if (await hasProcessed(env, event.id)) {
+    // Logged as `duplicate`, not as an error. A replay that we correctly
+    // refused to apply twice is the system working; a feed that paints it
+    // red teaches whoever reads it to ignore red rows.
+    await recordWebhookDelivery(env, ctx, {
+      eventId: event.id, eventType: event.type,
+      orgId: null, outcome: WEBHOOK_OUTCOME.DUPLICATE,
+    });
     return jsonResponse({ received: true, deduped: true, type: event.type });
   }
 
@@ -179,6 +209,10 @@ export async function stripeWebhookHandler(request, env, ctx, { sendTransactiona
         // retry an event we've already chosen to ignore. The body field
         // `handled: false` is preserved for backward compat with #17.
         await markProcessed(env, event.id);
+        await recordWebhookDelivery(env, ctx, {
+          eventId: event.id, eventType: event.type,
+          orgId: null, outcome: WEBHOOK_OUTCOME.IGNORED,
+        });
         return jsonResponse({ received: true, handled: false, type: event.type });
     }
 
@@ -186,6 +220,10 @@ export async function stripeWebhookHandler(request, env, ctx, { sendTransactiona
     // we fall into the catch block below which returns 500 → Stripe
     // retries → next attempt finds no dedup row → handler runs again.
     await markProcessed(env, event.id);
+    await recordWebhookDelivery(env, ctx, {
+      eventId: event.id, eventType: event.type,
+      orgId: await orgIdForEvent(env, event), outcome: WEBHOOK_OUTCOME.PROCESSED,
+    });
     return jsonResponse({ received: true, handled: event.type });
   } catch (err) {
     console.error("webhook handler error", event.type, err);
@@ -202,8 +240,53 @@ export async function stripeWebhookHandler(request, env, ctx, { sendTransactiona
         stripe_event_id: event.id || "unknown",
       },
     });
+    // Recorded BEFORE the 500 that makes Stripe retry, so the feed shows the
+    // failed attempt and the later successful one as two rows. A log that
+    // only kept the eventual success would hide the retry entirely, and the
+    // retry is the thing worth noticing.
+    await recordWebhookDelivery(env, ctx, {
+      eventId: event.id, eventType: event.type,
+      orgId: null, outcome: WEBHOOK_OUTCOME.FAILED,
+      error: (err && err.message) || String(err),
+    });
     return jsonResponse({ error: "handler_failed", message: err.message }, 500);
   }
+}
+
+/**
+ * Log a billing state change under the reserved `system` actor.
+ *
+ * These changes are made by Stripe, not by a person — and attributing them to
+ * whoever happened to be signed in would be worse than not logging them at
+ * all. Only fields that actually moved are recorded, so a `.updated` event
+ * that changed nothing we store does not manufacture an audit entry.
+ */
+async function auditBillingChange(env, ctx, before, after, eventType) {
+  if (!before && !after) return;
+  const org = after || before;
+  const changes = {};
+  const compare = [
+    ["plan",            "plan"],
+    ["subStatus",       "subStatus"],
+    ["priceId",         "priceId"],
+    ["seatsPurchased",  "seatsPurchased"],
+    ["currentPeriodEnd", "currentPeriodEnd"],
+  ];
+  for (const [key] of compare) {
+    const from = before ? before[key] : undefined;
+    const to   = after  ? after[key]  : undefined;
+    if (from !== to) changes[key] = { from: from ?? null, to: to ?? null };
+  }
+  if (Object.keys(changes).length === 0) return;
+
+  await writeAudit(env, ctx, {
+    actor:      SYSTEM_ACTOR,
+    action:     AUDIT_ACTIONS.PLAN_CHANGED,
+    targetType: "org",
+    targetId:   org.orgId,
+    orgId:      org.orgId,
+    metadata:   { event: eventType, changes },
+  });
 }
 
 async function handleCheckoutCompleted(env, event) {
@@ -249,10 +332,13 @@ async function handleSubscriptionDeleted(env, event) {
   // unix seconds; a missing value leaves the stored one alone.
   const periodEnd = typeof sub.current_period_end === "number" ? sub.current_period_end : null;
 
+  const before  = await getOrgByCustomerId(env, customerId);
   const updated = await setOrgSubStatusByCustomerId(env, customerId, "inactive", periodEnd);
   if (!updated) {
     console.warn("customer.subscription.deleted: no org found for customer", customerId);
+    return;
   }
+  await auditBillingChange(env, null, before, await getOrgByCustomerId(env, customerId), event.type);
 }
 
 // ---------------------------------------------------------------------------
@@ -275,9 +361,13 @@ async function handleSubscriptionUpsert(env, ctx, event) {
     return;
   }
 
-  const fields = subscriptionFields(sub);
+  const fields  = subscriptionFields(sub);
+  const before  = await getOrgByCustomerId(env, customerId);
   const updated = await updateOrgSubscriptionByCustomerId(env, customerId, fields);
-  if (updated) return;
+  if (updated) {
+    await auditBillingChange(env, ctx, before, await getOrgByCustomerId(env, customerId), event.type);
+    return;
+  }
 
   // No org for this customer. Two ways to get here, both real: a subscription
   // created straight from the Stripe dashboard/API (never went through our
@@ -299,6 +389,7 @@ async function handleSubscriptionUpsert(env, ctx, event) {
   // remaining subscription columns are filled in by a second pass, now that
   // the customer id resolves to an org.
   await updateOrgSubscriptionByCustomerId(env, customerId, fields);
+  await auditBillingChange(env, ctx, null, await getOrgByCustomerId(env, customerId), event.type);
 }
 
 /**
@@ -366,7 +457,7 @@ async function handleInvoicePaymentFailed(env, ctx, event, send) {
   // the dedup row is only written once the send has been attempted, and the
   // event dedup above is what makes "exactly one email per failed invoice"
   // true even when Stripe redelivers.
-  await send(env, ctx, {
+  const result = await send(env, ctx, {
     to: billingEmail,
     ...paymentFailed({
       email:        billingEmail,
@@ -375,6 +466,12 @@ async function handleInvoicePaymentFailed(env, ctx, event, send) {
       payUrl:       invoice.hosted_invoice_url || null,
       attemptCount: typeof invoice.attempt_count === "number" ? invoice.attempt_count : null,
     }),
+  });
+  // Of every message this Worker sends, this is the one whose non-delivery
+  // costs the most: the customer loses access on a card they were never told
+  // had failed.
+  await recordEmailSend(env, ctx, {
+    recipient: billingEmail, template: "payment_failed", orgId: org.orgId, result,
   });
 }
 
@@ -401,13 +498,16 @@ async function handleTrialWillEnd(env, ctx, event, send) {
   }
 
   const price = firstItem(sub)?.price;
-  await send(env, ctx, {
+  const result = await send(env, ctx, {
     to: billingEmail,
     ...trialEndingSoon({
       email:       billingEmail,
       trialEndsOn: formatDateUtc(sub.trial_end),
       amount:      price ? formatMoney(price.unit_amount, price.currency) : null,
     }),
+  });
+  await recordEmailSend(env, ctx, {
+    recipient: billingEmail, template: "trial_ending", orgId: org.orgId, result,
   });
 }
 

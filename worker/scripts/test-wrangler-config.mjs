@@ -1,4 +1,4 @@
-// Config invariants for worker/wrangler.toml.
+// Config invariants for worker/wrangler.toml and the repo-root wrangler.jsonc.
 //
 // These are cheap assertions about deploy configuration that would otherwise
 // only surface as a production outage. They exist because of a real one:
@@ -120,6 +120,81 @@ for (const envName of ["production", "staging"]) {
   const varsLines = sections.get(`env.${envName}.vars`) || [];
   for (const key of ["SITE_ORIGIN", "COOKIE_NAME"]) {
     expect(readKey(varsLines, key) !== null, `${envName}: ${key} is set`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+console.log("\nthe root wrangler.jsonc can actually build what it deploys\n");
+// ---------------------------------------------------------------------------
+//
+// The site Worker's config pointed `assets.directory` at `_site_build`, a
+// gitignored artifact that nothing in CI produced — so "Workers Builds:
+// algosize" failed on every commit for weeks with:
+//
+//   ✘ The directory specified by the "assets.directory" field in your
+//     configuration file does not exist: /opt/buildhome/repo/_site_build
+//
+// The fix is a `build.command` that produces the directory before wrangler
+// reads it. These assertions exist because that pairing is invisible: the
+// config is syntactically valid, and wrangler only complains at deploy time
+// in an environment nobody runs locally.
+
+{
+  const JSONC_PATH = join(__dirname, "..", "..", "wrangler.jsonc");
+  const jsonc = readFileSync(JSONC_PATH, "utf8");
+  // Line comments only — this file has no block comments and no strings
+  // containing "//", both of which this strip would mangle.
+  const site = JSON.parse(jsonc.replace(/^\s*\/\/.*$/gm, ""));
+
+  expect(site.name !== "algosize",
+    `the site Worker is not named "algosize" (got "${site.name}") — sharing the API Worker's ` +
+    "service name would let a site deploy replace the live API");
+
+  const dir = site.assets && site.assets.directory;
+  expect(Boolean(dir), "it declares an assets directory");
+
+  const cmd = site.build && site.build.command;
+  expect(Boolean(cmd),
+    "and a build command that produces it — an assets directory nothing builds is the exact " +
+    "failure that kept this check red on every commit");
+
+  if (cmd && dir) {
+    expect(cmd.includes(dir),
+      `the build command writes to the declared assets directory ("${dir}")`);
+    // The gitignore entry is what makes the build command load-bearing rather
+    // than merely redundant, so the two are asserted together.
+    const ignore = readFileSync(join(__dirname, "..", "..", ".gitignore"), "utf8");
+    expect(ignore.split(/\r?\n/).some((l) => l.trim().replace(/\/$/, "") === dir.replace(/\/$/, "")),
+      `"${dir}" is gitignored, so it only ever exists because the build command made it`);
+  }
+
+  // Ruby 3.4 moved a set of libraries out of DEFAULT gems and into bundled
+  // gems. A bundled gem is only on the load path if the Gemfile declares it,
+  // so a dependency that quietly `require`s one breaks the moment the build
+  // runs on 3.4 — while still passing locally on an older Ruby, which is
+  // exactly how this reached CI:
+  //
+  //   bundler: failed to load command: jekyll
+  //   'Kernel#require': cannot load such file -- csv (LoadError)
+  //
+  // Nothing in the Gemfile uses these directly. jekyll.rb requires "csv" and
+  // safe_yaml requires "base64", so they are transitive requirements that no
+  // gem declares, which is why they have to be named explicitly.
+  const lock = readFileSync(join(__dirname, "..", "..", "site", "Gemfile.lock"), "utf8");
+  const declared = (lock.match(/^DEPENDENCIES\n([\s\S]*?)\n\n/m) || [])[1] || "";
+  for (const [gem, why] of [["csv", "jekyll.rb"], ["base64", "safe_yaml"]]) {
+    expect(new RegExp(`^\\s+${gem}$`, "m").test(declared),
+      `site/Gemfile declares "${gem}" — required by ${why}, and a bundled rather than ` +
+      "default gem on Ruby >= 3.4, which is what the Cloudflare build image runs");
+  }
+
+  // A preview that renders differently from what GitHub Pages serves is worse
+  // than no preview: it invites decisions about a build nobody ships.
+  const workflow = readFileSync(
+    join(__dirname, "..", "..", ".github", "workflows", "jekyll.yml"), "utf8");
+  for (const flag of ["_config.yml,_config.production.yml", "JEKYLL_ENV"]) {
+    expect(cmd.includes(flag) && workflow.includes(flag),
+      `the preview build and the Pages build agree on ${flag}`);
   }
 }
 

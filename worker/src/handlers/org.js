@@ -32,6 +32,8 @@ import {
   updateOrgBranding,
 } from "./_orgs.js";
 import { getUserById } from "./_users.js";
+import { auditFromRequest, AUDIT_ACTIONS } from "../audit.js";
+import { recordEmailSend } from "../oplog.js";
 import { resolveEntitlementForOrg } from "../entitlement.js";
 import {
   mayWhiteLabel,
@@ -261,6 +263,21 @@ export async function updateOrgBrandingHandler(request, env) {
   }
 
   const updated = await updateOrgBranding(env, org.orgId, patch);
+
+  // Branding is logged because it changes what CLIENTS of this org see on a
+  // document they were sent. That makes it the kind of change someone will
+  // eventually need to attribute, even though nothing was destroyed.
+  await auditFromRequest(request, env, null, {
+    action:     AUDIT_ACTIONS.BRANDING_UPDATED,
+    targetType: "org",
+    targetId:   org.orgId,
+    orgId:      org.orgId,
+    metadata:   {
+      companyName: (updated && updated.brandCompanyName) || null,
+      logoUrl:     (updated && updated.brandLogoUrl) || null,
+    },
+  });
+
   return jsonResponse({
     ok: true,
     branding: {
@@ -344,7 +361,7 @@ export async function inviteMemberHandler(request, env, ctx, { sendTransactional
   const inviter   = await getUserById(env, inviterId);
 
   const send = sendTxOverride || defaultSendTransactional;
-  await send(env, ctx, {
+  const sendResult = await send(env, ctx, {
     to: email,
     ...orgInvite({
       email,
@@ -353,6 +370,24 @@ export async function inviteMemberHandler(request, env, ctx, { sendTransactional
       acceptUrl,
       expiresInDays: INVITE_TTL_SEC / 86_400,
     }),
+  });
+
+  // The invite exists whether or not the mail went out — the seat is already
+  // consumed. Logging the send result is what makes "I never got the email"
+  // answerable instead of a guess.
+  await recordEmailSend(env, ctx, {
+    recipient: email,
+    template:  "org_invite",
+    orgId:     org.orgId,
+    result:    sendResult,
+  });
+
+  await auditFromRequest(request, env, ctx, {
+    action:     AUDIT_ACTIONS.MEMBER_INVITED,
+    targetType: "invite",
+    targetId:   email,
+    orgId:      org.orgId,
+    metadata:   { email, role: inviteRole, emailSent: Boolean(sendResult && sendResult.sent) },
   });
 
   return jsonResponse({
@@ -448,6 +483,16 @@ export async function acceptInviteHandler(request, env) {
   await env.DB.prepare("UPDATE users SET active_org_id = ?, updated_at = ? WHERE user_id = ?")
     .bind(invite.orgId, now, sessionUser.userId).run();
 
+  // Actor is the invitee, not the inviter: this row records who walked
+  // through the door, and the invite row above records who opened it.
+  await auditFromRequest(request, env, null, {
+    action:     AUDIT_ACTIONS.MEMBER_JOINED,
+    targetType: "member",
+    targetId:   sessionUser.userId,
+    orgId:      invite.orgId,
+    metadata:   { role: invite.role || "member", invitedBy: invite.invitedBy || null },
+  });
+
   return jsonResponse({
     ok: true,
     orgId: invite.orgId,
@@ -491,6 +536,16 @@ export async function removeMemberHandler(request, env) {
       : "That user is not a member of this organisation.";
     return jsonResponse({ error: result.reason, message }, status);
   }
+
+  await auditFromRequest(request, env, null, {
+    action:     AUDIT_ACTIONS.MEMBER_REMOVED,
+    targetType: "member",
+    targetId:   targetId,
+    orgId:      org.orgId,
+    // The removed member's role is recorded here because the membership row
+    // is gone — after this write there is nowhere else to recover it from.
+    metadata:   { role: target.role, selfRemoval: targetId === callerId },
+  });
 
   const [members, pending] = await Promise.all([
     listMembers(env, org.orgId),
@@ -558,6 +613,14 @@ export async function revokeInviteHandler(request, env) {
 
   await env.SESSIONS.delete(inviteKey(match.token));
   await writePendingInvites(env, org.orgId, pending.filter((i) => i.email !== email));
+
+  await auditFromRequest(request, env, null, {
+    action:     AUDIT_ACTIONS.INVITE_REVOKED,
+    targetType: "invite",
+    targetId:   email,
+    orgId:      org.orgId,
+    metadata:   { email, sentAt: match.sentAt || null },
+  });
 
   const seatsUsed = await countSeatsUsed(env, org.orgId, pending.length - 1);
   return jsonResponse({ ok: true, email, seatsUsed, seatsPurchased: org.seatsPurchased }, 200);
