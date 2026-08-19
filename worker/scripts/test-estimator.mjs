@@ -659,8 +659,47 @@ console.log("\nAkamai/Linode and Vultr — new plan-billed providers, same rules
   const providersDir = path.join(import.meta.dirname, "..", "pricing", "providers");
   const excluded = ["scaleway", "ovhcloud", "cloudflare-workers", "flyio", "render", "railway", "lambda", "runpod"];
   for (const id of excluded) {
-    expect(!fs.existsSync(path.join(providersDir, `${id}.json`)),
-      `${id}.json does not exist yet — no verified USD pricing has been sourced for it (Scaleway is EUR-only and blocked on currency conversion)`);
+    expect(!fs.existsSync(path.join(providersDir, `${id}.js`)),
+      `${id}.js does not exist yet — no verified USD pricing has been sourced for it (Scaleway is EUR-only and blocked on currency conversion)`);
+  }
+}
+{
+  // The pricing modules are .js only because no import-attribute spelling
+  // works in both Node and wrangler's esbuild (see pricing/catalog.js). That
+  // is a packaging workaround, NOT permission to put logic in the catalog —
+  // so the "inert data" property JSON used to give us syntactically is
+  // asserted here instead. A price is data; anything that computes one is a
+  // rate nobody can review by reading the file.
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const pricingDir = path.join(import.meta.dirname, "..", "pricing");
+  const files = [
+    path.join(pricingDir, "catalog.js"),
+    ...fs.readdirSync(path.join(pricingDir, "providers"))
+      .filter((f) => f.endsWith(".js"))
+      .map((f) => path.join(pricingDir, "providers", f)),
+  ];
+  expect(files.length >= 6, `found the pricing modules (${files.length} files)`);
+
+  for (const file of files) {
+    const name = path.basename(file);
+    // Strip the comment header before checking, so the explanatory prose that
+    // mentions `import`/`assert` does not read as code.
+    const body = fs.readFileSync(file, "utf8").replace(/^\s*\/\/.*$/gm, "").trim();
+    expect(/^export default Object\.freeze\(/.test(body),
+      `${name} is a single frozen default export`);
+    expect(!/\bfunction\b|=>|\brequire\(|\bimport\b|\beval\b/.test(body),
+      `${name} contains no functions, imports or eval — it is data, not code`);
+    // The real guarantee, and it subsumes every hand-rolled pattern check:
+    // if the unwrapped literal parses as JSON then it is data by definition —
+    // JSON has no syntax for a template literal, a function, or a computed
+    // value, so none can be hiding in it. (A backtick INSIDE a string value is
+    // fine and does occur — several limitations quote config keys like
+    // `mem_limit` — which is why this is a parse check, not a grep.)
+    const literal = body.replace(/^export default Object\.freeze\(/, "").replace(/\);?$/, "");
+    let parsed = null;
+    try { parsed = JSON.parse(literal); } catch { /* stays null */ }
+    expect(parsed !== null, `${name} is valid JSON once unwrapped — data by construction, not by convention`);
   }
 }
 

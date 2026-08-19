@@ -1,4 +1,21 @@
-{
+// Pricing data — an ES module, NOT a .json file, and deliberately so.
+//
+// This is data, not code: a single default-exported frozen literal, with no
+// imports, no functions and nothing computed. scripts/test-estimator.mjs
+// asserts that structurally, so the guarantee JSON gave us syntactically is
+// now given by a test instead.
+//
+// WHY NOT .json: importing JSON from an ES module requires an import
+// attribute, and there is no spelling of that attribute which works in both
+// places this code has to run. Node 22 accepts only `with { type: "json" }`
+// (it removed `assert`); the esbuild bundled with wrangler 3.78 accepts only
+// `assert` (it predates `with`). A plain attribute-less import works in
+// esbuild and throws in Node. So the catalog would build for the Worker or
+// run under the tests, never both — until the estimator was actually wired
+// into the router, nothing imported it and the conflict stayed invisible.
+// Exporting the same literal from a .js module needs no attribute anywhere.
+
+export default Object.freeze({
   "providerId": "digitalocean",
   "providerName": "DigitalOcean",
   "category": "cloud",
@@ -10,7 +27,9 @@
   "verificationStatus": "unverified-seed",
   "verificationNotes": "Not independently fetched by a human against the source URL in this pass — this session's egress to digitalocean.com is blocked. The six Basic Droplet monthly prices below were cross-checked against a secondhand pricing pull dated 2026-08-19: every hourly figure in that pull divides out of the monthly price at exactly 672 hours (e.g. $24.00 / 672h = $0.03571/hr), which matches this catalog's existing planBillingCapHours and is internally consistent rather than arbitrary — real corroboration, but not a substitute for someone opening digitalocean.com/pricing/droplets and checking. Do not flip verificationStatus to \"verified\" on this basis alone.",
   "sourceUrl": "https://www.digitalocean.com/pricing/droplets",
-  "regions": ["nyc3"],
+  "regions": [
+    "nyc3"
+  ],
   "defaultRegion": "nyc3",
   "limitations": [
     "DigitalOcean sells whole Droplets, not vCPU-hours. There is NO published per-vCPU or per-GiB price, so this catalog does not invent one — the plan price is the billed figure and the CPU/RAM split shown against it is allocated by the estimator, not charged by DigitalOcean.",
@@ -135,17 +154,72 @@
     "verificationStatus": "unverified-seed",
     "pricedByEngine": false,
     "plans": [
-      { "id": "gpu-amd-mi300x-1x", "gpuType": "AMD MI300X", "gpuCount": 1, "hourlyUsd": 2.59 },
-      { "id": "gpu-amd-mi300x-8x", "gpuType": "AMD MI300X", "gpuCount": 8, "hourlyUsd": 20.72 },
-      { "id": "gpu-amd-mi325x-1x", "gpuType": "AMD MI325X", "gpuCount": 1, "hourlyUsd": 3.80 },
-      { "id": "gpu-amd-mi325x-8x", "gpuType": "AMD MI325X", "gpuCount": 8, "hourlyUsd": 30.40 },
-      { "id": "gpu-nvidia-h100-1x", "gpuType": "NVIDIA H100", "gpuCount": 1, "hourlyUsd": 4.41 },
-      { "id": "gpu-nvidia-h100-8x", "gpuType": "NVIDIA H100", "gpuCount": 8, "hourlyUsd": 35.28 },
-      { "id": "gpu-nvidia-l40s-1x", "gpuType": "NVIDIA L40S", "gpuCount": 1, "hourlyUsd": 1.57 },
-      { "id": "gpu-nvidia-rtx4000-1x", "gpuType": "NVIDIA RTX 4000", "gpuCount": 1, "hourlyUsd": 0.76 },
-      { "id": "gpu-nvidia-rtx6000-1x", "gpuType": "NVIDIA RTX 6000", "gpuCount": 1, "hourlyUsd": 1.57 },
-      { "id": "gpu-nvidia-h200-1x", "gpuType": "NVIDIA H200", "gpuCount": 1, "hourlyUsd": 4.47 },
-      { "id": "gpu-nvidia-h200-8x", "gpuType": "NVIDIA H200", "gpuCount": 8, "hourlyUsd": 35.76 }
+      {
+        "id": "gpu-amd-mi300x-1x",
+        "gpuType": "AMD MI300X",
+        "gpuCount": 1,
+        "hourlyUsd": 2.59
+      },
+      {
+        "id": "gpu-amd-mi300x-8x",
+        "gpuType": "AMD MI300X",
+        "gpuCount": 8,
+        "hourlyUsd": 20.72
+      },
+      {
+        "id": "gpu-amd-mi325x-1x",
+        "gpuType": "AMD MI325X",
+        "gpuCount": 1,
+        "hourlyUsd": 3.8
+      },
+      {
+        "id": "gpu-amd-mi325x-8x",
+        "gpuType": "AMD MI325X",
+        "gpuCount": 8,
+        "hourlyUsd": 30.4
+      },
+      {
+        "id": "gpu-nvidia-h100-1x",
+        "gpuType": "NVIDIA H100",
+        "gpuCount": 1,
+        "hourlyUsd": 4.41
+      },
+      {
+        "id": "gpu-nvidia-h100-8x",
+        "gpuType": "NVIDIA H100",
+        "gpuCount": 8,
+        "hourlyUsd": 35.28
+      },
+      {
+        "id": "gpu-nvidia-l40s-1x",
+        "gpuType": "NVIDIA L40S",
+        "gpuCount": 1,
+        "hourlyUsd": 1.57
+      },
+      {
+        "id": "gpu-nvidia-rtx4000-1x",
+        "gpuType": "NVIDIA RTX 4000",
+        "gpuCount": 1,
+        "hourlyUsd": 0.76
+      },
+      {
+        "id": "gpu-nvidia-rtx6000-1x",
+        "gpuType": "NVIDIA RTX 6000",
+        "gpuCount": 1,
+        "hourlyUsd": 1.57
+      },
+      {
+        "id": "gpu-nvidia-h200-1x",
+        "gpuType": "NVIDIA H200",
+        "gpuCount": 1,
+        "hourlyUsd": 4.47
+      },
+      {
+        "id": "gpu-nvidia-h200-8x",
+        "gpuType": "NVIDIA H200",
+        "gpuCount": 8,
+        "hourlyUsd": 35.76
+      }
     ]
   }
-}
+});

@@ -1,4 +1,21 @@
-{
+// Pricing data — an ES module, NOT a .json file, and deliberately so.
+//
+// This is data, not code: a single default-exported frozen literal, with no
+// imports, no functions and nothing computed. scripts/test-estimator.mjs
+// asserts that structurally, so the guarantee JSON gave us syntactically is
+// now given by a test instead.
+//
+// WHY NOT .json: importing JSON from an ES module requires an import
+// attribute, and there is no spelling of that attribute which works in both
+// places this code has to run. Node 22 accepts only `with { type: "json" }`
+// (it removed `assert`); the esbuild bundled with wrangler 3.78 accepts only
+// `assert` (it predates `with`). A plain attribute-less import works in
+// esbuild and throws in Node. So the catalog would build for the Worker or
+// run under the tests, never both — until the estimator was actually wired
+// into the router, nothing imported it and the conflict stayed invisible.
+// Exporting the same literal from a .js module needs no attribute anywhere.
+
+export default Object.freeze({
   "providerId": "aws",
   "providerName": "Amazon Web Services",
   "category": "cloud",
@@ -10,7 +27,9 @@
   "verificationStatus": "unverified-seed",
   "verificationNotes": "Fargate dimension prices (below) are unchanged from the prior catalog version and remain unverified. A secondhand pull added EC2 on-demand billing metadata and one exact EC2 instance-type sample (referenceSamples.t3Small) from aws.amazon.com/ec2/pricing/on-demand/ and aws.amazon.com/ec2/instance-types/t3/ — nobody on this side opened either page directly. That sample is recorded for reference only; it is NOT wired into pricing (see referenceSamples note) and its presence must not be read as AWS being more verified than before. Do not mark AWS verified from this pass; EC2 instance-type SKUs still are not modelled by the engine at all.",
   "sourceUrl": "https://aws.amazon.com/fargate/pricing/",
-  "regions": ["us-east-1"],
+  "regions": [
+    "us-east-1"
+  ],
   "defaultRegion": "us-east-1",
   "limitations": [
     "Priced on the AWS Fargate dimension model, which bills vCPU and memory separately — this is why AWS has real per-vCPU-hour and per-GiB-hour prices while the plan-billed providers in this catalog do not.",
@@ -78,4 +97,4 @@
       ]
     }
   }
-}
+});

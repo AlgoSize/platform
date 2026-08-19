@@ -1,4 +1,21 @@
-{
+// Pricing data — an ES module, NOT a .json file, and deliberately so.
+//
+// This is data, not code: a single default-exported frozen literal, with no
+// imports, no functions and nothing computed. scripts/test-estimator.mjs
+// asserts that structurally, so the guarantee JSON gave us syntactically is
+// now given by a test instead.
+//
+// WHY NOT .json: importing JSON from an ES module requires an import
+// attribute, and there is no spelling of that attribute which works in both
+// places this code has to run. Node 22 accepts only `with { type: "json" }`
+// (it removed `assert`); the esbuild bundled with wrangler 3.78 accepts only
+// `assert` (it predates `with`). A plain attribute-less import works in
+// esbuild and throws in Node. So the catalog would build for the Worker or
+// run under the tests, never both — until the estimator was actually wired
+// into the router, nothing imported it and the conflict stayed invisible.
+// Exporting the same literal from a .js module needs no attribute anywhere.
+
+export default Object.freeze({
   "providerId": "akamai-linode",
   "providerName": "Akamai Connected Cloud (Linode)",
   "category": "cloud",
@@ -10,7 +27,9 @@
   "verificationStatus": "unverified-seed",
   "verificationNotes": "Added from a secondhand pricing pull dated 2026-08-19, not independently opened by a human against the source URL. One plan row (a purported 32 GiB tier) was visibly truncated/corrupted in that pull — it arrived containing non-Latin garbage characters where a number should be — and has been dropped entirely rather than guessed at. The five rows kept below are the ones that arrived intact. planBillingCapHours is deliberately UNSET (see limitations): the pulled hourly-rate figures did not divide cleanly out of the monthly prices at any consistent cap-hours value the way DigitalOcean's do, which is a sign those hourly figures may themselves be unreliable — so they were discarded rather than stored, and the engine's default 730-hour (full calendar month) cap is used instead, pending real verification.",
   "sourceUrl": "https://www.akamai.com/cloud/pricing/north-america",
-  "regions": ["north-america"],
+  "regions": [
+    "north-america"
+  ],
   "defaultRegion": "north-america",
   "limitations": [
     "Akamai/Linode sells whole instances ('Linodes'), not vCPU-hours. There is NO published per-vCPU or per-GiB price, so none is invented here — the plan price is billed and any CPU/RAM split is allocated by the estimator.",
@@ -83,9 +102,39 @@
     "verificationStatus": "unverified-seed",
     "pricedByEngine": false,
     "plans": [
-      { "id": "gpu-rtx4000-ada-small", "gpuType": "NVIDIA RTX 4000 Ada", "gpuCount": 1, "vcpu": 4, "memoryGiB": 16, "gpuMemoryGiB": 20, "storageGiB": 512, "monthlyUsd": 350.00, "hourlyUsd": 0.52 },
-      { "id": "gpu-quadro-rtx6000-small", "gpuType": "NVIDIA Quadro RTX 6000", "gpuCount": 1, "vcpu": 8, "memoryGiB": 32, "gpuMemoryGiB": 24, "storageGiB": 640, "monthlyUsd": 1000.00, "hourlyUsd": 1.50 },
-      { "id": "gpu-rtx-pro-6000-blackwell", "gpuType": "NVIDIA RTX PRO 6000 Blackwell Server Edition", "gpuCount": 1, "vcpu": 16, "memoryGiB": 176, "gpuMemoryGiB": 96, "storageGiB": 1024, "monthlyUsd": 1665.00, "hourlyUsd": 2.50 }
+      {
+        "id": "gpu-rtx4000-ada-small",
+        "gpuType": "NVIDIA RTX 4000 Ada",
+        "gpuCount": 1,
+        "vcpu": 4,
+        "memoryGiB": 16,
+        "gpuMemoryGiB": 20,
+        "storageGiB": 512,
+        "monthlyUsd": 350,
+        "hourlyUsd": 0.52
+      },
+      {
+        "id": "gpu-quadro-rtx6000-small",
+        "gpuType": "NVIDIA Quadro RTX 6000",
+        "gpuCount": 1,
+        "vcpu": 8,
+        "memoryGiB": 32,
+        "gpuMemoryGiB": 24,
+        "storageGiB": 640,
+        "monthlyUsd": 1000,
+        "hourlyUsd": 1.5
+      },
+      {
+        "id": "gpu-rtx-pro-6000-blackwell",
+        "gpuType": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+        "gpuCount": 1,
+        "vcpu": 16,
+        "memoryGiB": 176,
+        "gpuMemoryGiB": 96,
+        "storageGiB": 1024,
+        "monthlyUsd": 1665,
+        "hourlyUsd": 2.5
+      }
     ]
   }
-}
+});

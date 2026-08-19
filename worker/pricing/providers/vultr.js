@@ -1,4 +1,21 @@
-{
+// Pricing data — an ES module, NOT a .json file, and deliberately so.
+//
+// This is data, not code: a single default-exported frozen literal, with no
+// imports, no functions and nothing computed. scripts/test-estimator.mjs
+// asserts that structurally, so the guarantee JSON gave us syntactically is
+// now given by a test instead.
+//
+// WHY NOT .json: importing JSON from an ES module requires an import
+// attribute, and there is no spelling of that attribute which works in both
+// places this code has to run. Node 22 accepts only `with { type: "json" }`
+// (it removed `assert`); the esbuild bundled with wrangler 3.78 accepts only
+// `assert` (it predates `with`). A plain attribute-less import works in
+// esbuild and throws in Node. So the catalog would build for the Worker or
+// run under the tests, never both — until the estimator was actually wired
+// into the router, nothing imported it and the conflict stayed invisible.
+// Exporting the same literal from a .js module needs no attribute anywhere.
+
+export default Object.freeze({
   "providerId": "vultr",
   "providerName": "Vultr",
   "category": "cloud",
@@ -10,7 +27,9 @@
   "verificationStatus": "unverified-seed",
   "verificationNotes": "Added from a secondhand pricing pull dated 2026-08-19, not independently opened by a human against the source URL. Only two plans arrived as clean, unambiguous official-page rows — the pull's other Vultr figures conflicted with each other across several distinct Vultr product lines (Regular Cloud Compute, High Performance, High Frequency, Optimized, VX1, bare metal) and were discarded rather than guessed at. This is deliberately a minimal 2-SKU catalog pending more official rows; do not treat its thinness as a bug to silently pad with unconfirmed numbers.",
   "sourceUrl": "https://www.vultr.com/pricing/",
-  "regions": ["global"],
+  "regions": [
+    "global"
+  ],
   "defaultRegion": "global",
   "limitations": [
     "Only two Cloud Compute plans are modelled — this is a partial catalog, not a representative slice of Vultr's full lineup. Optimized Cloud Compute, High Frequency Compute, High Performance, VX1, and bare metal are entirely absent.",
@@ -44,4 +63,4 @@
       "sourceUrl": "https://www.vultr.com/pricing/"
     }
   ]
-}
+});

@@ -1,4 +1,21 @@
-{
+// Pricing data — an ES module, NOT a .json file, and deliberately so.
+//
+// This is data, not code: a single default-exported frozen literal, with no
+// imports, no functions and nothing computed. scripts/test-estimator.mjs
+// asserts that structurally, so the guarantee JSON gave us syntactically is
+// now given by a test instead.
+//
+// WHY NOT .json: importing JSON from an ES module requires an import
+// attribute, and there is no spelling of that attribute which works in both
+// places this code has to run. Node 22 accepts only `with { type: "json" }`
+// (it removed `assert`); the esbuild bundled with wrangler 3.78 accepts only
+// `assert` (it predates `with`). A plain attribute-less import works in
+// esbuild and throws in Node. So the catalog would build for the Worker or
+// run under the tests, never both — until the estimator was actually wired
+// into the router, nothing imported it and the conflict stayed invisible.
+// Exporting the same literal from a .js module needs no attribute anywhere.
+
+export default Object.freeze({
   "providerId": "hetzner",
   "providerName": "Hetzner Cloud",
   "category": "cloud",
@@ -10,7 +27,9 @@
   "verificationStatus": "unverified-seed",
   "verificationNotes": "Plan prices are unchanged and remain unverified — a secondhand pull did not expose the full official plan table reliably, so no plan row below was touched. Only the billing-rule bullets in `limitations` were updated, sourced from docs.hetzner.com/cloud/billing/faq/ via the same secondhand pull; nobody on this side opened that page directly, so these remain claims to confirm, not verified facts.",
   "sourceUrl": "https://www.hetzner.com/cloud/",
-  "regions": ["ash"],
+  "regions": [
+    "ash"
+  ],
   "defaultRegion": "ash",
   "limitations": [
     "Hetzner sells whole servers, not vCPU-hours. There is NO published per-vCPU or per-GiB price, so none is invented here — the plan price is billed and any CPU/RAM split is allocated by the estimator.",
@@ -90,4 +109,4 @@
     }
   },
   "minimumBillableSeconds": 3600
-}
+});

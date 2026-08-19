@@ -256,6 +256,55 @@ console.log("\nthe root wrangler.jsonc can actually build what it deploys\n");
 }
 
 // ---------------------------------------------------------------------------
+console.log("\nthe Worker actually bundles\n");
+// ---------------------------------------------------------------------------
+{
+  // Added after a real failure: src/estimator/catalog.js imported its pricing
+  // data with `with { type: "json" }`, which Node 22 accepts and the esbuild
+  // inside wrangler 3.78 does not. Every unit test passed, because Node ran
+  // the file directly. Nothing caught it for a whole PR either, because
+  // nothing imported the estimator into the router yet — so esbuild never
+  // reached the file. The moment the route was wired up, `wrangler dev`
+  // refused to build and the API would not have deployed at all.
+  //
+  // Running the same bundler over the same entrypoint turns "the Worker can
+  // be built" into a two-second unit test instead of something only the e2e
+  // job discovers by booting wrangler.
+  let esbuild = null;
+  try {
+    esbuild = (await import("esbuild")).default || (await import("esbuild"));
+  } catch {
+    // esbuild arrives via wrangler. If that ever stops being true, say so
+    // loudly rather than silently skipping the check.
+    expect(false, "esbuild is resolvable (it ships with wrangler) so the bundle check can run");
+  }
+  if (esbuild) {
+    let built = null, buildError = null;
+    try {
+      built = await esbuild.build({
+        entryPoints: [join(__dirname, "..", "src", "index.js")],
+        bundle: true, write: false, format: "esm", platform: "neutral",
+        logLevel: "silent", external: ["node:*", "cloudflare:*"],
+      });
+    } catch (err) {
+      buildError = err;
+    }
+    expect(built !== null,
+      buildError
+        ? `the Worker entrypoint bundles — ${(buildError.errors || []).map((e) => e.text).join("; ").slice(0, 160)}`
+        : "the Worker entrypoint bundles with the same esbuild wrangler uses");
+    if (built) {
+      const bytes = built.outputFiles[0].contents.length;
+      // Workers' compressed limit is 1 MB; this is the uncompressed bundle, so
+      // it is a smoke signal rather than the real ceiling. A sudden jump here
+      // usually means a dependency got pulled in by accident.
+      expect(bytes > 0 && bytes < 3 * 1024 * 1024,
+        `bundle is a sane size (${(bytes / 1024).toFixed(0)} KB uncompressed)`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 console.log(failures === 0
   ? "\n\x1b[32mAll wrangler-config tests passed\x1b[0m\n"
   : `\n\x1b[31m${failures} wrangler-config test(s) failed\x1b[0m\n`);
