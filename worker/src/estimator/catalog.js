@@ -17,6 +17,8 @@ import catalogIndex from "../../pricing/catalog.json" with { type: "json" };
 import awsProvider from "../../pricing/providers/aws.json" with { type: "json" };
 import doProvider from "../../pricing/providers/digitalocean.json" with { type: "json" };
 import hetznerProvider from "../../pricing/providers/hetzner.json" with { type: "json" };
+import akamaiLinodeProvider from "../../pricing/providers/akamai-linode.json" with { type: "json" };
+import vultrProvider from "../../pricing/providers/vultr.json" with { type: "json" };
 
 import { EstimatorError, CATALOG_STALE_AFTER_DAYS } from "./spec.js";
 
@@ -24,6 +26,8 @@ const PROVIDER_FILES = Object.freeze({
   aws: awsProvider,
   digitalocean: doProvider,
   hetzner: hetznerProvider,
+  "akamai-linode": akamaiLinodeProvider,
+  vultr: vultrProvider,
 });
 
 /** Fields every provider file must carry before it may price anything. */

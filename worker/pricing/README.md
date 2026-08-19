@@ -29,7 +29,35 @@ pricing/
     aws.json            metered — real per-vCPU-hour and per-GiB-hour prices
     digitalocean.json   plan-billed — whole Droplets, no unit prices published
     hetzner.json        plan-billed — whole servers, no unit prices published
+    akamai-linode.json  plan-billed — whole Linodes, no unit prices published
+    vultr.json          plan-billed — two Cloud Compute SKUs only, deliberately thin
 ```
+
+### Providers deliberately NOT in this catalog
+
+- **Scaleway** — the only pricing data sourced for it is EUR-denominated, and
+  this catalog performs no currency conversion (see below). It stays out until
+  a USD-priced page is found for it, the way `hetzner.json` only models
+  Hetzner's one USD-listed US region and skips its EUR ones.
+- **OVHcloud, Cloudflare Workers, Fly.io, Render, Railway, Lambda, RunPod** —
+  no real sourced pricing has been added for any of these yet; only schema
+  requirements have been discussed. Do not add a provider file with invented
+  numbers or as an empty stub — wait until real prices are sourced.
+- GPU pricing that DOES appear in `digitalocean.json` and `akamai-linode.json`
+  (as `gpuPlans`) is catalog reference data only. `engine.js` unconditionally
+  reports every GPU resource as unsupported regardless of what the catalog
+  contains — pricing GPUs for real needs an engine change, not just data, and
+  that change has not been made. Treat `gpuPlans` as inert until it has.
+
+### `verificationNotes` — provenance, not a verification tier
+
+Some provider files carry an optional `verificationNotes` string. It exists to
+say *how* a number arrived without inflating `verificationStatus`, which stays
+binary (`"verified"` or anything else) by design — see "Current status" above.
+A cross-check (e.g. a pulled hourly rate that divides cleanly out of the
+monthly price at the catalog's own cap-hours) is evidence, not verification;
+`verificationNotes` is where that nuance is written down instead of being lost
+or, worse, expressed by quietly flipping the status.
 
 ### Metered vs plan-billed — the distinction that matters
 

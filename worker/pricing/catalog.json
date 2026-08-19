@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": "2026.08.19-1",
+  "catalogVersion": "2026.08.19-2",
   "currency": "USD",
   "effectiveDate": "2026-08-01",
   "lastVerified": "2026-08-19",
   "verificationStatus": "unverified-seed",
-  "providers": ["aws", "digitalocean", "hetzner"],
-  "notice": "Seed catalog. Prices are transcribed list prices, not a quote, and have not been machine-verified against the provider pricing pages. Any estimate produced from a catalog whose verificationStatus is not \"verified\" carries a stale_pricing_catalog assumption and is capped at low confidence. See pricing/README.md for the verification procedure."
+  "providers": ["aws", "digitalocean", "hetzner", "akamai-linode", "vultr"],
+  "notice": "Seed catalog. Prices are transcribed list prices, not a quote, and have not been machine-verified against the provider pricing pages. Any estimate produced from a catalog whose verificationStatus is not \"verified\" carries a stale_pricing_catalog assumption and is capped at low confidence. akamai-linode and vultr were added from a secondhand pricing pull and are thinner/more provisional than aws/digitalocean/hetzner — see each provider's verificationNotes. Scaleway is deliberately not present: the only pricing data available for it is EUR-denominated, and this catalog performs no currency conversion (see pricing/README.md). OVHcloud, Cloudflare Workers, Fly.io, Render, Railway, Lambda and RunPod are also not present — no real pricing data for them has been sourced yet. See pricing/README.md for the verification procedure."
 }
