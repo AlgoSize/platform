@@ -133,46 +133,25 @@ function commentStartIndex(text) {
 
 
 // ---------------------------------------------------------------------------
-// Secret patterns (shared by detectSecrets and the global redaction pass)
+// Secret patterns
 // ---------------------------------------------------------------------------
+//
+// The patterns, the placeholder list and the redaction primitives all live in
+// analyzers/secrets.js — one definition, shared with the upload-triggered
+// analyzers that must REFUSE credentials rather than report them. That module's
+// header explains why architecture/graph.js keeps its own key-name heuristic
+// instead of being folded in (the two disagree on comments, quoting and
+// placeholder matching, and merging them would silently weaken this detector).
+//
+// The loop below still owns what is specific to THIS analyzer: emitting
+// file-shaped findings with a path, a trimmed snippet, and a severity that
+// depends on comment context.
 
-const SECRET_PATTERNS = [
-  {
-    type: "hardcoded_aws_access_key",
-    severity: "critical",
-    regex: /\bAKIA[0-9A-Z]{16}\b/g,
-    recommendation: "Rotate this AWS access key immediately and store credentials in environment variables or AWS Secrets Manager.",
-  },
-  {
-    type: "hardcoded_github_personal_token",
-    severity: "critical",
-    regex: /\bghp_[A-Za-z0-9]{36}\b/g,
-    recommendation: "Revoke this GitHub PAT at github.com/settings/tokens and inject the token via an environment variable.",
-  },
-  {
-    type: "hardcoded_github_fine_grained_token",
-    severity: "critical",
-    regex: /\bgithub_pat_[A-Za-z0-9_]{82,}\b/g,
-    recommendation: "Revoke this GitHub fine-grained PAT and inject the token via an environment variable.",
-  },
-  {
-    type: "hardcoded_stripe_live_key",
-    severity: "critical",
-    regex: /\bsk_live_[A-Za-z0-9]{20,}\b/g,
-    recommendation: "Roll this Stripe live key in the Stripe dashboard immediately — anyone with this key can charge cards on your account.",
-  },
-  {
-    type: "hardcoded_slack_token",
-    severity: "high",
-    regex: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g,
-    recommendation: "Revoke this Slack token in the Slack admin console and inject it via an environment variable.",
-  },
-];
-
-// Strings we consider "obviously a placeholder, not a real secret".
-const PLACEHOLDER_RE = /(\$\{|process\.env|os\.getenv|getenv\s*\(|import\.meta\.env|YOUR_|xxxxx|placeholder|example|fake|<your|<insert|todo|fixme|change[_-]?me|replace[_-]?me)/i;
-
-const GENERIC_SECRET_RE = /(?:api[_-]?key|apikey|access[_-]?token|secret[_-]?key|client[_-]?secret|auth[_-]?token)\s*[:=]\s*["']([^"']{8,})["']/i;
+import {
+  collectSecretsByLine as collectSecretLinesIn,
+  maskSecrets,
+  scanLine,
+} from "./secrets.js";
 
 /**
  * One pass per file: collect every secret string by line, so the global
@@ -182,34 +161,11 @@ const GENERIC_SECRET_RE = /(?:api[_-]?key|apikey|access[_-]?token|secret[_-]?key
  * key in plaintext.
  */
 function collectSecretsByLine(file) {
-  const map = new Map();  // lineNumber -> Set<matchedString>
-  const lines = file.content.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    const text = lines[i];
-    const set = new Set();
-    for (const pat of SECRET_PATTERNS) {
-      pat.regex.lastIndex = 0;
-      let m;
-      while ((m = pat.regex.exec(text)) !== null) set.add(m[0]);
-    }
-    const generic = GENERIC_SECRET_RE.exec(text);
-    if (generic && !PLACEHOLDER_RE.test(generic[1]) && !PLACEHOLDER_RE.test(text)) {
-      set.add(generic[1]);
-    }
-    if (set.size) map.set(i + 1, set);
-  }
-  return map;
+  return collectSecretLinesIn(file.content);
 }
 
 function maskSecretsInSnippet(snippet, secrets) {
-  if (!secrets || secrets.size === 0) return snippet;
-  let out = snippet;
-  // Sort longest-first so longer secrets that contain shorter ones (rare but
-  // possible) get redacted before the shorter substring would partially eat
-  // them.
-  const sorted = Array.from(secrets).sort((a, b) => b.length - a.length);
-  for (const s of sorted) out = out.split(s).join("***REDACTED***");
-  return out;
+  return maskSecrets(snippet, secrets);
 }
 
 
@@ -228,30 +184,19 @@ function detectSecrets(file) {
     const text = lines[i];
     const lineNumber = i + 1;
 
-    for (const pat of SECRET_PATTERNS) {
-      pat.regex.lastIndex = 0;
-      let m;
-      while ((m = pat.regex.exec(text)) !== null) {
-        findings.push({
-          severity: pat.severity,
-          type: pat.type,
-          path: file.path,
-          line: lineNumber,
-          snippet: trimSnippet(text),
-          recommendation: pat.recommendation,
-        });
-      }
-    }
-
-    const generic = GENERIC_SECRET_RE.exec(text);
-    if (generic && !PLACEHOLDER_RE.test(generic[1]) && !PLACEHOLDER_RE.test(text)) {
+    // scanLine returns the high-confidence patterns in declaration order, then
+    // the generic heuristic — the same order this loop emitted them in before
+    // the patterns moved to secrets.js. A `severity: null` hit is the generic
+    // one, which is the only case whose severity depends on where it appeared:
+    // a credential in a comment is still a leak, but a less urgent one.
+    for (const hit of scanLine(text)) {
       findings.push({
-        severity: isCommentLine(text) ? "low" : "high",
-        type: "hardcoded_generic_secret",
+        severity: hit.severity === null ? (isCommentLine(text) ? "low" : "high") : hit.severity,
+        type: hit.type,
         path: file.path,
         line: lineNumber,
         snippet: trimSnippet(text),
-        recommendation: "Move this credential to an environment variable or secret store; never commit raw secrets to source control.",
+        recommendation: hit.recommendation,
       });
     }
   }
