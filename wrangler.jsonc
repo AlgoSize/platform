@@ -9,17 +9,28 @@
   // DEPLOY.md §9 "Move algosize.com off GitHub Pages" for the full cutover
   // (Workers Route + DNS + retiring the GitHub Pages deploy).
   //
-  // It used to be deployed by Cloudflare's own "Workers Builds" git
-  // integration instead. That trigger is gone — deleted after it turned out
-  // to be bound to the WRONG service (see the git history on this file if
-  // you need the postmortem): it was uploading this site's build as a
-  // version on `algosize`, the API Worker's service, not on `algosize-site`.
-  // Nothing was ever routed from it — `versions upload` never routes traffic
-  // — but a version that is a static site sitting on the API Worker's
-  // service is one accidental promotion away from replacing the live API.
-  // A GitHub Actions workflow we control removes that whole class of risk:
-  // it runs `wrangler deploy` (not `versions upload`) against exactly this
-  // config, from a job that only ever touches the service this file names.
+  // It used to ALSO be deployed by Cloudflare's own "Workers Builds" git
+  // integration — past tense for what deploys THIS config; that trigger is
+  // still connected as of this writing and still fires on every push. It
+  // turned out to be bound to the WRONG service: it uploads this site's
+  // build as a version on `algosize`, the API Worker's service, not on
+  // `algosize-site`. Nothing has been routed from it — `versions upload`
+  // never routes traffic — but a version that is a static site sitting on
+  // the API Worker's service is one accidental promotion away from
+  // replacing the live API, and pushes to this repo keep adding more of
+  // them. It needs deleting in the Cloudflare dashboard (Workers & Pages →
+  // algosize → Settings → Build → disconnect the Git integration) — that
+  // is a manual step nothing in this repo can do, and it has NOT been done
+  // yet. Until it is, do not promote any version on the `algosize` service
+  // without first confirming from its content that it is the API, not this
+  // site — `wrangler versions list --name algosize` shows them all.
+  //
+  // The GitHub Actions workflow this file's header describes is a second,
+  // correct deploy path added alongside the still-live bad one, not a
+  // replacement for it yet. It runs `wrangler deploy` (not `versions
+  // upload`) against exactly this config, from a job that only ever
+  // touches the service this file names — so once the dashboard trigger is
+  // gone, this is what keeps `algosize-site` deploying.
   //
   // The service name MUST NOT be `algosize`. That is the API Worker's
   // service (see worker/wrangler.toml), deployed by `worker.yml`. With both
@@ -27,7 +38,7 @@
   // Workers to the same service and the last one to run would win — so an
   // ordinary site change could silently replace the live API, and an API
   // deploy could replace the site. This is not a hypothetical: it is what
-  // the Workers Builds trigger was doing before it was deleted.
+  // the still-connected Workers Builds trigger is doing right now.
   //
   // Related: wrangler resolves its config by walking UP the directory tree,
   // so this file also shadows worker/wrangler.toml for any wrangler command

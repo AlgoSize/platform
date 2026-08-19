@@ -12,6 +12,12 @@ name: Build and deploy site Worker
 # publishes to algosize-site's workers.dev URL; algosize.com keeps being
 # served by GitHub Pages until a human flips the Route.
 #
+# This does NOT stop Cloudflare's own "Workers Builds" git integration,
+# which is a separate, still-connected trigger — see the long comment at
+# the top of wrangler.jsonc for what it does wrong (it deploys onto the API
+# Worker's service, not this one) and why it needs deleting in the
+# dashboard, a step this workflow cannot perform.
+#
 # Required GitHub repo secrets: the same CLOUDFLARE_API_TOKEN and
 # CLOUDFLARE_ACCOUNT_ID that worker.yml uses — see that file's header for how
 # to create them. No new secret is needed here.
