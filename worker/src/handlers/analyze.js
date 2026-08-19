@@ -28,8 +28,7 @@ import {
 import { osvBatchQuery, osvHydrateVulns } from "../analyzers/osv.js";
 import { buildAuditSummary } from "../analyzers/audit.js";
 import { runUserCode } from "../analyzers/sandbox_runner.js";
-import { inferBigO } from "../analyzers/bigo.js";
-import { getRefactorSuggestion } from "../analyzers/llm.js";
+import { validateOptimizerInput, runOptimizer } from "../analyzers/optimizer.js";
 import { queuePersist } from "./runs.js";
 import { getActiveOrg } from "./_orgs.js";
 import { storeReportFor } from "../reports/render.js";
@@ -558,29 +557,6 @@ export async function auditManifests(manifests, fetchImpl, { env, ctx, request, 
 // Algorithm optimizer (Task #16) — sandbox + LLM
 // ---------------------------------------------------------------------------
 
-const ALGO_PROBE_SIZES = [100, 1000, 10000];
-
-/**
- * Generate a synthetic input of the requested size in the same broad shape
- * as the user's sample input. We support two shapes — array and number —
- * which together cover the vast majority of "single-arg algorithm" demos.
- * Anything else returns null and we skip Big-O probing for that run.
- */
-function synthInputForSize(sample, n) {
-  if (Array.isArray(sample)) {
-    // Cycle the user's sample so element types/values stay realistic at
-    // larger sizes (e.g. arrays of strings stay arrays of strings).
-    if (sample.length === 0) {
-      return Array.from({ length: n }, (_, i) => i);
-    }
-    return Array.from({ length: n }, (_, i) => sample[i % sample.length]);
-  }
-  if (typeof sample === "number" && Number.isFinite(sample)) {
-    return n;
-  }
-  return null;
-}
-
 /**
  * Invoke the sandbox. Prefers the SANDBOX service binding when available
  * (so a runaway user loop only burns CPU on the sibling Worker), else falls
@@ -607,76 +583,30 @@ async function runInSandbox(env, code, input) {
   return runUserCode(code, input);
 }
 
-function validateAlgoSandboxInput(body) {
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
-    return { ok: false, error: "invalid_payload", message: "request body must be a JSON object" };
-  }
-  if (typeof body.code !== "string" || body.code.trim() === "") {
-    return { ok: false, error: "invalid_payload", message: "`code` (non-empty string) is required" };
-  }
-  // sampleInput may be any JSON value (array, number, object, etc). It is
-  // optional — if omitted we default to a length-100 integer array, which
-  // is a sensible "first run" for the array-shaped demos in the dashboard.
-  const sampleInput = "sampleInput" in body
-    ? body.sampleInput
-    : Array.from({ length: 100 }, (_, i) => i);
-  return { ok: true, value: { code: body.code, sampleInput } };
-}
-
 async function runAlgoSandbox(body, env) {
-  const v = validateAlgoSandboxInput(body);
+  // The whole pipeline — validation, sample run, Big-O probe, refactor
+  // suggestion — lives in analyzers/optimizer.js so the CI entrypoint
+  // (scripts/optimizer-ci.mjs) runs the exact same implementation. This
+  // wrapper only contributes what is HTTP- or Worker-shaped: the sandbox
+  // service binding and the Response envelope.
+  const v = validateOptimizerInput(body);
   if (!v.ok) return json({ error: v.error, message: v.message }, 400);
-  const { code, sampleInput } = v.value;
 
-  // 1. Single measured run with the user's actual sample input — this is
-  //    the wall-clock + result the dashboard surfaces as the headline number.
-  const sampleRun = await runInSandbox(env, code, sampleInput);
-  if (!sampleRun.ok) {
-    return json({
-      error: sampleRun.error,
-      message: sampleRun.message || "sandbox run failed",
-      ms: sampleRun.ms,
-    }, 400);
+  const result = await runOptimizer(v.value, {
+    runner: (code, input) => runInSandbox(env, code, input),
+    env,
+  });
+  if (!result.ok) {
+    return json({ error: result.error, message: result.message, ms: result.ms }, 400);
   }
-
-  // 2. Big-O probe at 3 sizes. We accept partial failures here — if the
-  //    function blows up on a synthetic input shape, we still return the
-  //    sample-run result with bigO = "unknown" rather than failing the
-  //    whole request.
-  const probePoints = [];
-  let probeNote = null;
-  for (const n of ALGO_PROBE_SIZES) {
-    const synth = synthInputForSize(sampleInput, n);
-    if (synth === null) {
-      probeNote = "Big-O probe skipped: sample input is not an array or number";
-      break;
-    }
-    const r = await runInSandbox(env, code, synth);
-    if (!r.ok) {
-      probeNote = `Big-O probe stopped at n=${n}: ${r.error}`;
-      break;
-    }
-    probePoints.push({ n, ms: r.ms });
-  }
-
-  const bigO = probePoints.length >= 2
-    ? inferBigO(probePoints)
-    : { label: "unknown", exponent: null, points: probePoints, reason: probeNote || "not enough probe points" };
-
-  // 3. LLM refactor suggestion. Falls back to a stub message when
-  //    OPENAI_API_KEY is not configured — never throws.
-  const suggestion = await getRefactorSuggestion(
-    { code, bigO: bigO.label, ms: sampleRun.ms },
-    env || {},
-  );
 
   return json({
-    wallTimeMs: sampleRun.ms,
-    heapBytes: sampleRun.heapBytes,
-    sampleResult: sampleRun.result,
-    truncated: !!sampleRun.truncated,
-    bigO,
-    suggestion,
+    wallTimeMs: result.wallTimeMs,
+    heapBytes: result.heapBytes,
+    sampleResult: result.sampleResult,
+    truncated: result.truncated,
+    bigO: result.bigO,
+    suggestion: result.suggestion,
     sandbox: env && env.SANDBOX ? "service_binding" : "in_process",
   }, 200);
 }

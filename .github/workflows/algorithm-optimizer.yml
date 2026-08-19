@@ -1,0 +1,120 @@
+name: Algorithm optimizer
+
+# Runs the algorithm optimizer's Big-O audit on every pull request, via the
+# same core module the dashboard's /api/analyze/algo endpoint uses
+# (worker/src/analyzers/optimizer.js). Which functions get audited is
+# controlled by optimizer.config.json at the repo root — see the README's
+# "Running the optimizer in CI" section.
+#
+# The sandbox runs IN-PROCESS under Node here (the same instrumented runner
+# the Worker falls back to without its service binding), so no edge runtime,
+# browser, or wrangler dev server is needed.
+#
+# Refactor suggestions are opt-in (flip ENABLE_REFACTOR_SUGGESTIONS below).
+# When enabled they go through Workers AI (Kimi K2.5) via the REST API using
+# CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_AI_TOKEN, falling back to
+# OPENAI_API_KEY. All are read from GitHub Actions secrets — never from a
+# committed .env — and a missing secret degrades to a clear console notice
+# plus stub text in the report, NOT a red build: the Big-O gate is the check,
+# the prose is garnish.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  # Required for the sticky PR comment.
+  pull-requests: write
+
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+    env:
+      # Flip to "true" to include AI refactor suggestions in the report and
+      # PR comment. Needs one of the credential pairs below.
+      ENABLE_REFACTOR_SUGGESTIONS: "false"
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_AI_TOKEN: ${{ secrets.CLOUDFLARE_AI_TOKEN }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    steps:
+      # Full history so `git diff origin/main...HEAD` (the default entry
+      # filter) resolves; a shallow clone would silently widen the audit to
+      # --all instead.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: worker/package-lock.json
+
+      - name: Install worker dependencies
+        working-directory: worker
+        run: npm ci
+
+      - name: Run the optimizer audit
+        working-directory: worker
+        run: npm run optimizer:ci
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: optimizer-report
+          path: optimizer-report.json
+
+      - name: Comment on the pull request
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let report = null;
+            try { report = JSON.parse(fs.readFileSync('optimizer-report.json', 'utf8')); } catch {}
+            const MARKER = '<!-- algorithm-optimizer -->';
+            let body;
+            if (!report) {
+              body = [MARKER, '### Algorithm optimizer', '',
+                      'The audit did not produce a report — see the workflow logs.'].join('\n');
+            } else {
+              const rows = report.results.map((r) => {
+                const mark = r.verdict === 'ok' ? '✅' : r.verdict === 'unknown' ? '❓' : '❌';
+                const measured = r.bigO ? r.bigO.label : '—';
+                return `| ${mark} | \`${r.name}\` | \`${r.functionName}\` | ${measured} | ${r.baseline ? '≤ ' + r.baseline : '—'} | ${r.verdict}${r.error ? ' — ' + r.error : ''} |`;
+              });
+              const suggestions = report.results
+                .filter((r) => r.suggestion && r.suggestion.text)
+                .map((r) => `<details><summary>Refactor suggestion — \`${r.name}\`</summary>\n\n${r.suggestion.text}\n\n${r.suggestion.code ? '```js\n' + r.suggestion.code + '\n```' : ''}\n</details>`);
+              body = [
+                MARKER,
+                '### Algorithm optimizer',
+                '',
+                report.results.length === 0
+                  ? `No audited functions changed in this PR (${report.summary.mode}).`
+                  : ['| | Entry | Function | Measured | Baseline | Verdict |',
+                     '|---|---|---|---|---|---|',
+                     ...rows].join('\n'),
+                '',
+                ...suggestions,
+              ].join('\n');
+            }
+            // One sticky comment per PR, updated in place — same pattern as
+            // the dependency-audit workflow.
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number, per_page: 100,
+            });
+            const existing = comments.find((c) => c.body && c.body.includes(MARKER));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, body,
+              });
+            }

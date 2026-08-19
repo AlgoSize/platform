@@ -1,15 +1,31 @@
-// LLM refactor-suggestion client.
+// LLM client — refactor suggestions for the algorithm optimizer, and the
+// generic chat entrypoint the per-finding fix generator (analyzers/fixgen.js)
+// shares so the provider chain exists exactly once.
 //
-// When deployed on Cloudflare, this uses the Cloudflare Workers AI binding
-// (env.AI). In the Replit dev environment, that binding is unavailable so
-// the function falls back to a descriptive stub — the dashboard remains fully
-// functional, the AI suggestion section just shows an informational notice.
+// Provider chain, first configured one wins:
 //
-// The fetch implementation is injectable via `env.OPENAI_FETCH` so tests can
-// mock the upstream without monkey-patching the global.
+//   1. Workers AI binding (env.AI) — Kimi K2.5 by default. Keyless: the
+//      binding is granted by wrangler.toml's [ai] block, so the deployed
+//      Worker needs no external API secret at all — nothing to provision,
+//      and nothing for a secret wipe to take out.
+//   2. Workers AI REST — for callers OUTSIDE a Worker (the CI entrypoint runs
+//      in Node, where no binding exists). Needs CLOUDFLARE_ACCOUNT_ID +
+//      CLOUDFLARE_AI_TOKEN (a token scoped to Workers AI — NOT the deploy
+//      token, which has no AI permission).
+//   3. OpenAI — the original provider, kept for anyone already running with
+//      OPENAI_API_KEY set.
+//   4. Nothing configured → the caller decides; getRefactorSuggestion falls
+//      back to a descriptive stub so the dashboard stays fully functional.
+//
+// Fetch implementations are injectable (env.OPENAI_FETCH / env.WORKERS_AI_FETCH)
+// so tests can mock either upstream without monkey-patching the global.
 
 const ENDPOINT = "https://api.openai.com/v1/chat/completions";
 const DEFAULT_MODEL = "gpt-4o-mini";
+// The Workers AI catalog slug for Kimi K2.5. Overridable via
+// env.WORKERS_AI_MODEL because catalog ids shift as Cloudflare promotes
+// models — verify against `wrangler ai models list` before changing.
+const DEFAULT_WORKERS_AI_MODEL = "@cf/moonshotai/kimi-k2.5";
 const MAX_TEXT_CHARS = 1500;            // hard ceiling on rendered prose
 const TIMEOUT_MS = 15000;
 
@@ -21,77 +37,153 @@ const SYSTEM_PROMPT =
   "Keep the rewritten function's name and signature identical to the original. " +
   "Do not include any other code blocks or markdown.";
 
+// ---------------------------------------------------------------------------
+// Generic chat — the one provider chain
+// ---------------------------------------------------------------------------
+
+/**
+ * Run one chat exchange through the provider chain.
+ *
+ * @returns {Promise<{ok:true, provider:string, reply:string}
+ *                 | {ok:false, configured:boolean, reason:string}>}
+ *   `configured: false` means NO provider had credentials at all — callers
+ *   render their "how to turn this on" notice. `configured: true` with
+ *   ok:false means a provider was tried and failed; `reason` says how.
+ */
+export async function llmChat({ system, user, maxTokens = 800, temperature = 0.2 }, env) {
+  const messages = [
+    { role: "system", content: system },
+    { role: "user",   content: user },
+  ];
+  let configured = false;
+  let reason = null;
+
+  // 1. Workers AI binding.
+  if (env && env.AI && typeof env.AI.run === "function") {
+    configured = true;
+    try {
+      const out = await env.AI.run(env.WORKERS_AI_MODEL || DEFAULT_WORKERS_AI_MODEL, {
+        messages, max_tokens: maxTokens, temperature,
+      });
+      const reply = out && typeof out.response === "string" ? out.response : "";
+      if (reply.trim()) return { ok: true, provider: "workers-ai", reply };
+      reason = "Workers AI returned an empty reply";
+    } catch (err) {
+      reason = `Workers AI failed: ${err && err.message || err}`;
+    }
+  }
+
+  // 2. Workers AI REST (Node callers — no binding available).
+  if (env && env.CLOUDFLARE_ACCOUNT_ID && env.CLOUDFLARE_AI_TOKEN) {
+    configured = true;
+    const fetchImpl = env.WORKERS_AI_FETCH || (typeof fetch !== "undefined" ? fetch : null);
+    if (!fetchImpl) {
+      reason = "no fetch implementation available";
+    } else {
+      const model = env.WORKERS_AI_MODEL || DEFAULT_WORKERS_AI_MODEL;
+      const url = `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/ai/run/${model}`;
+      const r = await timedJsonFetch(fetchImpl, url, {
+        headers: { authorization: `Bearer ${env.CLOUDFLARE_AI_TOKEN}` },
+        body: { messages, max_tokens: maxTokens, temperature },
+      });
+      if (r.ok) {
+        const reply = r.json && r.json.result && typeof r.json.result.response === "string"
+          ? r.json.result.response : "";
+        if (reply.trim()) return { ok: true, provider: "workers-ai", reply };
+        reason = "Workers AI returned an empty reply";
+      } else {
+        reason = `Workers AI ${r.reason}`;
+      }
+    }
+  }
+
+  // 3. OpenAI.
+  if (env && env.OPENAI_API_KEY) {
+    configured = true;
+    const fetchImpl = env.OPENAI_FETCH || (typeof fetch !== "undefined" ? fetch : null);
+    if (!fetchImpl) {
+      reason = "no fetch implementation available";
+    } else {
+      const r = await timedJsonFetch(fetchImpl, ENDPOINT, {
+        headers: { authorization: `Bearer ${env.OPENAI_API_KEY}` },
+        body: {
+          model: env.OPENAI_MODEL || DEFAULT_MODEL,
+          temperature, max_tokens: maxTokens, messages,
+        },
+      });
+      if (r.ok) {
+        const reply = r.json && r.json.choices && r.json.choices[0] && r.json.choices[0].message
+          ? String(r.json.choices[0].message.content || "") : "";
+        if (reply.trim()) return { ok: true, provider: "openai", reply };
+        reason = "OpenAI returned an empty reply";
+      } else {
+        reason = `OpenAI ${r.reason}`;
+      }
+    }
+  }
+
+  return { ok: false, configured, reason: reason || "no LLM provider configured" };
+}
+
+/** POST JSON with a timeout; normalise every failure to { ok:false, reason }. */
+async function timedJsonFetch(fetchImpl, url, { headers, body }) {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetchImpl(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify(body),
+      signal: ac.signal,
+    });
+  } catch (err) {
+    clearTimeout(t);
+    return { ok: false, reason: `request failed: ${err && err.message || err}` };
+  }
+  clearTimeout(t);
+  if (!res.ok) return { ok: false, reason: `HTTP ${res.status}` };
+  try {
+    return { ok: true, json: await res.json() };
+  } catch {
+    return { ok: false, reason: "returned non-JSON" };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Refactor suggestions (algorithm optimizer)
+// ---------------------------------------------------------------------------
+
 /**
  * @param {object} args
  * @param {string} args.code      User's original function source.
  * @param {string} args.bigO      Inferred Big-O label (e.g. "O(n²)").
  * @param {number} args.ms        Measured wall-clock time on the sample input.
- * @param {object} env            Worker env — reads OPENAI_API_KEY, OPENAI_MODEL,
- *                                and optional OPENAI_FETCH for tests.
+ * @param {object} env            Worker env — see the provider chain above.
  * @returns {Promise<{provider:string, text:string, code:string|null, language:string}>}
  */
 export async function getRefactorSuggestion({ code, bigO, ms }, env) {
-  if (!env || !env.OPENAI_API_KEY) {
-    return stubSuggestion(bigO);
-  }
-
-  const fetchImpl = env.OPENAI_FETCH || (typeof fetch !== "undefined" ? fetch : null);
-  if (!fetchImpl) {
-    return stubSuggestion(bigO, "no fetch implementation available");
-  }
-
   const userPrompt =
     `Detected complexity: ${bigO}.\n` +
     `Measured time on sample input: ${formatMs(ms)}.\n\n` +
     "Original function:\n```js\n" + code + "\n```";
 
-  const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), TIMEOUT_MS);
-  let res;
-  try {
-    res = await fetchImpl(ENDPOINT, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "authorization": `Bearer ${env.OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: env.OPENAI_MODEL || DEFAULT_MODEL,
-        temperature: 0.2,
-        max_tokens: 800,
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user",   content: userPrompt },
-        ],
-      }),
-      signal: ac.signal,
-    });
-  } catch (err) {
-    clearTimeout(t);
-    return stubSuggestion(bigO, `OpenAI request failed: ${err && err.message || err}`);
-  }
-  clearTimeout(t);
-
-  if (!res.ok) {
-    return stubSuggestion(bigO, `OpenAI HTTP ${res.status}`);
-  }
-
-  let json;
-  try { json = await res.json(); }
-  catch { return stubSuggestion(bigO, "OpenAI returned non-JSON"); }
-
-  const reply = json && json.choices && json.choices[0] && json.choices[0].message
-    ? String(json.choices[0].message.content || "")
-    : "";
-
-  return parseLlmReply(reply);
+  const r = await llmChat({ system: SYSTEM_PROMPT, user: userPrompt }, env || {});
+  if (r.ok) return parseLlmReply(r.reply, r.provider);
+  // Unconfigured → the generic "how to turn this on" stub; a configured
+  // provider that failed → the stub carries the reason (tests pin e.g. the
+  // HTTP status surviving into the text).
+  return r.configured ? stubSuggestion(bigO, r.reason) : stubSuggestion(bigO);
 }
 
 /**
  * Extract the first ```js / ```javascript code block and the surrounding prose.
  * Exported so tests can verify parser behaviour deterministically.
+ *
+ * `provider` defaults to "openai" for back-compat with existing callers and
+ * tests; the Workers AI paths pass their own tag.
  */
-export function parseLlmReply(text) {
+export function parseLlmReply(text, provider = "openai") {
   const blockRe = /```(?:js|javascript)?\s*\n([\s\S]*?)```/i;
   const m = blockRe.exec(text);
   const codeBlock = m ? m[1].trim() : null;
@@ -102,7 +194,7 @@ export function parseLlmReply(text) {
     prose = prose.slice(0, MAX_TEXT_CHARS) + "…";
   }
   return {
-    provider: "openai",
+    provider,
     text: prose,
     code: codeBlock,
     language: "javascript",
@@ -110,15 +202,16 @@ export function parseLlmReply(text) {
 }
 
 function stubSuggestion(bigO, why) {
-  // Name the switch that actually turns suggestions on. This code path is
-  // reached precisely when `env.OPENAI_API_KEY` is unset (see
-  // getRefactorSuggestion), so telling the user to deploy to Cloudflare —
-  // which changes nothing on its own — sends them down the wrong path.
+  // Name the switches that actually turn suggestions on. This code path is
+  // reached precisely when no provider is configured (or the configured one
+  // failed), so telling the user to deploy to Cloudflare — which changes
+  // nothing on its own — sends them down the wrong path.
   const baseText = bigO === "unknown"
     ? "We could not measure the function's complexity, so AI refactor suggestions are unavailable for this run."
-    : `Detected complexity: ${bigO}. AI-powered refactor suggestions turn on once OPENAI_API_KEY is set on the Worker ` +
+    : `Detected complexity: ${bigO}. AI-powered refactor suggestions turn on once the Workers AI binding is deployed ` +
+      "(the [ai] block in wrangler.toml) or OPENAI_API_KEY is set on the Worker " +
       "(`wrangler secret put OPENAI_API_KEY`). " +
-      "Complexity analysis, timing, and Big-O detection are fully functional without it.";
+      "Complexity analysis, timing, and Big-O detection are fully functional without either.";
   return {
     provider: "stub",
     text: why ? `${baseText} (${why})` : baseText,

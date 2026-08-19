@@ -82,6 +82,7 @@ import { seedHandler } from "./handlers/_seed.js";
 import { enforceQuota } from "./quota.js";
 import { makeRateLimit, makeApiKeyRateLimit } from "./middleware/rate-limit.js";
 import { captureException } from "./observability.js";
+import { generateFixHandler } from "./handlers/fix.js";
 export { UsageCounter } from "./usage-counter.js";
 
 const router = Router();
@@ -144,6 +145,13 @@ router.post("/api/analyze/algo",    analyzeRateLimit, requireAuth, apiKeyAnalyze
 // submission is a whole repository, so it is metered like any other run
 // rather than being cheaper because it makes no upstream calls.
 router.post("/api/analyze/architecture", analyzeRateLimit, requireAuth, apiKeyAnalyzeRateLimit, enforceQuota(analyzeArchitectureHandler));
+
+// Per-finding fix generation ("Generate fix" on vuln + architecture
+// findings). Rate-limited and authenticated, but deliberately NOT behind
+// enforceQuota: quota counts analyzer RUNS, and a fix request is an add-on
+// to a run that was already counted — double-charging it would make the
+// button feel broken on the last run of a free month.
+router.post("/api/fix", analyzeRateLimit, requireAuth, generateFixHandler);
 
 // ---- Magic-link auth — email-verified sign-in/sign-up ---------------------
 // Replaces the old /api/signup endpoint (which issued a session immediately

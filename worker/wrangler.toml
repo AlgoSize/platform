@@ -64,6 +64,15 @@ bucket_name = "algosize-reports"
 binding = "SANDBOX"
 service = "algosize-sandbox"
 
+# Workers AI — powers the algorithm optimizer's refactor suggestions and the
+# per-finding "Generate fix" endpoint (Kimi K2.5 by default; see
+# analyzers/llm.js for the provider chain). Keyless: the binding IS the
+# credential, so no secret to provision, wipe, or restore. CI cannot use a
+# binding (it runs in Node) — it goes through the Workers AI REST API with
+# CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_AI_TOKEN instead.
+[ai]
+binding = "AI"
+
 # ----------------------------------------------------------------------------
 # Scheduled monitoring (migrations/0006) — Cron Trigger + Queue
 # ----------------------------------------------------------------------------
@@ -242,6 +251,10 @@ bucket_name = "algosize-reports"
 binding = "SANDBOX"
 service = "algosize-sandbox"
 
+# Per-env blocks do not inherit top-level bindings — see the staging comment.
+[env.production.ai]
+binding = "AI"
+
 [[env.production.durable_objects.bindings]]
 name       = "USAGE"
 class_name = "UsageCounter"
@@ -351,6 +364,9 @@ bucket_name = "algosize-reports-staging"
 [[env.staging.services]]
 binding = "SANDBOX"
 service = "algosize-sandbox-staging"
+
+[env.staging.ai]
+binding = "AI"
 
 [[env.staging.durable_objects.bindings]]
 name       = "USAGE"
