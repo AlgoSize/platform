@@ -1,0 +1,61 @@
+Found the actual API for this — Cloudflare Workers Builds triggers are **per-script**, separate from the repo connection, so this can be scoped to just `algosize` without touching whatever repo connection the site legitimately uses:
+
+- `GET /accounts/{account_id}/builds/workers/{external_script_id}/triggers` — list triggers for a script
+- `DELETE /accounts/{account_id}/builds/triggers/{trigger_uuid}` — remove one
+
+Here's the Replit prompt:
+
+---
+
+```
+Diagnose and disconnect the stray Cloudflare Workers Builds Git trigger that's
+firing on every push to any branch and force-deploying the wrong bundle onto
+the `algosize` Worker (wiping its 7 production secrets each time).
+
+Use the existing CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets.
+
+1. List the Workers Builds triggers currently attached to the `algosize`
+   script:
+
+     curl -s -X GET \
+       "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/builds/workers/algosize/triggers" \
+       -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+       -H "Content-Type: application/json"
+
+   If this returns 403/9109 (missing permission), STOP — do not try to widen
+   the token's scope yourself. Report back that the token needs the
+   "Workers CI Read"/"Workers CI Write" permission group added (Cloudflare
+   dashboard → My Profile → API Tokens → edit the token used for CI), and
+   give me the exact error body so I can add that permission.
+
+2. If the list succeeds, show me the full JSON for every trigger returned —
+   trigger_uuid, repo owner/name, branch, build command, deploy command,
+   path_includes, and created_on for each. I need to see this before
+   anything is deleted, in case there's more than one trigger and only one
+   is the stray site-bundle one.
+
+3. Once I confirm which trigger_uuid is the stray one (the one deploying the
+   site bundle instead of the worker/ bundle), delete it:
+
+     curl -s -X DELETE \
+       "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/builds/triggers/{trigger_uuid}" \
+       -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+
+   Do NOT delete a trigger if only one exists and you're not sure it's the
+   stray one, and do NOT touch anything under
+   /builds/repos/connections — that's the account-level GitHub connection,
+   which other Workers (e.g. the marketing site) may legitimately still
+   need. Only remove the per-script trigger on `algosize`.
+
+4. After deleting, re-run step 1's GET to confirm the trigger list for
+   `algosize` is now empty (or no longer contains the stray one), and paste
+   that confirmation back to me.
+
+5. Do not push anything, do not run wrangler, do not touch any secrets in
+   this task — this is purely inspecting and deleting a Workers Builds
+   trigger via the Cloudflare API.
+```
+
+---
+
+A likely snag: the `CLOUDFLARE_API_TOKEN` you're using for `wrangler secret put` was scoped narrowly (Workers Scripts:Edit + Workers KV Storage:Edit + Account:Read) — it may not carry the "Workers CI" permission group these endpoints need. If step 1 403s, the fix is adding that permission to the token in the dashboard (My Profile → API Tokens → edit), not creating a new one, then re-running. Paste back whatever Replit reports and I'll take it from there.
