@@ -247,22 +247,31 @@ name       = "USAGE"
 class_name = "UsageCounter"
 
 [[env.production.migrations]]
-# `new_classes`, NOT `new_sqlite_classes`. A migration tag's contents are
-# history, not intent: v1 was applied to the live script when this line read
-# `new_classes`, so that is what the config must keep saying. Commit d5d38d5
-# rewrote it in place, which is the kind of edit that is silently accepted
-# (remote tag == config tag means wrangler sends no migrations at all and never
-# compares the contents) right up until something does compare them. Moving
-# UsageCounter to SQLite-backed storage needs a NEW tag with a rename/transfer,
-# never an edit to an applied one.
+# `new_sqlite_classes`, NOT `new_classes` — reversed from the previous
+# comment here, which assumed `v1` had already been applied to the live
+# script. It had not. That assumption is what made the "never edit an
+# applied tag" caution below seem to apply; it doesn't, and here's the
+# evidence, not another hypothesis:
 #
-# Restored here on a hypothesis that this was also breaking the
-# "Workers Builds: algosize" check — it was NOT. That check still fails with
-# this reverted, and it fails on a Markdown-only commit too, so its cause is
-# environmental and still unidentified as of this writing. Keep the revert
-# (it is correct on its own terms); do not read it as the fix for that check.
-tag         = "v1"
-new_classes = ["UsageCounter"]
+# A 2026-08-19 deploy (recovering from an unrelated incident — a stray
+# Cloudflare "Workers Builds" Git integration repeatedly overwriting this
+# script, see wrangler.jsonc's header) failed with `wrangler deploy` actively
+# trying to CREATE this class and getting rejected: "Creating new key-value
+# backed Durable Object namespaces is no longer supported on this account.
+# ... [code: 10099]". Wrangler only attempts creation for a tag the remote
+# hasn't recorded as applied — if `v1` had truly been live, this tag would
+# have been skipped, not sent. Confirmed independently via the Cloudflare
+# API (`GET /accounts/{id}/workers/durable_objects/namespaces`): no
+# namespace exists for this script's `UsageCounter` class, or for
+# `algosize-staging`'s. There is no existing data this could be migrating —
+# `v1` never created anything, ever, on either environment.
+#
+# So this edit is not "move existing data to SQLite" (nothing to move) and
+# not "edit an applied tag's meaning out from under it" (nothing applied).
+# It's giving the still-unapplied `v1` the storage backend Cloudflare now
+# requires for any new class, so the next real deploy can create it at all.
+tag                 = "v1"
+new_sqlite_classes  = ["UsageCounter"]
 
 # Scheduled monitoring — see the [triggers]/[[queues]] block near the top for
 # why this is split into a cron + a queue, and for the provisioning steps.
@@ -348,22 +357,15 @@ name       = "USAGE"
 class_name = "UsageCounter"
 
 [[env.staging.migrations]]
-# `new_classes`, NOT `new_sqlite_classes`. A migration tag's contents are
-# history, not intent: v1 was applied to the live script when this line read
-# `new_classes`, so that is what the config must keep saying. Commit d5d38d5
-# rewrote it in place, which is the kind of edit that is silently accepted
-# (remote tag == config tag means wrangler sends no migrations at all and never
-# compares the contents) right up until something does compare them. Moving
-# UsageCounter to SQLite-backed storage needs a NEW tag with a rename/transfer,
-# never an edit to an applied one.
-#
-# Restored here on a hypothesis that this was also breaking the
-# "Workers Builds: algosize" check — it was NOT. That check still fails with
-# this reverted, and it fails on a Markdown-only commit too, so its cause is
-# environmental and still unidentified as of this writing. Keep the revert
-# (it is correct on its own terms); do not read it as the fix for that check.
-tag         = "v1"
-new_classes = ["UsageCounter"]
+# See the matching comment on [[env.production.migrations]] above — same
+# class, same finding. Short version: `v1` was never actually applied on
+# either environment (confirmed via the Cloudflare API, zero Durable Object
+# namespaces exist for either script), Cloudflare's account no longer allows
+# creating a new key-value backed one, and there is no existing data on this
+# environment either, so this is a plain edit to a still-unapplied tag, not
+# a migration of anything.
+tag                 = "v1"
+new_sqlite_classes  = ["UsageCounter"]
 
 # Staging monitors run on their own queue so a staging sweep can never send
 # mail about a production org's repositories. Same 03:00 UTC cadence.
