@@ -168,6 +168,26 @@ console.log("\nthe root wrangler.jsonc can actually build what it deploys\n");
       `"${dir}" is gitignored, so it only ever exists because the build command made it`);
   }
 
+  // Ruby 3.4 moved a set of libraries out of DEFAULT gems and into bundled
+  // gems. A bundled gem is only on the load path if the Gemfile declares it,
+  // so a dependency that quietly `require`s one breaks the moment the build
+  // runs on 3.4 — while still passing locally on an older Ruby, which is
+  // exactly how this reached CI:
+  //
+  //   bundler: failed to load command: jekyll
+  //   'Kernel#require': cannot load such file -- csv (LoadError)
+  //
+  // Nothing in the Gemfile uses these directly. jekyll.rb requires "csv" and
+  // safe_yaml requires "base64", so they are transitive requirements that no
+  // gem declares, which is why they have to be named explicitly.
+  const lock = readFileSync(join(__dirname, "..", "..", "site", "Gemfile.lock"), "utf8");
+  const declared = (lock.match(/^DEPENDENCIES\n([\s\S]*?)\n\n/m) || [])[1] || "";
+  for (const [gem, why] of [["csv", "jekyll.rb"], ["base64", "safe_yaml"]]) {
+    expect(new RegExp(`^\\s+${gem}$`, "m").test(declared),
+      `site/Gemfile declares "${gem}" — required by ${why}, and a bundled rather than ` +
+      "default gem on Ruby >= 3.4, which is what the Cloudflare build image runs");
+  }
+
   // A preview that renders differently from what GitHub Pages serves is worse
   // than no preview: it invites decisions about a build nobody ships.
   const workflow = readFileSync(
