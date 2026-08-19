@@ -1760,15 +1760,22 @@ hostname that already has an API route.
 ### 9.2 Prove it end-to-end on `staging.algosize.com` first
 
 `staging.algosize.com/api/*` already routes to the staging Worker (§7).
-Adding a second route for everything else lets you test the full
-site + API + Stripe-test-mode flow on a hostname with zero production
-traffic, before algosize.com is touched at all.
+The staging catch-all route is **already checked into `wrangler.jsonc`** —
+same mechanism the API Worker's own `algosize.com/api/*` route uses (§4.2):
+a `routes` entry, applied by `wrangler deploy`, no dashboard click. It lets
+you test the full site + API + Stripe-test-mode flow on a hostname with
+zero production traffic, before algosize.com is touched at all. (More
+specific patterns win, so it coexists with the existing
+`staging.algosize.com/api/*` route without conflict — API calls still reach
+the staging Worker.)
 
-In the Cloudflare dashboard: **Workers & Pages → algosize-site → Settings →
-Domains & Routes → Add → Route**. Pattern `staging.algosize.com/*`, zone
-`algosize.com`. (More specific patterns win, so this coexists with the
-existing `staging.algosize.com/api/*` route without conflict — API calls
-still reach the staging Worker.)
+It goes live on the next `site-worker.yml` run — i.e. the next push to
+`main` touching `site/**` or `wrangler.jsonc`. If you need it live sooner,
+from the repo root (same invocation `site-worker.yml` uses):
+
+```bash
+worker/node_modules/.bin/wrangler deploy --config wrangler.jsonc
+```
 
 Verify:
 
@@ -1795,14 +1802,25 @@ it once you've moved on; either is safe.
 
 ### 9.3 Cut production over
 
-Once §9.2 is confirmed: **Workers & Pages → algosize-site → Settings →
-Domains & Routes → Add → Route**. Pattern `algosize.com/*`, zone
-`algosize.com`.
+Once §9.2 is confirmed working: add a THIRD `routes` entry to the root
+`wrangler.jsonc`, alongside the staging one —
+
+```jsonc
+"routes": [
+  { "pattern": "staging.algosize.com/*", "zone_name": "algosize.com" },
+  { "pattern": "algosize.com/*", "zone_name": "algosize.com" }
+],
+```
+
+— as its own commit, on its own, reviewed as the deliberate "go live" change
+it is. (`test-wrangler-config.mjs` asserts this entry is absent until you
+add it, specifically so it can't land as a side effect of an unrelated site
+change.) Push to `main`; `site-worker.yml` deploys it.
 
 The moment this route exists, Cloudflare stops falling through to the
 proxied GitHub Pages origin for anything that isn't `/api/*` — routed
 requests are handled entirely at the edge and never reach origin, so this
-takes effect immediately, without a DNS change. `algosize.com/api/*`
+takes effect on that push, without a DNS change. `algosize.com/api/*`
 continues to win over the new catch-all for its own requests, same
 specificity rule as staging.
 
@@ -1821,10 +1839,14 @@ Then check the product actually works from a browser: sign in, dashboard,
 — same hostname, same-origin API calls exactly as before — so a working
 staging rehearsal in §9.2 is a strong signal this will be uneventful.
 
-**Rollback, if anything looks wrong:** delete the `algosize.com/*` route
-you just added (same Domains & Routes screen). GitHub Pages has been
-serving unmodified the entire time — nothing in §9.1–9.3 touches it — so
-removing the route is a complete, instant revert.
+**Rollback, if anything looks wrong:** revert the commit that added the
+`algosize.com/*` entry (or delete that one line) and push — the reverse of
+how it went live. Fastest path if you don't want to wait for a full CI run:
+`worker/node_modules/.bin/wrangler deploy --config wrangler.jsonc` from the
+repo root, same as §9.2's manual command, run against the reverted config.
+GitHub Pages has been serving unmodified the entire time — nothing in
+§9.1–9.3 touches it — so removing the route is a complete revert either way,
+just gated on how fast you can get the reverted config deployed.
 
 ### 9.4 Retire GitHub Pages
 

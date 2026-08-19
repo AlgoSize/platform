@@ -175,6 +175,26 @@ console.log("\nthe root wrangler.jsonc can actually build what it deploys\n");
   expect(site.assets && site.assets.html_handling === "auto-trailing-slash",
     "assets.html_handling is \"auto-trailing-slash\", matching Jekyll's directory-style permalinks");
 
+  // The staged-cutover guard rail. DEPLOY.md §9 is only a safe plan if the
+  // production route lands in its own reviewed commit, deliberately, after
+  // the staging rehearsal — not as a side effect of an unrelated site change
+  // landing on main. This is the test that would catch that happening by
+  // accident: a production route showing up here fails loudly instead of
+  // silently going live on the next push to main.
+  const routes = (site.routes || []).map((r) => r.pattern);
+  expect(routes.includes("staging.algosize.com/*"),
+    "the staging route (DEPLOY.md §9.2) is present — zero production traffic, safe to ship any time");
+  expect(!routes.some((p) => /^algosize\.com\/\*?$/.test(p)),
+    "the production route (DEPLOY.md §9.3) is NOT present yet — that entry is a deliberate, " +
+    "separate, later commit, not something that should ride along with an unrelated change");
+
+  // routes.length === 0 is what makes workers_dev default true; the moment
+  // routes is non-empty that default flips, and without this key the
+  // workers.dev URL DEPLOY.md §9.1 relies on would silently go dark.
+  expect(site.workers_dev === true,
+    "workers_dev is explicitly true, so adding routes above didn't silently disable the " +
+    "workers.dev preview URL §9.1 depends on");
+
   const cmd = site.build && site.build.command;
   expect(Boolean(cmd),
     "and a build command that produces it — an assets directory nothing builds is the exact " +
@@ -210,13 +230,15 @@ console.log("\nthe root wrangler.jsonc can actually build what it deploys\n");
       "default gem on Ruby >= 3.4, which is what the Cloudflare build image runs");
   }
 
-  // A build that renders differently from what jekyll.yml produced is worse
+  // A build that renders differently from what jekyll.yml produces is worse
   // than no site: it invites decisions about a build nobody actually shipped.
+  // (jekyll.yml is still live — GitHub Pages retires in DEPLOY.md §9.4, not
+  // yet — so this is two ACTIVE pipelines that have to keep agreeing.)
   const workflow = readFileSync(
     join(__dirname, "..", "..", ".github", "workflows", "jekyll.yml"), "utf8");
   for (const flag of ["_config.yml,_config.production.yml", "JEKYLL_ENV"]) {
     expect(cmd.includes(flag) && workflow.includes(flag),
-      `the site Worker build and the (retired) Pages build agree on ${flag}`);
+      `the site Worker build and the still-live Pages build agree on ${flag}`);
   }
 
   // site-worker.yml is what actually deploys this config now — the

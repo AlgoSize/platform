@@ -61,8 +61,9 @@
   //
   // The command mirrors .github/workflows/jekyll.yml exactly — same config
   // pair, same JEKYLL_ENV — so what deploys here is identical to what the
-  // (now-retired) GitHub Pages build produced. `cwd` is relative to the repo
-  // root, which is where `wrangler deploy` is invoked from.
+  // GitHub Pages build produces (Pages is still live; see `routes` below
+  // and DEPLOY.md §9 for the plan to retire it). `cwd` is relative to the
+  // repo root, which is where `wrangler deploy` is invoked from.
   //
   // The Ruby version this runs under is whatever site-worker.yml pins via
   // ruby/setup-ruby — deliberately NOT auto-detected the way Cloudflare's
@@ -92,6 +93,33 @@
     // an empty 404 response with no body.
     "not_found_handling": "404-page"
   },
+  // A Cloudflare Workers Route, applied on every `wrangler deploy` — the
+  // same mechanism worker/wrangler.toml already uses for
+  // `algosize.com/api/*` (see DEPLOY.md §4.2). No dashboard click: this
+  // config, reviewed in a diff, IS the route.
+  //
+  // Deliberately staging ONLY. `staging.algosize.com/api/*` already routes
+  // to the staging API Worker (worker/wrangler.toml [env.staging]) — more
+  // specific patterns win, so that keeps working unchanged; everything else
+  // on that hostname now comes from this Worker instead of falling through
+  // to GitHub Pages. This is DEPLOY.md §9.2, the full-flow rehearsal: it
+  // costs nothing (zero production traffic) and is safe to ship any time.
+  //
+  // Adding a THIRD entry here for `algosize.com/*` is §9.3 — the actual
+  // production cutover. Deliberately not in this diff: that entry is meant
+  // to land in its own reviewed commit, after the staging rehearsal above
+  // has been exercised, not as a side effect of an unrelated site change
+  // landing on main. See DEPLOY.md §9.3 before adding it.
+  "routes": [
+    { "pattern": "staging.algosize.com/*", "zone_name": "algosize.com" }
+  ],
+  // Explicit rather than relying on the default. Wrangler's default is
+  // `workers_dev = routes.length === 0` — true when routes is empty, false
+  // the moment a route is added. Without this, adding the staging route
+  // above would silently kill the workers.dev preview URL that DEPLOY.md
+  // §9.1 uses to confirm the Worker deploys and serves correctly on its own,
+  // independent of any route.
+  "workers_dev": true,
   "compatibility_flags": [
     "nodejs_compat"
   ]
