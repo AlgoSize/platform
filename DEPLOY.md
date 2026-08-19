@@ -1701,6 +1701,32 @@ itself is wrong, revoked, or a restricted key without read access to billing
 settings — a broken deployment rather than a failed check, the same distinction
 §8.2's schema group draws.
 
+### 8.5 Verifying the customer-facing CI integration
+
+`.github/workflows/algosize-audit.yml` in this repo is not just an example —
+it's the same file `GET /api/ci/snippet` generates for a customer, committed
+here so this repo is its own first customer. Verifying `POST /api/ci/runs`
+end-to-end means watching this workflow actually run, not just reading its
+YAML.
+
+1. Create an API key on the [Team screen](https://algosize.com/dashboard/#/team)
+   (owner/admin only — the key authenticates as the org, not a person).
+2. Add it as a repository secret named `ALGOSIZE_API_KEY`
+   (Settings → Secrets and variables → Actions). The workflow reads exactly
+   that name and skips itself with a `::notice`, never a red build, if it's
+   absent — so this step is safe to defer.
+3. Open any PR. The workflow fires on `pull_request`, collects
+   `worker/package-lock.json` and `worker-sandbox/package-lock.json` (the
+   only lockfiles this repo has), and posts them to `/api/ci/runs`.
+
+A working run leaves three traces, each proving a different part of the
+path: a sticky PR comment (proves the workflow → API round-trip and
+`persistRun` succeeded), a SARIF upload on the repo's Security tab (proves
+`GET /api/runs/:id/report?format=sarif` — a route no browser session ever
+exercises), and a new row in the dashboard's runs feed under **Monitors → CI**
+(proves the API-key auth path in `worker/src/auth.js` end-to-end, not just
+the cookie path every other dashboard click uses).
+
 ---
 
 ## 9. Move algosize.com off GitHub Pages onto the site Worker
