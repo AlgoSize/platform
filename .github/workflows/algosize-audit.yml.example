@@ -40,35 +40,116 @@ jobs:
             echo "::notice::ALGOSIZE_API_KEY is not set — skipping the dependency audit. Add the secret to enable it."
           fi
 
-      - name: Collect lockfiles
+      # Collects BOTH analyzers' inputs in one pass, so the pipeline makes a
+      # single request and the dashboard gets a dependency audit and an
+      # Architecture X-ray from the same commit.
+      #
+      # Everything starts from `git ls-files`, which is the whole trick: it
+      # lists tracked files only, so build output, node_modules and anything
+      # else gitignored is excluded without maintaining a denylist that would
+      # rot. Nothing here reaches outside the checkout.
+      - name: Collect lockfiles and architecture inputs
         id: collect
         if: steps.key.outputs.present == 'true'
         run: |
-          python3 - <<'PY' > payload.json
+          python3 - <<'PY'
           import json, os, subprocess
-          NAMES = {"package-lock.json", "yarn.lock", "requirements.txt", "Gemfile.lock", "go.sum"}
-          files = subprocess.run(["git", "ls-files"], capture_output=True, text=True).stdout.split()
-          out = []
-          for p in files:
-              if os.path.basename(p) not in NAMES:
-                  continue
+
+          LOCK_NAMES = {"package-lock.json", "yarn.lock", "requirements.txt",
+                        "Gemfile.lock", "go.sum"}
+          # What the architecture analyzer actually parses: service topology
+          # from compose/wrangler/Terraform/k8s, plus source for the import
+          # edges between them.
+          CONFIG_NAMES = {"wrangler.toml", "package.json", "_config.yml", "_config.yaml",
+                          "docker-compose.yml", "docker-compose.yaml",
+                          "compose.yml", "compose.yaml"}
+          CONFIG_SUFFIX = (".tf", ".yml", ".yaml")
+          SOURCE_SUFFIX = (".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx")
+
+          # Below the server's own caps, so a repo that is merely large gets a
+          # complete answer and only a genuinely huge one gets a flagged
+          # partial. The server reports its own truncation independently.
+          MAX_FILES, MAX_TOTAL, MAX_ONE = 1500, 10 * 1024 * 1024, 512 * 1024
+
+          tracked = subprocess.run(["git", "ls-files"],
+                                   capture_output=True, text=True).stdout.split()
+
+          def read(p):
               try:
                   with open(p, encoding="utf-8") as fh:
-                      out.append({"path": p, "content": fh.read()})
+                      return fh.read()
               except (OSError, UnicodeDecodeError):
-                  pass
-          print(json.dumps({
-              "repo": os.environ["GITHUB_REPOSITORY"],
-              "ref": os.environ["GITHUB_REF"],
-              "commit_sha": os.environ["GITHUB_SHA"],
-              "fail_on": "high",
-              "lockfiles": out,
-          }))
+                  return None
+
+          # .env files are never sent. The analyzer does scan them for
+          # hardcoded secrets, but a CI job shipping a real .env to any API is
+          # a worse trade than the finding is worth — and a committed .env is
+          # a problem to fix at the source, not to inventory remotely.
+          def is_env(p):
+              b = os.path.basename(p)
+              return b == ".env" or b.startswith(".env.")
+
+          def is_config(p):
+              b = os.path.basename(p)
+              return (b in CONFIG_NAMES
+                      or b.startswith("Dockerfile")
+                      or p.endswith(CONFIG_SUFFIX))
+
+          locks = []
+          for p in tracked:
+              if os.path.basename(p) in LOCK_NAMES:
+                  c = read(p)
+                  if c is not None:
+                      locks.append({"path": p, "content": c})
+
+          candidates = [p for p in tracked if not is_env(p)]
+          # Configs first: they carry the topology. If a budget runs out it
+          # should cost import edges, never whole services.
+          ordered = ([p for p in candidates if is_config(p)]
+                     + [p for p in candidates if p.endswith(SOURCE_SUFFIX)])
+
+          arch, total, truncated = [], 0, False
+          for p in ordered:
+              if len(arch) >= MAX_FILES:
+                  truncated = True
+                  break
+              c = read(p)
+              if c is None:
+                  continue
+              n = len(c.encode("utf-8"))
+              if n > MAX_ONE:
+                  truncated = True
+                  continue
+              if total + n > MAX_TOTAL:
+                  truncated = True
+                  break
+              total += n
+              arch.append({"path": p, "content": c})
+
+          with open("payload.json", "w", encoding="utf-8") as fh:
+              json.dump({
+                  "repo": os.environ["GITHUB_REPOSITORY"],
+                  "ref": os.environ["GITHUB_REF"],
+                  "commit_sha": os.environ["GITHUB_SHA"],
+                  "fail_on": "high",
+                  "arch_fail_on": "none",
+                  "lockfiles": locks,
+                  "files": arch,
+              }, fh)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write("lockfiles=%d\n" % len(locks))
+              out.write("archfiles=%d\n" % len(arch))
+          if truncated:
+              print("::notice::Architecture inputs were capped at %d files / %d MB; "
+                    "the analysis will report itself as partial."
+                    % (MAX_FILES, MAX_TOTAL // 1024 // 1024))
+          print("Collected %d lockfile(s) and %d architecture input(s)."
+                % (len(locks), len(arch)))
           PY
-          echo "count=$(python3 -c 'import json;print(len(json.load(open("payload.json"))["lockfiles"]))')" >> "$GITHUB_OUTPUT"
 
       - name: Run the Algosize audit
-        if: steps.key.outputs.present == 'true' && steps.collect.outputs.count != '0'
+        if: steps.key.outputs.present == 'true' && (steps.collect.outputs.lockfiles != '0' || steps.collect.outputs.archfiles != '0')
         id: audit
         run: |
           HTTP=$(curl -sS -o response.json -w '%{http_code}' \
@@ -85,8 +166,25 @@ jobs:
             echo "run_id=$(jq -r '.runId // empty' response.json)"
             echo "failed=$(jq -r '.failed' response.json)"
             echo "report_url=$(jq -r '.reportUrl // empty' response.json)"
+            echo "arch_run_id=$(jq -r '.architecture.runId // empty' response.json)"
           } >> "$GITHUB_OUTPUT"
-          jq -r '"| Severity | Count |\n|---|---|\n| Critical | \(.summary.critical) |\n| High | \(.summary.high) |\n| Medium | \(.summary.medium) |\n| Low | \(.summary.low) |"' response.json > table.md
+          # The dependency table only exists when lockfiles were submitted; a
+          # repo with none still gets an architecture summary rather than an
+          # empty comment claiming zero advisories.
+          : > table.md
+          if [ "$(jq -r 'has("summary") and (.runId != null)' response.json)" = "true" ]; then
+            jq -r '"| Severity | Count |\n|---|---|\n| Critical | \(.summary.critical) |\n| High | \(.summary.high) |\n| Medium | \(.summary.medium) |\n| Low | \(.summary.low) |"' response.json >> table.md
+          fi
+          if [ "$(jq -r 'has("architecture")' response.json)" = "true" ]; then
+            {
+              echo ""
+              jq -r '"**Architecture X-ray** · \(.architecture.summary.clusters) clusters · \(.architecture.summary.nodes) services · \(.architecture.summary.findings) findings (\(.architecture.summary.bySeverity.critical) critical, \(.architecture.summary.bySeverity.high) high)"' response.json
+              if [ "$(jq -r '.architecture.summary.complete' response.json)" != "true" ]; then
+                echo ""
+                echo "_Coverage was partial — some files were skipped or capped, so these counts are a lower bound._"
+              fi
+            } >> table.md
+          fi
 
       - name: Download the SARIF report
         if: steps.audit.outputs.run_id != ''
@@ -138,8 +236,12 @@ jobs:
               });
             }
 
+      # Trips on the dependency audit's 'high' threshold, and on the
+      # architecture analysis only if arch_fail_on is set to something other
+      # than "none" (currently 'none') — a design finding should not
+      # break a build unless someone chose that.
       - name: Fail the build on new findings
         if: steps.audit.outputs.failed == 'true'
         run: |
-          echo "::error::Algosize found advisories at or above the 'high' threshold. See ${{ steps.audit.outputs.report_url }}"
+          echo "::error::Algosize found findings at or above the configured threshold (dependencies: 'high', architecture: 'none'). See ${{ steps.audit.outputs.report_url }}"
           exit 1

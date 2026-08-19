@@ -1,7 +1,22 @@
 // CI ingestion — the endpoint a customer's build pipeline posts to.
 //
-//   POST /api/ci/runs      run the audit on submitted lockfiles, store a run
+//   POST /api/ci/runs      run the audit on submitted lockfiles and/or the
+//                          architecture analysis on submitted manifests and
+//                          source, storing one run per analyzer
 //   GET  /api/ci/snippet   the workflow YAML, for the dashboard to render
+//
+// TWO ANALYZERS, ONE REQUEST. `lockfiles` drives the dependency audit and
+// `files` drives the Architecture X-ray; both are optional and at least one
+// must be present. They travel together because a pipeline that has already
+// checked out the repository should not pay for two round trips, and because
+// one CI invocation is one logical run of "audit my repo" — the quota gate
+// upstream counts it once for the same reason.
+//
+// Each analyzer still files its OWN row (analyzer "vuln" / "arch", both with
+// source "ci"), because the runs table stores one analyzer per row and the
+// dashboard's feed filters on it. A combined row would have to invent a
+// severity scale spanning advisories and architecture findings, which are not
+// the same unit.
 //
 // API KEY ONLY. A cookie session is refused even though requireAuth would
 // happily accept one, for two reasons. A browser session is a human sitting
@@ -22,6 +37,7 @@ import { auditManifests } from "./analyze.js";
 import { persistRun } from "./runs.js";
 import { storeReportFor } from "../reports/render.js";
 import { SUPPORTED_FILES as LOCKFILE_NAMES, MAX_LOCKFILE_BYTES } from "../analyzers/lockfile.js";
+import { validateArchitectureInput, analyzeArchitecture } from "../analyzers/architecture.js";
 import { captureException } from "../observability.js";
 
 // Total submitted bytes. Generous next to the per-file cap (a monorepo can
@@ -35,6 +51,14 @@ export const MAX_LOCKFILES = 50;
 const SEVERITY_ORDER = ["critical", "high", "medium", "low"];
 const FAIL_ON_VALUES = [...SEVERITY_ORDER, "none"];
 const DEFAULT_FAIL_ON = "high";
+
+// Architecture findings do NOT break the build unless asked to. A published
+// advisory is a fact about a version; an architecture finding is a judgement
+// about a design, and the two do not deserve the same default. A pipeline that
+// starts going red on design opinions the moment someone adds `files` to their
+// payload is a pipeline people delete — the same reasoning the workflow's
+// missing-key guard is built on. Opt in with `arch_fail_on`.
+const DEFAULT_ARCH_FAIL_ON = "none";
 
 const json = (body, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -70,11 +94,14 @@ function validate(body) {
     return { ok: false, status: 400, error: "invalid_payload", message: "Request body must be a JSON object." };
   }
 
-  const lockfiles = body.lockfiles;
-  if (!Array.isArray(lockfiles) || lockfiles.length === 0) {
+  const lockfiles = Array.isArray(body.lockfiles) ? body.lockfiles : [];
+  const archFiles = Array.isArray(body.files) ? body.files : [];
+
+  if (lockfiles.length === 0 && archFiles.length === 0) {
     return {
-      ok: false, status: 400, error: "no_lockfiles",
-      message: `Provide \`lockfiles\`: an array of { path, content }. Supported files: ${LOCKFILE_NAMES.join(", ")}.`,
+      ok: false, status: 400, error: "no_inputs",
+      message: "Provide `lockfiles` (dependency audit) and/or `files` (architecture analysis), " +
+               `each an array of { path, content }. Supported lockfiles: ${LOCKFILE_NAMES.join(", ")}.`,
     };
   }
   if (lockfiles.length > MAX_LOCKFILES) {
@@ -89,6 +116,16 @@ function validate(body) {
     return {
       ok: false, status: 400, error: "invalid_fail_on",
       message: `\`fail_on\` must be one of: ${FAIL_ON_VALUES.join(", ")}.`,
+    };
+  }
+
+  const archFailOn = body.arch_fail_on === undefined || body.arch_fail_on === null
+    ? DEFAULT_ARCH_FAIL_ON
+    : body.arch_fail_on;
+  if (!FAIL_ON_VALUES.includes(archFailOn)) {
+    return {
+      ok: false, status: 400, error: "invalid_arch_fail_on",
+      message: `\`arch_fail_on\` must be one of: ${FAIL_ON_VALUES.join(", ")}.`,
     };
   }
 
@@ -125,11 +162,28 @@ function validate(body) {
     manifests.push({ filename, path, content });
   }
 
-  if (manifests.length === 0) {
+  // Only fatal when there is nothing else to do. A workflow that globs the
+  // repo can legitimately hand us architecture inputs and no recognisable
+  // lockfile — failing that run would report the whole audit as broken over
+  // the half the caller never asked for.
+  if (manifests.length === 0 && archFiles.length === 0) {
     return {
       ok: false, status: 400, error: "no_supported_lockfiles",
       message: `None of the submitted files is a supported lockfile. Supported: ${LOCKFILE_NAMES.join(", ")}.`,
     };
+  }
+
+  // Architecture input is validated by the analyzer's OWN validator, not a
+  // second copy of the same rules here: the caps, the oversized-file handling
+  // and the wording then cannot drift from the dashboard path that shares it.
+  let archInput = null;
+  if (archFiles.length > 0) {
+    const av = validateArchitectureInput({ files: archFiles });
+    if (!av.ok) {
+      const status = av.error === "too_many_files" || av.error === "payload_too_large" ? 413 : 400;
+      return { ok: false, status, error: av.error, message: av.message };
+    }
+    archInput = av.value;
   }
 
   return {
@@ -139,7 +193,9 @@ function validate(body) {
       ref:       typeof body.ref === "string" ? body.ref.slice(0, 200) : null,
       commitSha: typeof body.commit_sha === "string" ? body.commit_sha.slice(0, 64) : null,
       failOn,
+      archFailOn,
       manifests,
+      archInput,
     },
   };
 }
@@ -166,70 +222,149 @@ export async function ciRunHandler(request, env, ctx) {
   if (!v.ok) return json({ error: v.error, message: v.message }, v.status);
 
   const fetchImpl = (env && env.FETCH) || globalThis.fetch;
-  const audit = await auditManifests(v.value.manifests, fetchImpl, { env, ctx, request });
-  if (!audit.ok) return json(audit.body, audit.status);
+  const origin = (env.SITE_ORIGIN || "").replace(/\/$/, "");
+  const ciContext = { repo: v.value.repo, ref: v.value.ref, commitSha: v.value.commitSha };
 
-  const counts = audit.result.counts || {};
-  const failed = shouldFail(counts, v.value.failOn);
+  // ---------------------------------------------------------------------
+  // Dependency audit — only when lockfiles were submitted
+  // ---------------------------------------------------------------------
+  let vuln = null;
+  if (v.value.manifests.length > 0) {
+    const audit = await auditManifests(v.value.manifests, fetchImpl, { env, ctx, request });
+    // A failed audit is still fatal for the whole request: it means we could
+    // not answer the question the build is blocking on, and returning 200 with
+    // a half-answer would let a broken audit read as a clean one.
+    if (!audit.ok) return json(audit.body, audit.status);
 
-  // The stored result carries the CI context alongside the audit, so the
-  // dashboard row can say which commit it was and link back to the build.
-  const result = {
-    ...audit.result,
-    ci: { repo: v.value.repo, ref: v.value.ref, commitSha: v.value.commitSha, failOn: v.value.failOn, failed },
-  };
+    const counts = audit.result.counts || {};
+    const failed = shouldFail(counts, v.value.failOn);
 
-  let run = null;
-  try {
-    // Awaited, not queued: the response has to carry the runId, and a report
-    // URL pointing at a row that does not exist yet would 404 the moment the
-    // workflow followed it.
-    run = await persistRun(env, {
-      orgId,
-      userId: null,          // a key authenticates as the org; no human ran this
-      analyzer: "vuln",
-      source: "ci",
-      input: {
-        repo: v.value.repo, ref: v.value.ref, commitSha: v.value.commitSha,
-        // Paths only. The lockfiles themselves are the customer's source; the
-        // audit has already extracted everything we need from them.
-        lockfiles: v.value.manifests.map((m) => m.path),
-      },
-      result,
-    });
-  } catch (err) {
-    await captureException(env, ctx, err, { request, tags: { source: "ci_ingest", phase: "persist" } });
-  }
+    // The stored result carries the CI context alongside the audit, so the
+    // dashboard row can say which commit it was and link back to the build.
+    const result = {
+      ...audit.result,
+      ci: { ...ciContext, failOn: v.value.failOn, failed },
+    };
 
-  // Render the client-facing report into R2 while the build waits for nothing:
-  // this is queued, not awaited, because the workflow only needs the verdict
-  // and the report URL. No-ops when the bucket is unbound.
-  if (run) {
-    const stored = storeReportFor(env, ctx, run).catch(() => null);
-    if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(stored);
-  }
+    let run = null;
+    try {
+      // Awaited, not queued: the response has to carry the runId, and a report
+      // URL pointing at a row that does not exist yet would 404 the moment the
+      // workflow followed it.
+      run = await persistRun(env, {
+        orgId,
+        userId: null,          // a key authenticates as the org; no human ran this
+        analyzer: "vuln",
+        source: "ci",
+        input: {
+          ...ciContext,
+          // Paths only. The lockfiles themselves are the customer's source; the
+          // audit has already extracted everything we need from them.
+          lockfiles: v.value.manifests.map((m) => m.path),
+        },
+        result,
+      });
+    } catch (err) {
+      await captureException(env, ctx, err, { request, tags: { source: "ci_ingest", phase: "persist" } });
+    }
 
-  if (!run) {
-    // The audit succeeded but we could not file it. Returning the verdict is
-    // still the right call — the build gets its answer — but the response must
-    // not hand back a report URL that will 404.
-    return json({
-      runId: null,
-      reportUrl: null,
+    // Render the client-facing report into R2 while the build waits for nothing:
+    // this is queued, not awaited, because the workflow only needs the verdict
+    // and the report URL. No-ops when the bucket is unbound.
+    if (run) {
+      const stored = storeReportFor(env, ctx, run).catch(() => null);
+      if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(stored);
+    }
+
+    vuln = {
+      runId: run ? run.id : null,
+      reportUrl: run ? `${origin}/api/runs/${run.id}/report` : null,
       summary: pickCounts(counts),
       worstSeverity: worstSeverityOf(counts),
       failed,
-      warning: "The audit ran but the result could not be saved, so it will not appear in the dashboard.",
-    }, 200);
+      // The audit succeeded but we could not file it. Returning the verdict is
+      // still the right call — the build gets its answer — but the response must
+      // not hand back a report URL that will 404.
+      ...(run ? {} : { warning: "The audit ran but the result could not be saved, so it will not appear in the dashboard." }),
+    };
   }
 
-  const origin = (env.SITE_ORIGIN || "").replace(/\/$/, "");
+  // ---------------------------------------------------------------------
+  // Architecture X-ray — only when `files` were submitted
+  // ---------------------------------------------------------------------
+  let architecture = null;
+  if (v.value.archInput) {
+    let archResult = null;
+    try {
+      archResult = analyzeArchitecture(v.value.archInput);
+    } catch (err) {
+      await captureException(env, ctx, err, {
+        request, tags: { source: "ci_ingest", phase: "architecture" },
+      });
+      // With no dependency audit to fall back on there is nothing to return,
+      // so this is the whole request's failure. With one, the build still gets
+      // its primary verdict and the architecture half reports its own failure
+      // rather than discarding an audit that worked.
+      if (!vuln) {
+        return json({ error: "analyzer_failed", message: "Could not analyze the submitted files." }, 500);
+      }
+      architecture = { runId: null, error: "analyzer_failed", failed: false };
+    }
+
+    if (archResult) {
+      const bySeverity = (archResult.summary && archResult.summary.bySeverity) || {};
+      const archFailed = shouldFail(bySeverity, v.value.archFailOn);
+
+      let archRun = null;
+      try {
+        archRun = await persistRun(env, {
+          orgId,
+          userId: null,
+          analyzer: "arch",
+          source: "ci",
+          // Findings and paths, never the submitted source. An architecture
+          // submission is a slice of the customer's codebase; storing it would
+          // make run history a second copy of their repository — the same
+          // reasoning the dashboard's architecture handler is built on.
+          input: {
+            ...ciContext,
+            fileCount: v.value.archInput.files.length,
+            paths: v.value.archInput.files.slice(0, 50).map((f) => f.path),
+          },
+          result: {
+            ...archResult,
+            ci: { ...ciContext, failOn: v.value.archFailOn, failed: archFailed },
+          },
+        });
+      } catch (err) {
+        await captureException(env, ctx, err, {
+          request, tags: { source: "ci_ingest", phase: "persist_architecture" },
+        });
+      }
+
+      architecture = {
+        runId: archRun ? archRun.id : null,
+        summary: archResult.summary,
+        worstSeverity: worstSeverityOf(bySeverity),
+        failed: archFailed,
+        ...(archRun ? {} : { warning: "The analysis ran but the result could not be saved, so it will not appear in the dashboard." }),
+      };
+    }
+  }
+
+  // Top-level fields keep describing the dependency audit, so every existing
+  // consumer — including the workflow's own jq — reads the same shape it
+  // always has. `failed` is the verdict ACROSS both analyzers, which is what a
+  // build gates on; architecture contributes to it only when the caller opted
+  // in via `arch_fail_on`, which defaults to "none".
   return json({
-    runId: run.id,
-    reportUrl: `${origin}/api/runs/${run.id}/report`,
-    summary: pickCounts(counts),
-    worstSeverity: worstSeverityOf(counts),
-    failed,
+    runId:         vuln ? vuln.runId : null,
+    reportUrl:     vuln ? vuln.reportUrl : null,
+    summary:       vuln ? vuln.summary : pickCounts({}),
+    worstSeverity: vuln ? vuln.worstSeverity : null,
+    failed:        Boolean((vuln && vuln.failed) || (architecture && architecture.failed)),
+    ...(vuln && vuln.warning ? { warning: vuln.warning } : {}),
+    ...(architecture ? { architecture } : {}),
   }, 200);
 }
 
@@ -264,6 +399,9 @@ export function ciSnippetHandler(request, env) {
   const failOn = FAIL_ON_VALUES.includes(url.searchParams.get("fail_on"))
     ? url.searchParams.get("fail_on")
     : DEFAULT_FAIL_ON;
+  const archFailOn = FAIL_ON_VALUES.includes(url.searchParams.get("arch_fail_on"))
+    ? url.searchParams.get("arch_fail_on")
+    : DEFAULT_ARCH_FAIL_ON;
 
   return json({
     filename: ".github/workflows/algosize-audit.yml",
@@ -274,11 +412,11 @@ export function ciSnippetHandler(request, env) {
         "gh secret set ALGOSIZE_API_KEY --body '<the key>'",
       "Commit the workflow file below.",
     ],
-    workflow: buildWorkflow({ origin, failOn }),
+    workflow: buildWorkflow({ origin, failOn, archFailOn }),
   }, 200);
 }
 
-export function buildWorkflow({ origin, failOn = DEFAULT_FAIL_ON }) {
+export function buildWorkflow({ origin, failOn = DEFAULT_FAIL_ON, archFailOn = DEFAULT_ARCH_FAIL_ON }) {
   return `name: Algosize dependency audit
 
 on:
@@ -321,35 +459,116 @@ jobs:
             echo "::notice::ALGOSIZE_API_KEY is not set — skipping the dependency audit. Add the secret to enable it."
           fi
 
-      - name: Collect lockfiles
+      # Collects BOTH analyzers' inputs in one pass, so the pipeline makes a
+      # single request and the dashboard gets a dependency audit and an
+      # Architecture X-ray from the same commit.
+      #
+      # Everything starts from \`git ls-files\`, which is the whole trick: it
+      # lists tracked files only, so build output, node_modules and anything
+      # else gitignored is excluded without maintaining a denylist that would
+      # rot. Nothing here reaches outside the checkout.
+      - name: Collect lockfiles and architecture inputs
         id: collect
         if: steps.key.outputs.present == 'true'
         run: |
-          python3 - <<'PY' > payload.json
+          python3 - <<'PY'
           import json, os, subprocess
-          NAMES = {"package-lock.json", "yarn.lock", "requirements.txt", "Gemfile.lock", "go.sum"}
-          files = subprocess.run(["git", "ls-files"], capture_output=True, text=True).stdout.split()
-          out = []
-          for p in files:
-              if os.path.basename(p) not in NAMES:
-                  continue
+
+          LOCK_NAMES = {"package-lock.json", "yarn.lock", "requirements.txt",
+                        "Gemfile.lock", "go.sum"}
+          # What the architecture analyzer actually parses: service topology
+          # from compose/wrangler/Terraform/k8s, plus source for the import
+          # edges between them.
+          CONFIG_NAMES = {"wrangler.toml", "package.json", "_config.yml", "_config.yaml",
+                          "docker-compose.yml", "docker-compose.yaml",
+                          "compose.yml", "compose.yaml"}
+          CONFIG_SUFFIX = (".tf", ".yml", ".yaml")
+          SOURCE_SUFFIX = (".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx")
+
+          # Below the server's own caps, so a repo that is merely large gets a
+          # complete answer and only a genuinely huge one gets a flagged
+          # partial. The server reports its own truncation independently.
+          MAX_FILES, MAX_TOTAL, MAX_ONE = 1500, 10 * 1024 * 1024, 512 * 1024
+
+          tracked = subprocess.run(["git", "ls-files"],
+                                   capture_output=True, text=True).stdout.split()
+
+          def read(p):
               try:
                   with open(p, encoding="utf-8") as fh:
-                      out.append({"path": p, "content": fh.read()})
+                      return fh.read()
               except (OSError, UnicodeDecodeError):
-                  pass
-          print(json.dumps({
-              "repo": os.environ["GITHUB_REPOSITORY"],
-              "ref": os.environ["GITHUB_REF"],
-              "commit_sha": os.environ["GITHUB_SHA"],
-              "fail_on": "${failOn}",
-              "lockfiles": out,
-          }))
+                  return None
+
+          # .env files are never sent. The analyzer does scan them for
+          # hardcoded secrets, but a CI job shipping a real .env to any API is
+          # a worse trade than the finding is worth — and a committed .env is
+          # a problem to fix at the source, not to inventory remotely.
+          def is_env(p):
+              b = os.path.basename(p)
+              return b == ".env" or b.startswith(".env.")
+
+          def is_config(p):
+              b = os.path.basename(p)
+              return (b in CONFIG_NAMES
+                      or b.startswith("Dockerfile")
+                      or p.endswith(CONFIG_SUFFIX))
+
+          locks = []
+          for p in tracked:
+              if os.path.basename(p) in LOCK_NAMES:
+                  c = read(p)
+                  if c is not None:
+                      locks.append({"path": p, "content": c})
+
+          candidates = [p for p in tracked if not is_env(p)]
+          # Configs first: they carry the topology. If a budget runs out it
+          # should cost import edges, never whole services.
+          ordered = ([p for p in candidates if is_config(p)]
+                     + [p for p in candidates if p.endswith(SOURCE_SUFFIX)])
+
+          arch, total, truncated = [], 0, False
+          for p in ordered:
+              if len(arch) >= MAX_FILES:
+                  truncated = True
+                  break
+              c = read(p)
+              if c is None:
+                  continue
+              n = len(c.encode("utf-8"))
+              if n > MAX_ONE:
+                  truncated = True
+                  continue
+              if total + n > MAX_TOTAL:
+                  truncated = True
+                  break
+              total += n
+              arch.append({"path": p, "content": c})
+
+          with open("payload.json", "w", encoding="utf-8") as fh:
+              json.dump({
+                  "repo": os.environ["GITHUB_REPOSITORY"],
+                  "ref": os.environ["GITHUB_REF"],
+                  "commit_sha": os.environ["GITHUB_SHA"],
+                  "fail_on": "${failOn}",
+                  "arch_fail_on": "${archFailOn}",
+                  "lockfiles": locks,
+                  "files": arch,
+              }, fh)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write("lockfiles=%d\\n" % len(locks))
+              out.write("archfiles=%d\\n" % len(arch))
+          if truncated:
+              print("::notice::Architecture inputs were capped at %d files / %d MB; "
+                    "the analysis will report itself as partial."
+                    % (MAX_FILES, MAX_TOTAL // 1024 // 1024))
+          print("Collected %d lockfile(s) and %d architecture input(s)."
+                % (len(locks), len(arch)))
           PY
-          echo "count=$(python3 -c 'import json;print(len(json.load(open("payload.json"))["lockfiles"]))')" >> "$GITHUB_OUTPUT"
 
       - name: Run the Algosize audit
-        if: steps.key.outputs.present == 'true' && steps.collect.outputs.count != '0'
+        if: steps.key.outputs.present == 'true' && (steps.collect.outputs.lockfiles != '0' || steps.collect.outputs.archfiles != '0')
         id: audit
         run: |
           HTTP=$(curl -sS -o response.json -w '%{http_code}' \\
@@ -366,8 +585,25 @@ jobs:
             echo "run_id=$(jq -r '.runId // empty' response.json)"
             echo "failed=$(jq -r '.failed' response.json)"
             echo "report_url=$(jq -r '.reportUrl // empty' response.json)"
+            echo "arch_run_id=$(jq -r '.architecture.runId // empty' response.json)"
           } >> "$GITHUB_OUTPUT"
-          jq -r '"| Severity | Count |\\n|---|---|\\n| Critical | \\(.summary.critical) |\\n| High | \\(.summary.high) |\\n| Medium | \\(.summary.medium) |\\n| Low | \\(.summary.low) |"' response.json > table.md
+          # The dependency table only exists when lockfiles were submitted; a
+          # repo with none still gets an architecture summary rather than an
+          # empty comment claiming zero advisories.
+          : > table.md
+          if [ "$(jq -r 'has("summary") and (.runId != null)' response.json)" = "true" ]; then
+            jq -r '"| Severity | Count |\\n|---|---|\\n| Critical | \\(.summary.critical) |\\n| High | \\(.summary.high) |\\n| Medium | \\(.summary.medium) |\\n| Low | \\(.summary.low) |"' response.json >> table.md
+          fi
+          if [ "$(jq -r 'has("architecture")' response.json)" = "true" ]; then
+            {
+              echo ""
+              jq -r '"**Architecture X-ray** · \\(.architecture.summary.clusters) clusters · \\(.architecture.summary.nodes) services · \\(.architecture.summary.findings) findings (\\(.architecture.summary.bySeverity.critical) critical, \\(.architecture.summary.bySeverity.high) high)"' response.json
+              if [ "$(jq -r '.architecture.summary.complete' response.json)" != "true" ]; then
+                echo ""
+                echo "_Coverage was partial — some files were skipped or capped, so these counts are a lower bound._"
+              fi
+            } >> table.md
+          fi
 
       - name: Download the SARIF report
         if: steps.audit.outputs.run_id != ''
@@ -419,10 +655,14 @@ jobs:
               });
             }
 
+      # Trips on the dependency audit's '${failOn}' threshold, and on the
+      # architecture analysis only if arch_fail_on is set to something other
+      # than "none" (currently '${archFailOn}') — a design finding should not
+      # break a build unless someone chose that.
       - name: Fail the build on new findings
         if: steps.audit.outputs.failed == 'true'
         run: |
-          echo "::error::Algosize found advisories at or above the '${failOn}' threshold. See \${{ steps.audit.outputs.report_url }}"
+          echo "::error::Algosize found findings at or above the configured threshold (dependencies: '${failOn}', architecture: '${archFailOn}'). See \${{ steps.audit.outputs.report_url }}"
           exit 1
 `;
 }

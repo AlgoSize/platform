@@ -546,6 +546,127 @@ console.log("\nfeed provenance and the ?source= filter (D-3)\n");
   expect(byString.items.length === 1, "listRuns(env, userId) still works for existing callers");
 }
 
+// ---------------------------------------------------------------------------
+console.log("\narchitecture inputs via CI\n");
+// ---------------------------------------------------------------------------
+//
+// `files` drives the Architecture X-ray from the same request that carries
+// `lockfiles`. The two analyzers file separate runs because the runs table
+// stores one analyzer per row.
+
+const COMPOSE = [
+  "services:",
+  "  api:",
+  "    image: node:20",
+  "    ports: ['8080:8080']",
+  "  db:",
+  "    image: postgres:16",
+].join("\n");
+
+{
+  const env = makeEnv();
+  const orgId = await seedOrg(env, { userId: "usr_arch", email: "arch@example.com" });
+  const key = await keyFor(env, orgId);
+
+  const res = await worker.fetch(ciRequest(payload({
+      files: [{ path: "docker-compose.yml", content: COMPOSE }],
+    }), { key }), env, {});
+  const body = await res.json();
+
+  expect(res.status === 200, `lockfiles + files → 200 (got ${res.status})`);
+  expect(body.runId && typeof body.runId === "string",
+    "the dependency audit still returns its own runId at the top level");
+  expect(body.architecture && typeof body.architecture === "object",
+    "an `architecture` block is present when files were submitted");
+  expect(body.architecture && body.architecture.runId && body.architecture.runId !== body.runId,
+    "architecture files a SEPARATE run from the dependency audit");
+  expect(body.architecture && body.architecture.summary
+      && typeof body.architecture.summary.clusters === "number",
+    "the architecture block carries the analyzer's own summary");
+
+  // Both rows land, each under its own analyzer, both marked source=ci.
+  const scope = { orgId, userId: null };
+  const all = await listRuns(env, scope, { limit: 10 });
+  const analyzers = all.items.map((r) => r.analyzer).sort();
+  expect(analyzers.join(",") === "arch,vuln",
+    `both runs are filed, one per analyzer (got ${analyzers.join(",") || "none"})`);
+  expect(all.items.every((r) => r.source === "ci"),
+    "both runs are marked source=ci");
+}
+
+// Architecture alone — no lockfiles at all. A repo with no recognisable
+// lockfile must still get its architecture analysed rather than a 400.
+{
+  const env = makeEnv();
+  const orgId = await seedOrg(env, { userId: "usr_archonly", email: "archonly@example.com" });
+  const key = await keyFor(env, orgId);
+
+  const res = await worker.fetch(ciRequest({
+      repo: "acme/widgets",
+      files: [{ path: "docker-compose.yml", content: COMPOSE }],
+    }, { key }), env, {});
+  const body = await res.json();
+
+  expect(res.status === 200, `files with no lockfiles → 200 (got ${res.status})`);
+  expect(body.runId === null, "no dependency audit run when no lockfiles were submitted");
+  expect(body.architecture && body.architecture.runId,
+    "the architecture run is still filed");
+  expect(body.failed === false,
+    "arch findings do not fail the build by default (arch_fail_on defaults to none)");
+}
+
+// Neither input → a single clear error naming both.
+{
+  const env = makeEnv();
+  const orgId = await seedOrg(env, { userId: "usr_none", email: "none@example.com" });
+  const key = await keyFor(env, orgId);
+
+  const res = await worker.fetch(ciRequest({ repo: "acme/widgets" }, { key }), env, {});
+  const body = await res.json();
+  expect(res.status === 400 && body.error === "no_inputs",
+    `neither lockfiles nor files → 400 no_inputs (got ${res.status} ${body.error})`);
+}
+
+// arch_fail_on is opt-in gating, and is validated like fail_on.
+{
+  const env = makeEnv();
+  const orgId = await seedOrg(env, { userId: "usr_archfail", email: "archfail@example.com" });
+  const key = await keyFor(env, orgId);
+
+  const bad = await worker.fetch(ciRequest(payload({ arch_fail_on: "sideways" }), { key }), env, {});
+  const badBody = await bad.json();
+  expect(bad.status === 400 && badBody.error === "invalid_arch_fail_on",
+    `invalid arch_fail_on → 400 invalid_arch_fail_on (got ${bad.status} ${badBody.error})`);
+
+  // A compose file with a database reachable from outside trips at least one
+  // finding; gating at "low" turns any finding into a build failure.
+  const gated = await worker.fetch(ciRequest(payload({
+      files: [{ path: "docker-compose.yml", content: COMPOSE }],
+      fail_on: "none",
+      arch_fail_on: "low",
+    }), { key }), env, {});
+  const gatedBody = await gated.json();
+  const archFindings = gatedBody.architecture.summary.findings;
+  expect(gated.status === 200, "arch_fail_on:'low' still returns 200 with a verdict");
+  expect(archFindings === 0 || gatedBody.failed === true,
+    `arch_fail_on gates the overall verdict (findings=${archFindings}, failed=${gatedBody.failed})`);
+}
+
+// The generated workflow collects architecture inputs, not just lockfiles.
+{
+  const wf = buildWorkflow({ origin: "https://algosize.com" });
+  expect(wf.includes('"files": arch'),
+    "the generated workflow posts a `files` array");
+  expect(wf.includes("arch_fail_on"),
+    "the generated workflow sends arch_fail_on");
+  expect(wf.includes("git") && wf.includes("ls-files"),
+    "collection is driven by git ls-files, so gitignored build output is excluded");
+  expect(!/\.env['"]?\s*:/.test(wf) && wf.includes("is_env"),
+    "the collector explicitly excludes .env files from what it uploads");
+  expect(wf.includes("steps.collect.outputs.archfiles"),
+    "the audit step runs when there are architecture inputs even with no lockfiles");
+}
+
 // ---------- summary ----------
 console.log("");
 if (failures === 0) {
