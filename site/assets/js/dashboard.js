@@ -342,6 +342,40 @@
     return c;
   }
 
+  // Build a "Generate fix" button for one finding. `mount(node)` decides
+  // where the returned fix renders (table detail row, card footer, ...).
+  // POST /api/fix is authenticated + rate-limited; 503 means no AI provider
+  // is configured and the button says so instead of pretending to retry.
+  function makeFixButton(payload, mount) {
+    var btn = el("button", { class: "btn btn-ghost btn-sm", type: "button" }, "Generate fix");
+    btn.addEventListener("click", function () {
+      setBusy(btn, true, "Generating…");
+      callApi("/api/fix", payload)
+        .then(function (res) {
+          var box = el("div", { class: "fix-result" });
+          if (res.fix && res.fix.text) {
+            box.appendChild(el("p", { class: "result-reason" }, res.fix.text));
+          }
+          if (res.fix && res.fix.code) {
+            box.appendChild(el("pre", { class: "result-snippet" }, res.fix.code));
+          }
+          if (!res.fix || (!res.fix.text && !res.fix.code)) {
+            box.appendChild(el("p", { class: "result-reason" }, "The AI returned an empty fix. Try again."));
+          }
+          mount(box);
+          btn.remove();
+        })
+        .catch(function (err) {
+          setBusy(btn, false);
+          mount(el("p", { class: "result-reason" },
+            err && err.code === "fix_generation_unavailable"
+              ? "AI fix generation is not configured on this deployment."
+              : "Fix generation failed: " + (err && err.message || "unknown error")));
+        });
+    });
+    return btn;
+  }
+
   function renderVuln(result) {
     // Task #15 lockfile-audit shape:
     //   { repoUrl, scanned, counts, advisories, topAdvisories, fixCommand }
@@ -369,7 +403,7 @@
       var table = el("table", { class: "result-table" });
       var thead = el("thead", null);
       var thr   = el("tr", null);
-      ["Severity", "Package", "Installed", "Fixed in", "CVE / Advisory"].forEach(function (h) {
+      ["Severity", "Package", "Installed", "Fixed in", "CVE / Advisory", ""].forEach(function (h) {
         thr.appendChild(el("th", null, h));
       });
       thead.appendChild(thr);
@@ -391,6 +425,23 @@
         var link = el("a", { href: a.advisoryUrl, target: "_blank", rel: "noopener", class: "mono" }, a.id);
         linkCell.appendChild(link);
         tr.appendChild(linkCell);
+
+        // "Generate fix" (Copilot-style): one advisory in, one concrete
+        // remediation out, rendered in a full-width row directly under the
+        // advisory that asked for it. Nothing is persisted — see /api/fix.
+        var fixCell = el("td", null);
+        fixCell.appendChild(makeFixButton({ kind: "vuln", finding: {
+          id: a.id, package: a.package, ecosystem: a.ecosystem,
+          installedVersion: a.installedVersion, fixedIn: a.fixedIn,
+          severity: a.severity, cvssScore: a.cvssScore,
+        }}, function (node) {
+          var dr = el("tr", { class: "fix-detail-row" });
+          var td = el("td", { colspan: "6" });
+          td.appendChild(node);
+          dr.appendChild(td);
+          tr.parentNode.insertBefore(dr, tr.nextSibling);
+        }));
+        tr.appendChild(fixCell);
 
         tbody.appendChild(tr);
       });
@@ -443,7 +494,7 @@
 
     // LLM refactor suggestion + copy-to-clipboard rewrite block.
     if (result.suggestion) {
-      var sugTitle = result.suggestion.provider === "openai"
+      var sugTitle = result.suggestion.provider === "openai" || result.suggestion.provider === "workers-ai"
         ? "AI refactor suggestion"
         : "Refactor suggestion (AI disabled)";
       wrap.appendChild(el("h4", { class: "result-section-title" }, sugTitle));

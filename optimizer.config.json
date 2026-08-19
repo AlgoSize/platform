@@ -1,0 +1,21 @@
+{
+  "$comment": "Audit manifest for scripts/optimizer-ci.mjs (see README 'Running the optimizer in CI'). Each entry names one SELF-CONTAINED function the sandbox can run: no imports, no closures over file-level helpers, none of the sandbox's forbidden identifiers (async/Promise/fetch/constructor/...). `baseline` is a CEILING, not an expectation — set it one bucket above the true complexity so timing noise at the fixed probe sizes (100/1000/10000) cannot fail a build; the check exists to catch real regressions like O(n) -> O(n^2), which clear a one-bucket margin easily. `file` is repo-root-relative.",
+  "entries": [
+    {
+      "name": "bigo-mean",
+      "file": "worker/src/analyzers/bigo.js",
+      "functionName": "mean",
+      "sampleInput": [3, 1, 4, 1, 5, 9, 2, 6],
+      "baseline": "O(n log n)",
+      "note": "True complexity O(n) (single reduce). Ceiling includes one bucket of headroom: at these probe sizes the run times sit near the measurement noise floor."
+    },
+    {
+      "name": "llm-formatMs",
+      "file": "worker/src/analyzers/llm.js",
+      "functionName": "formatMs",
+      "sampleInput": 42,
+      "baseline": "O(log n)",
+      "note": "True complexity O(1). Ceiling includes one bucket of headroom for noise."
+    }
+  ]
+}

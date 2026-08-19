@@ -500,6 +500,38 @@
       li.appendChild(fix);
     }
     if (f.evidence) li.appendChild(el("span", { class: "mono xray-evidence" }, String(f.evidence)));
+
+    // "Generate fix" — sends THIS finding (rule, target, evidence, the static
+    // fix text) to /api/fix and renders the AI's concrete change inline under
+    // the card. Same auth + rate limit as the analyzers; a 503 means no AI
+    // provider is deployed and the card says so plainly.
+    var fixBtn = el("button", { class: "btn btn-ghost btn-sm xray-fix-btn", type: "button" }, "Generate fix");
+    fixBtn.addEventListener("click", function () {
+      setBusy(fixBtn, true, "Generating…");
+      callApi("/api/fix", {
+        kind: "arch",
+        finding: {
+          rule: f.rule, lens: f.lens, severity: f.severity, target: f.target,
+          why: f.why, fix: f.fix, evidence: f.evidence,
+        },
+      }).then(function (res) {
+        var box = el("div", { class: "fix-result" });
+        if (res.fix && res.fix.text) box.appendChild(el("p", { class: "xray-finding-why" }, res.fix.text));
+        if (res.fix && res.fix.code) box.appendChild(el("pre", { class: "result-snippet" }, res.fix.code));
+        if (!res.fix || (!res.fix.text && !res.fix.code)) {
+          box.appendChild(el("p", { class: "xray-finding-why" }, "The AI returned an empty fix. Try again."));
+        }
+        li.appendChild(box);
+        fixBtn.remove();
+      }).catch(function (err) {
+        setBusy(fixBtn, false);
+        li.appendChild(el("p", { class: "xray-finding-why" },
+          err && err.code === "fix_generation_unavailable"
+            ? "AI fix generation is not configured on this deployment."
+            : "Fix generation failed: " + (err && err.message || "unknown error")));
+      });
+    });
+    li.appendChild(fixBtn);
     return li;
   }
 
