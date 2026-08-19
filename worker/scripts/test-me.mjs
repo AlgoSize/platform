@@ -223,6 +223,83 @@ console.log("\nGET /api/me — happy path\n");
   }
 }
 
+console.log("\nGET /api/me — isAdmin\n");
+
+// 8. Non-admin email → isAdmin: false. This is the dashboard's only signal
+//    for whether to show the /admin link — /api/admin/* re-checks the same
+//    allowlist server-side regardless, so this being wrong is a
+//    discoverability bug, not an access-control one.
+{
+  const env = makeEnv();
+  env.ADMIN_EMAILS = "boss@example.com";
+  const user = await upsertUserFromCheckout(env, {
+    email: "regular@example.com",
+    stripeCustomerId: "cus_REGULAR",
+    subStatus: "active",
+  });
+  const token = await issueJWT(env, user.userId, user.email, "active");
+
+  const req = new Request("http://localhost/api/me", {
+    method: "GET",
+    headers: { "Cookie": `algosize_session=${encodeURIComponent(token)}` },
+  });
+  const res = await callMe(req, env);
+  const body = await res.json();
+  if (res.status === 200 && body.isAdmin === false) {
+    ok("email not in ADMIN_EMAILS → isAdmin: false");
+  } else {
+    fail(`expected isAdmin:false, got status=${res.status} body=${JSON.stringify(body)}`);
+  }
+}
+
+// 9. Email matching ADMIN_EMAILS (case-insensitively, same as requireAdmin)
+//    → isAdmin: true.
+{
+  const env = makeEnv();
+  env.ADMIN_EMAILS = "Boss@Example.com, other@example.com";
+  const user = await upsertUserFromCheckout(env, {
+    email: "boss@example.com",
+    stripeCustomerId: "cus_BOSS",
+    subStatus: "active",
+  });
+  const token = await issueJWT(env, user.userId, user.email, "active");
+
+  const req = new Request("http://localhost/api/me", {
+    method: "GET",
+    headers: { "Cookie": `algosize_session=${encodeURIComponent(token)}` },
+  });
+  const res = await callMe(req, env);
+  const body = await res.json();
+  if (res.status === 200 && body.isAdmin === true) {
+    ok("email in ADMIN_EMAILS (case-insensitive) → isAdmin: true");
+  } else {
+    fail(`expected isAdmin:true, got status=${res.status} body=${JSON.stringify(body)}`);
+  }
+}
+
+// 10. No ADMIN_EMAILS configured at all → isAdmin: false, not a crash.
+{
+  const env = makeEnv(); // ADMIN_EMAILS left unset
+  const user = await upsertUserFromCheckout(env, {
+    email: "whoever@example.com",
+    stripeCustomerId: "cus_WHOEVER",
+    subStatus: "active",
+  });
+  const token = await issueJWT(env, user.userId, user.email, "active");
+
+  const req = new Request("http://localhost/api/me", {
+    method: "GET",
+    headers: { "Cookie": `algosize_session=${encodeURIComponent(token)}` },
+  });
+  const res = await callMe(req, env);
+  const body = await res.json();
+  if (res.status === 200 && body.isAdmin === false) {
+    ok("unset ADMIN_EMAILS → isAdmin: false (no crash)");
+  } else {
+    fail(`expected isAdmin:false, got status=${res.status} body=${JSON.stringify(body)}`);
+  }
+}
+
 // ---------- summary ----------
 console.log("");
 if (failures === 0) {

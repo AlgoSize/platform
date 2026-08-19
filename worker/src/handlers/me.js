@@ -19,6 +19,7 @@
 
 import { resolveEntitlement } from "../entitlement.js";
 import { peekUsage, FREE_MONTHLY_LIMIT } from "../quota.js";
+import { isAdmin } from "./admin.js";
 
 export async function meHandler(request, env, ctx) {
   const sessionUser = request.user || {};
@@ -64,6 +65,12 @@ export async function meHandler(request, env, ctx) {
       active: entitlement.active,
       reason: entitlement.reason,
       currentPeriodEnd: entitlement.currentPeriodEnd,
+      // The dashboard has no other way to know whether to show a link to
+      // /admin — the panel itself is gated server-side by requireAdmin on
+      // every /api/admin/* route regardless of what this says, so getting
+      // this wrong is a visibility bug, not a security one. Same allowlist
+      // check admin.js uses, exported from there so there's one definition.
+      isAdmin: isAdmin(env, email),
     }),
     {
       status: 200,

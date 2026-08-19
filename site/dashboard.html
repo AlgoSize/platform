@@ -36,6 +36,10 @@ permalink: /dashboard/
         <span id="dash-status-text">Subscription active</span>
       </span>
       <button id="billing-portal-btn" type="button" class="btn btn-ghost btn-sm" hidden>Manage billing</button>
+      <!-- Shown only when /api/me reports isAdmin: true (dashboard.js). The
+           /admin panel itself is gated server-side regardless — this link is
+           discoverability, not the access control. -->
+      <a id="admin-link" href="/admin" class="btn btn-ghost btn-sm" hidden>Admin</a>
       <button id="logout-btn" type="button" class="btn btn-ghost btn-sm">Sign out</button>
     </div>
   </div>

@@ -985,6 +985,7 @@
     var quotaVal  = document.getElementById("dash-quota-value");
     var quotaMeter = document.getElementById("dash-quota-meter");
     var bannerSlot = document.getElementById("billing-banner");
+    var adminEl   = document.getElementById("admin-link");
     if (!emailEl || !statusEl || !textEl) return Promise.resolve();
 
     return callApi("/api/me", null, "GET").then(function (me) {
@@ -1049,6 +1050,13 @@
       // "Manage billing" for anyone with a Stripe subscription record.
       if (billingEl && me && me.subStatus) {
         billingEl.hidden = false;
+      }
+
+      // Admin link: visibility only, not the access control. /admin and
+      // every /api/admin/* route re-check the ADMIN_EMAILS allowlist
+      // server-side regardless of what this flag says.
+      if (adminEl) {
+        adminEl.hidden = !(me && me.isAdmin === true);
       }
       return me;
     }).catch(function () {
