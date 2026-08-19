@@ -105,13 +105,24 @@
   // to GitHub Pages. This is DEPLOY.md §9.2, the full-flow rehearsal: it
   // costs nothing (zero production traffic) and is safe to ship any time.
   //
-  // Adding a THIRD entry here for `algosize.com/*` is §9.3 — the actual
-  // production cutover. Deliberately not in this diff: that entry is meant
-  // to land in its own reviewed commit, after the staging rehearsal above
-  // has been exercised, not as a side effect of an unrelated site change
-  // landing on main. See DEPLOY.md §9.3 before adding it.
+  // The THIRD entry — `algosize.com/*` — is §9.3, the production cutover.
+  // From here, algosize.com's non-/api/* traffic is served by this Worker,
+  // not GitHub Pages: routed requests are handled entirely at Cloudflare's
+  // edge and never reach the GitHub Pages origin, so this took effect the
+  // moment this deploy landed, with no DNS change. `algosize.com/api/*`
+  // (worker/wrangler.toml) keeps winning over this catch-all for its own
+  // requests — same specificity rule already proven by that route, which
+  // has been live on this exact zone all along.
+  //
+  // Rollback: revert this entry (or the whole commit) and redeploy —
+  // `worker/node_modules/.bin/wrangler deploy --config wrangler.jsonc` from
+  // the repo root if you don't want to wait for CI. GitHub Pages has not
+  // been touched by any of this, so reverting the route is a complete,
+  // instant undo. See DEPLOY.md §9.4 for retiring Pages once this has been
+  // live and quiet for a while — not done yet, do it separately.
   "routes": [
-    { "pattern": "staging.algosize.com/*", "zone_name": "algosize.com" }
+    { "pattern": "staging.algosize.com/*", "zone_name": "algosize.com" },
+    { "pattern": "algosize.com/*", "zone_name": "algosize.com" }
   ],
   // Explicit rather than relying on the default. Wrangler's default is
   // `workers_dev = routes.length === 0` — true when routes is empty, false
