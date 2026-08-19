@@ -10,7 +10,7 @@
 import { runOptimizer, validateOptimizerInput, synthInputForSize, PROBE_SIZES } from "../src/analyzers/optimizer.js";
 import { validateFixInput, buildFixPrompt, generateFix } from "../src/analyzers/fixgen.js";
 import { generateFixHandler } from "../src/handlers/fix.js";
-import { llmChat } from "../src/analyzers/llm.js";
+import { llmChat, extractWorkersAiReply } from "../src/analyzers/llm.js";
 import { extractFunction, rankOf } from "./optimizer-ci.mjs";
 
 let failures = 0;
@@ -148,6 +148,68 @@ console.log("\nllmChat — Workers AI provider chain\n");
   // Nothing configured.
   const none = await llmChat({ system: "s", user: "u" }, {});
   expect(!none.ok && none.configured === false, "no provider → configured:false");
+
+  // Chat-completion-shaped Workers AI response (Kimi and other chat models)
+  // — reading only `.response` against this shape used to return "", which
+  // callers reported as "Workers AI returned an empty reply" even though the
+  // model answered. Both the binding and REST paths must read it correctly.
+  expect(extractWorkersAiReply({ choices: [{ message: { content: "kimi says hi" } }] }) === "kimi says hi",
+    "extractWorkersAiReply reads the OpenAI-compatible choices[0].message.content shape");
+  expect(extractWorkersAiReply({ response: "llama says hi" }) === "llama says hi",
+    "extractWorkersAiReply still reads the traditional { response } shape");
+  expect(extractWorkersAiReply({}) === "" && extractWorkersAiReply(null) === "",
+    "extractWorkersAiReply returns '' rather than throwing on neither shape / no result");
+
+  const bindingChatShape = await llmChat({ system: "s", user: "u" }, {
+    AI: { run: async () => ({ choices: [{ message: { content: "prose\n```js\ncode()\n```" } }] }) },
+  });
+  expect(bindingChatShape.ok && bindingChatShape.provider === "workers-ai" && /prose/.test(bindingChatShape.reply),
+    "AI binding returning the chat-completion shape is read correctly, not reported as empty");
+
+  const restChatShape = await llmChat({ system: "s", user: "u" }, {
+    CLOUDFLARE_ACCOUNT_ID: "acct", CLOUDFLARE_AI_TOKEN: "tok",
+    WORKERS_AI_FETCH: async () => ({
+      ok: true, json: async () => ({ result: { choices: [{ message: { content: "hi via rest" } }] }, success: true }),
+    }),
+  });
+  expect(restChatShape.ok && restChatShape.reply === "hi via rest",
+    "Workers AI REST path also reads the chat-completion shape, not just { response }");
+
+  // max_tokens floor: a reasoning model can spend its whole budget on hidden
+  // reasoning before the visible answer, so the request sent to Workers AI
+  // must never be capped at the caller's low default (800) — a caller that
+  // asks for more than the floor keeps its own higher value.
+  let sentBindingTokens = null;
+  await llmChat({ system: "s", user: "u" }, {
+    AI: { run: async (model, opts) => { sentBindingTokens = opts.max_tokens; return { response: "ok" }; } },
+  });
+  expect(sentBindingTokens >= 4096, `AI binding call raises max_tokens to the reasoning-model floor (got ${sentBindingTokens})`);
+
+  let sentRestTokens = null;
+  await llmChat({ system: "s", user: "u" }, {
+    CLOUDFLARE_ACCOUNT_ID: "acct", CLOUDFLARE_AI_TOKEN: "tok",
+    WORKERS_AI_FETCH: async (url, opts) => {
+      sentRestTokens = JSON.parse(opts.body).max_tokens;
+      return { ok: true, json: async () => ({ result: { response: "ok" } }) };
+    },
+  });
+  expect(sentRestTokens >= 4096, `Workers AI REST call also raises max_tokens to the floor (got ${sentRestTokens})`);
+
+  let sentOpenAiTokens = null;
+  await llmChat({ system: "s", user: "u" }, {
+    OPENAI_API_KEY: "sk-x",
+    OPENAI_FETCH: async (url, opts) => {
+      sentOpenAiTokens = JSON.parse(opts.body).max_tokens;
+      return { ok: true, json: async () => ({ choices: [{ message: { content: "ok" } }] }) };
+    },
+  });
+  expect(sentOpenAiTokens === 800, `OpenAI's budget is left at the caller's default, not raised — it isn't a reasoning model (got ${sentOpenAiTokens})`);
+
+  let sentHigherBindingTokens = null;
+  await llmChat({ system: "s", user: "u", maxTokens: 9000 }, {
+    AI: { run: async (model, opts) => { sentHigherBindingTokens = opts.max_tokens; return { response: "ok" }; } },
+  });
+  expect(sentHigherBindingTokens === 9000, `a caller-requested budget above the floor is respected, not clamped down (got ${sentHigherBindingTokens})`);
 }
 
 console.log("\nper-finding fix generation\n");
