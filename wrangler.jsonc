@@ -1,16 +1,33 @@
 {
-  // Static-asset Worker for the built Jekyll site, deployed by Cloudflare
-  // Workers Builds from the "Deploy non-production branches" trigger. Its
-  // job is per-branch previews: the trigger's deploy command is
-  // `npx wrangler versions upload`, which uploads a VERSION without routing
-  // traffic to it. Production traffic is unaffected by anything here.
+  // Static-asset Worker for the built Jekyll site. Deployed by
+  // .github/workflows/site-worker.yml on every push to main that touches
+  // `site/**` or this file — the same push-to-deploy shape as the API
+  // Worker's `worker.yml`, using the same two repo secrets
+  // (CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID). No new secrets needed.
+  //
+  // This is what algosize.com's non-/api/* traffic is served from — see
+  // DEPLOY.md §9 "Move algosize.com off GitHub Pages" for the full cutover
+  // (Workers Route + DNS + retiring the GitHub Pages deploy).
+  //
+  // It used to be deployed by Cloudflare's own "Workers Builds" git
+  // integration instead. That trigger is gone — deleted after it turned out
+  // to be bound to the WRONG service (see the git history on this file if
+  // you need the postmortem): it was uploading this site's build as a
+  // version on `algosize`, the API Worker's service, not on `algosize-site`.
+  // Nothing was ever routed from it — `versions upload` never routes traffic
+  // — but a version that is a static site sitting on the API Worker's
+  // service is one accidental promotion away from replacing the live API.
+  // A GitHub Actions workflow we control removes that whole class of risk:
+  // it runs `wrangler deploy` (not `versions upload`) against exactly this
+  // config, from a job that only ever touches the service this file names.
   //
   // The service name MUST NOT be `algosize`. That is the API Worker's
-  // service (see worker/wrangler.toml), which GitHub Actions deploys from
-  // `.github/workflows/worker.yml`. With both configs named `algosize`, the
-  // two pipelines deploy different Workers to the same service and the last
-  // one to run wins — so an ordinary site change could silently replace the
-  // live API, and an API deploy could replace the site.
+  // service (see worker/wrangler.toml), deployed by `worker.yml`. With both
+  // configs named `algosize`, the two pipelines would deploy different
+  // Workers to the same service and the last one to run would win — so an
+  // ordinary site change could silently replace the live API, and an API
+  // deploy could replace the site. This is not a hypothetical: it is what
+  // the Workers Builds trigger was doing before it was deleted.
   //
   // Related: wrangler resolves its config by walking UP the directory tree,
   // so this file also shadows worker/wrangler.toml for any wrangler command
@@ -18,37 +35,32 @@
   // therefore passes `--config wrangler.toml` explicitly. See DEPLOY.md §2.0.
   //
   // ---------------------------------------------------------------------
-  // Why the `build` block below exists
+  // The `build` block
   //
-  // This check failed on every commit for weeks. The build log:
-  //
-  //   Executing user deploy command: npx wrangler versions upload
-  //   ✘ [ERROR] The directory specified by the "assets.directory" field in
-  //     your configuration file does not exist:
-  //       /opt/buildhome/repo/_site_build
-  //
-  // `_site_build` is a build artifact, not a committed directory (see
-  // .gitignore). The Cloudflare trigger has an EMPTY build command and goes
-  // straight to the deploy command, so wrangler looked for a directory that
-  // nothing had produced.
-  //
-  // The build command in the dashboard is one fix, but it is invisible from
-  // the repo and silently un-versioned. `build.command` here is wrangler's
-  // own custom-build hook and does the same job in a file that travels with
-  // the code: wrangler runs it BEFORE reading `assets.directory`, so the
-  // directory exists by the time it is needed.
+  // wrangler's own custom-build hook. It runs BEFORE wrangler reads
+  // `assets.directory`, so the directory exists by the time it is needed —
+  // `_site_build` is a gitignored artifact, not a committed one, and nothing
+  // else in CI produces it.
   //
   // It runs even though this Worker has no `main`. An assets-only config
   // resolves its entry point to wrangler's bundled templates/no-op-worker.js
-  // (see resolveEntryWithAssets), and runCustomBuild is called immediately
-  // after that resolution — the entry-point assertion then passes trivially
-  // because the no-op template always exists.
+  // (see resolveEntryWithAssets in the wrangler source), and runCustomBuild
+  // is called immediately after that resolution — the entry-point assertion
+  // then passes trivially because the no-op template always exists.
   //
   // The command mirrors .github/workflows/jekyll.yml exactly — same config
-  // pair, same JEKYLL_ENV — so a preview renders what GitHub Pages serves
-  // rather than a subtly different build. `cwd` is relative to the repo root,
-  // which is the trigger's root directory.
-  "$schema": "node_modules/wrangler/config-schema.json",
+  // pair, same JEKYLL_ENV — so what deploys here is identical to what the
+  // (now-retired) GitHub Pages build produced. `cwd` is relative to the repo
+  // root, which is where `wrangler deploy` is invoked from.
+  //
+  // The Ruby version this runs under is whatever site-worker.yml pins via
+  // ruby/setup-ruby — deliberately NOT auto-detected the way Cloudflare's
+  // build image did. Ruby 3.4 quietly moved `csv` and `base64` out of
+  // default gems into bundled ones, and this exact build broke on it with
+  // "cannot load such file -- csv" before site/Gemfile declared them
+  // explicitly. Pinning the Ruby version in CI is what stops that class of
+  // bug from recurring on some future Ruby release we haven't tested against.
+  "$schema": "worker/node_modules/wrangler/config-schema.json",
   "name": "algosize-site",
   "compatibility_date": "2026-05-11",
   "observability": {
@@ -59,7 +71,15 @@
     "command": "bundle install && JEKYLL_ENV=production bundle exec jekyll build --config _config.yml,_config.production.yml --destination ../_site_build"
   },
   "assets": {
-    "directory": "_site_build"
+    "directory": "_site_build",
+    // Jekyll's default permalinks are directory-style — a post at
+    // /blog/foo/ builds to blog/foo/index.html on disk. "auto-trailing-slash"
+    // is what makes a request for /blog/foo (no slash) or /blog/foo/ both
+    // resolve to that file, matching how GitHub Pages served the same build.
+    "html_handling": "auto-trailing-slash",
+    // site/404.html renders the real page for anything unmatched, instead of
+    // an empty 404 response with no body.
+    "not_found_handling": "404-page"
   },
   "compatibility_flags": [
     "nodejs_compat"
