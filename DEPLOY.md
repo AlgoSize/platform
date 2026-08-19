@@ -1727,6 +1727,34 @@ exercises), and a new row in the dashboard's runs feed under **Monitors → CI**
 (proves the API-key auth path in `worker/src/auth.js` end-to-end, not just
 the cookie path every other dashboard click uses).
 
+The same request also carries the **Architecture X-ray**'s inputs. The
+workflow's collection step gathers two sets from one `git ls-files` pass —
+lockfiles for the dependency audit, and manifests, IaC, Dockerfiles and
+source for the architecture graph — so a pipeline analyses both from the
+same commit without anyone choosing files by hand. Two runs are filed, one
+per analyzer; the feed shows them side by side under **CI**.
+
+Two deliberate asymmetries between the analyzers are worth knowing before
+someone reads a green build as "no architecture findings":
+
+- **Architecture findings do not fail the build by default.** `fail_on`
+  gates the dependency audit at `high`; `arch_fail_on` defaults to `none`.
+  A published advisory is a fact about a version, a design finding is a
+  judgement, and a pipeline that starts going red on judgements the day
+  someone enables it is a pipeline that gets deleted. Set `arch_fail_on`
+  in the workflow to opt into gating.
+- **`.env` files are never uploaded.** The analyzer does scan them for
+  hardcoded secrets, and the dashboard's manual upload still can — but a CI
+  job shipping a real `.env` to any endpoint is a worse trade than the
+  finding is worth. `git ls-files` already excludes the gitignored ones;
+  the collector excludes the rest explicitly.
+
+Coverage is reported, never implied: the collector caps at 1500 files / 10 MB
+(under the server's own 2000 / 12 MB) and emits a `::notice` when it truncates,
+and the analysis carries `summary.complete: false` whenever anything was
+skipped or capped. The PR comment repeats that caveat rather than printing
+counts that look whole.
+
 ---
 
 ## 9. Move algosize.com off GitHub Pages onto the site Worker
