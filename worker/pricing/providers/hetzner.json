@@ -1,0 +1,89 @@
+{
+  "providerId": "hetzner",
+  "providerName": "Hetzner Cloud",
+  "category": "cloud",
+  "billingModel": "plan",
+  "currency": "USD",
+  "catalogVersion": "2026.08.19-1",
+  "effectiveDate": "2026-08-01",
+  "lastVerified": "2026-08-19",
+  "verificationStatus": "unverified-seed",
+  "sourceUrl": "https://www.hetzner.com/cloud/",
+  "regions": ["ash"],
+  "defaultRegion": "ash",
+  "limitations": [
+    "Hetzner sells whole servers, not vCPU-hours. There is NO published per-vCPU or per-GiB price, so none is invented here — the plan price is billed and any CPU/RAM split is allocated by the estimator.",
+    "Hetzner lists prices in EUR for EU locations and USD for US locations. Only the USD-listed US location (Ashburn) is modelled, so no currency conversion is performed anywhere in this catalog.",
+    "Hetzner applies a separate per-server IPv4 charge that is not modelled.",
+    "Billing is hourly up to a monthly cap, like DigitalOcean.",
+    "Shared-vCPU (CX/CPX) lines only. Dedicated-vCPU (CCX) servers, volumes beyond the included disk, load balancers and snapshots are not modelled."
+  ],
+  "planBillingCapHours": 730,
+  "plans": [
+    {
+      "sku": "cpx11",
+      "displayName": "CPX11 — 2 vCPU / 2 GiB",
+      "resourceType": "compute",
+      "vcpu": 2,
+      "memoryGiB": 2,
+      "includedStorageGiB": 40,
+      "includedEgressGiB": 20000,
+      "priceMicroUsdPerMonth": 5590000,
+      "sourceUrl": "https://www.hetzner.com/cloud/"
+    },
+    {
+      "sku": "cpx21",
+      "displayName": "CPX21 — 3 vCPU / 4 GiB",
+      "resourceType": "compute",
+      "vcpu": 3,
+      "memoryGiB": 4,
+      "includedStorageGiB": 80,
+      "includedEgressGiB": 20000,
+      "priceMicroUsdPerMonth": 9590000,
+      "sourceUrl": "https://www.hetzner.com/cloud/"
+    },
+    {
+      "sku": "cpx31",
+      "displayName": "CPX31 — 4 vCPU / 8 GiB",
+      "resourceType": "compute",
+      "vcpu": 4,
+      "memoryGiB": 8,
+      "includedStorageGiB": 160,
+      "includedEgressGiB": 20000,
+      "priceMicroUsdPerMonth": 17490000,
+      "sourceUrl": "https://www.hetzner.com/cloud/"
+    },
+    {
+      "sku": "cpx41",
+      "displayName": "CPX41 — 8 vCPU / 16 GiB",
+      "resourceType": "compute",
+      "vcpu": 8,
+      "memoryGiB": 16,
+      "includedStorageGiB": 240,
+      "includedEgressGiB": 20000,
+      "priceMicroUsdPerMonth": 30490000,
+      "sourceUrl": "https://www.hetzner.com/cloud/"
+    }
+  ],
+  "dimensions": {
+    "storageGiBMonth": {
+      "priceMicroUsd": 52000,
+      "unit": "GiB-month",
+      "sourceUrl": "https://www.hetzner.com/cloud/",
+      "note": "Cloud Volumes, charged beyond the server's included disk."
+    },
+    "egressGiB": {
+      "priceMicroUsd": 1200,
+      "unit": "GiB",
+      "sourceUrl": "https://www.hetzner.com/cloud/",
+      "note": "Overage beyond the generous included transfer."
+    },
+    "ingressGiB": {
+      "priceMicroUsd": 0,
+      "unit": "GiB",
+      "sourceUrl": "https://www.hetzner.com/cloud/",
+      "note": "Inbound transfer is free."
+    }
+  },
+  "minimumBillableSeconds": 3600
+}
