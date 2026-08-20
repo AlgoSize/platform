@@ -65,7 +65,7 @@ binding = "SANDBOX"
 service = "algosize-sandbox"
 
 # Workers AI — powers the algorithm optimizer's refactor suggestions and the
-# per-finding "Generate fix" endpoint (Kimi K2.5 by default; see
+# per-finding "Generate fix" endpoint (Kimi K2.6 by default; see
 # analyzers/llm.js for the provider chain). Keyless: the binding IS the
 # credential, so no secret to provision, wipe, or restore. CI cannot use a
 # binding (it runs in Node) — it goes through the Workers AI REST API with

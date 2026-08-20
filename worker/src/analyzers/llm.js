@@ -4,7 +4,7 @@
 //
 // Provider chain, first configured one wins:
 //
-//   1. Workers AI binding (env.AI) — Kimi K2.5 by default. Keyless: the
+//   1. Workers AI binding (env.AI) — Kimi K2.6 by default. Keyless: the
 //      binding is granted by wrangler.toml's [ai] block, so the deployed
 //      Worker needs no external API secret at all — nothing to provision,
 //      and nothing for a secret wipe to take out.
@@ -22,10 +22,14 @@
 
 const ENDPOINT = "https://api.openai.com/v1/chat/completions";
 const DEFAULT_MODEL = "gpt-4o-mini";
-// The Workers AI catalog slug for Kimi K2.5. Overridable via
+// The Workers AI catalog slug for Kimi K2.6. Was K2.5 until Cloudflare
+// deprecated it on 2026-05-30 (see the Workers AI changelog); calls using
+// the K2.5 slug now auto-alias to K2.6 anyway, at K2.6's higher price —
+// this makes that explicit instead of leaving it as a silent alias. Costs
+// more per call than K2.5 did, on Workers AI's paid tier. Overridable via
 // env.WORKERS_AI_MODEL because catalog ids shift as Cloudflare promotes
 // models — verify against `wrangler ai models list` before changing.
-const DEFAULT_WORKERS_AI_MODEL = "@cf/moonshotai/kimi-k2.5";
+const DEFAULT_WORKERS_AI_MODEL = "@cf/moonshotai/kimi-k2.6";
 const MAX_TEXT_CHARS = 1500;            // hard ceiling on rendered prose
 const TIMEOUT_MS = 15000;
 // Kimi (and reasoning models generally) spend part of their token budget on
