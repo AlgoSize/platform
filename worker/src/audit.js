@@ -37,6 +37,26 @@ export const AUDIT_ACTIONS = Object.freeze({
   PLAN_CHANGED:      "billing.plan_changed",
   FLAG_UPDATED:      "flag.updated",
   SESSION_REVOKED:   "session.revoked",
+  // Sign-ins. Recorded so the account area can show a login history that is
+  // an actual history: the session index only knows about sessions that are
+  // still live, so without this a user who was signed in from somewhere they
+  // did not recognise and then signed out has no way to see it happened.
+  // Written at every issueJWT call site, one row per successful sign-in.
+  AUTH_LOGIN:        "auth.login",
+  // Account-area writes. Each one changes something the user would want to
+  // find in a history later, and the first two change how the account is
+  // reached at all — an email change is an authentication change.
+  EMAIL_CHANGE_REQUESTED: "account.email_change_requested",
+  EMAIL_CHANGED:     "account.email_changed",
+  PROFILE_UPDATED:   "account.profile_updated",
+  ORG_RENAMED:       "org.renamed",
+  BILLING_EMAIL_UPDATED: "org.billing_email_updated",
+  DOMAIN_UPDATED:    "org.domain_updated",
+  NOTIFICATIONS_UPDATED: "account.notifications_updated",
+  DATA_EXPORTED:     "account.data_exported",
+  ORG_DELETED:       "org.deleted",
+  CREDIT_EARNED:     "credit.earned",
+  CREDIT_APPLIED:    "credit.applied",
 });
 
 /**

@@ -331,6 +331,140 @@ export function monitorNewFindings({
   return { subject, text: textLines.join("\n"), html };
 }
 
+/**
+ * Confirm a new login email — sent TO THE NEW ADDRESS.
+ *
+ * The login email is the credential: magic links go to it, so changing it
+ * changes how the account is reached. Sending the confirmation to the new
+ * address is what proves the person asking actually controls it. Until this
+ * link is clicked, nothing about the account has moved.
+ *
+ * The copy leads with what has NOT happened yet, because the recipient may be
+ * someone who was mistyped into the form and has no idea what Algosize is.
+ */
+export function emailChangeConfirm({ oldEmail, newEmail, confirmUrl, ttlMinutes }) {
+  const subject = "Confirm your new Algosize email address";
+  const text = [
+    `Someone asked to change the login email on an Algosize account`,
+    `from ${oldEmail} to this address.`,
+    ``,
+    `Nothing has changed yet. Confirming this link is what makes the`,
+    `change take effect — until then sign-in links keep going to the`,
+    `old address.`,
+    ``,
+    `${confirmUrl}`,
+    ``,
+    `The link is valid for ${ttlMinutes} minutes and can only be used once.`,
+    ``,
+    `If you were not expecting this, ignore the email. Without this`,
+    `confirmation the account is untouched and nobody gains access to it.`,
+    ``,
+    `— The Algosize team`,
+  ].join("\n");
+  const html = shellHtml(
+    "Confirm your new email address",
+    `
+      <p style="margin:0 0 16px">Someone asked to change the login email on an Algosize account from <code style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#7ee0c0">${escapeHtml(oldEmail)}</code> to this address.</p>
+      <p style="margin:0 0 16px"><strong>Nothing has changed yet.</strong> Confirming below is what makes the change take effect — until then sign-in links keep going to the old address.</p>
+      <p style="margin:0 0 24px">
+        <a href="${confirmUrl}" style="display:inline-block;padding:12px 20px;background:#7ee0c0;color:#06281f;text-decoration:none;border-radius:8px;font-weight:600">Confirm this address →</a>
+      </p>
+      <p style="margin:0 0 8px;font-size:13px;color:#8b949e">Or paste this URL into your browser:</p>
+      <p style="margin:0 0 16px;font-size:12px;word-break:break-all;color:#7ee0c0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace">${escapeHtml(confirmUrl)}</p>
+      <p style="margin:16px 0 0;font-size:13px;color:#8b949e">Valid for ${ttlMinutes} minutes, single use. If you were not expecting this, ignore the email — without this confirmation the account is untouched.</p>
+    `,
+  );
+  return { subject, text, html };
+}
+
+/**
+ * Tell the OLD address that a change was requested.
+ *
+ * This is the half that catches a hijacked session. Someone who has taken
+ * over an account will change the login email to lock the real owner out;
+ * the owner's only warning is a message to the address that still works,
+ * sent at request time rather than after the change completes.
+ *
+ * So it goes out immediately, it names the destination address, and it says
+ * plainly what to do — which is not "click here to cancel" (a link in this
+ * email would be one more thing to phish) but "sign in and cancel it, or
+ * write to us".
+ */
+export function emailChangeNotice({ oldEmail, newEmail, ttlMinutes }) {
+  const subject = "Someone asked to change your Algosize login email";
+  const text = [
+    `A request was made to change the login email on your Algosize`,
+    `account (${oldEmail}) to:`,
+    ``,
+    `    ${newEmail}`,
+    ``,
+    `Nothing has changed yet. The change only takes effect if that`,
+    `address confirms it within ${ttlMinutes} minutes.`,
+    ``,
+    `If this was you, no action is needed.`,
+    ``,
+    `If it was NOT you, sign in at ${DASHBOARD_URL} and cancel the`,
+    `pending change from your account settings, then revoke any session`,
+    `you do not recognise on the Security tab. Reply to this email if`,
+    `you cannot sign in.`,
+    ``,
+    `— The Algosize team`,
+  ].join("\n");
+  const html = shellHtml(
+    "A change to your login email was requested",
+    `
+      <p style="margin:0 0 16px">A request was made to change the login email on your Algosize account (<code style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#7ee0c0">${escapeHtml(oldEmail)}</code>) to:</p>
+      <p style="margin:0 0 16px;padding:10px 12px;background:#0d1117;border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;color:#7ee0c0;word-break:break-all">${escapeHtml(newEmail)}</p>
+      <p style="margin:0 0 16px"><strong>Nothing has changed yet.</strong> The change only takes effect if that address confirms it within ${ttlMinutes} minutes.</p>
+      <p style="margin:0 0 16px;font-size:14px;color:#8b949e">If this was you, no action is needed.</p>
+      <p style="margin:0 0 16px;font-size:14px">If it was <strong>not</strong> you: sign in, cancel the pending change from your account settings, and revoke any session you do not recognise on the Security tab.</p>
+      <p style="margin:0 0 8px">
+        <a href="${DASHBOARD_URL}" style="display:inline-block;padding:12px 20px;background:#7ee0c0;color:#06281f;text-decoration:none;border-radius:8px;font-weight:600">Open your account →</a>
+      </p>
+      <p style="margin:16px 0 0;font-size:13px;color:#8b949e">Reply to this email if you cannot sign in.</p>
+    `,
+  );
+  return { subject, text, html };
+}
+
+/**
+ * A referral paid off — sent to the referrer when credit is issued.
+ *
+ * States the amount, what it can and cannot do, and where the balance lives.
+ * The "not cash" sentence is in the email as well as the UI because this is
+ * the message someone forwards to their finance team, and a forwarded
+ * "you've earned $120" with no qualifier reads as a rebate cheque.
+ */
+export function referralCredited({ email, referredName, amount, balance }) {
+  const subject = `You've earned ${amount} in Algosize credit`;
+  const text = [
+    `${referredName} became a paying Algosize customer, so ${amount} of`,
+    `credit has been added to your account.`,
+    ``,
+    `Your credit balance is now ${balance}.`,
+    ``,
+    `Credit comes off your next Algosize invoice automatically. It is`,
+    `not cash, cannot be withdrawn, and cannot be transferred to another`,
+    `account.`,
+    ``,
+    `See the detail: ${DASHBOARD_URL}`,
+    ``,
+    `— The Algosize team`,
+  ].join("\n");
+  const html = shellHtml(
+    `You've earned ${escapeHtml(amount)} in credit`,
+    `
+      <p style="margin:0 0 16px"><strong>${escapeHtml(referredName)}</strong> became a paying Algosize customer, so <strong>${escapeHtml(amount)}</strong> of credit has been added to your account.</p>
+      <p style="margin:0 0 16px;font-size:14px;color:#8b949e">Your credit balance is now <strong style="color:#7ee0c0">${escapeHtml(balance)}</strong>.</p>
+      <p style="margin:0 0 24px;font-size:14px;color:#8b949e">Credit comes off your next Algosize invoice automatically. It is not cash, cannot be withdrawn, and cannot be transferred to another account.</p>
+      <p style="margin:0">
+        <a href="${DASHBOARD_URL}" style="display:inline-block;padding:12px 20px;background:#7ee0c0;color:#06281f;text-decoration:none;border-radius:8px;font-weight:600">See the detail →</a>
+      </p>
+    `,
+  );
+  return { subject, text, html };
+}
+
 function escapeHtml(s) {
   return String(s)
     .replace(/&/g, "&amp;")

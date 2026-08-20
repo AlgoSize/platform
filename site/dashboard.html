@@ -39,6 +39,11 @@ permalink: /dashboard/
       <!-- Shown only when /api/me reports isAdmin: true (dashboard.js). The
            /admin panel itself is gated server-side regardless — this link is
            discoverability, not the access control. -->
+      <!-- Settings, not a workspace tab. The account area is a different kind
+           of place from Workspace/Monitors/Team — you go there deliberately,
+           change something, and come back — so it sits with the signed-in
+           widgets rather than in the section strip. -->
+      <a id="account-link" href="#/account" class="btn btn-ghost btn-sm">Account</a>
       <a id="admin-link" href="/admin" class="btn btn-ghost btn-sm" hidden>Admin</a>
       <button id="logout-btn" type="button" class="btn btn-ghost btn-sm">Sign out</button>
     </div>
@@ -536,15 +541,61 @@ permalink: /dashboard/
     <div id="view-report" class="dash-view" hidden>
       <div class="report-topbar">
         <button type="button" class="btn btn-ghost btn-sm" id="report-back-btn">← Back to runs</button>
+        <!-- Export bar. "Open report" is the client-facing document (with its
+             own print-to-PDF); the select + Download pair is the file-picker —
+             one control, every format, options filtered per analyzer by
+             dash-report.js. PDF rides through the same printable page with
+             ?print=1 so the PDF can never drift from the page. -->
         <div class="report-topbar-actions" id="report-actions" hidden>
-          <a class="btn btn-ghost btn-sm" id="report-open-html" href="#" target="_blank" rel="noopener">Open HTML report</a>
-          <a class="btn btn-ghost btn-sm" id="report-dl-sarif" href="#">SARIF</a>
-          <a class="btn btn-ghost btn-sm" id="report-dl-cdx" href="#">CycloneDX</a>
+          <a class="btn btn-ghost btn-sm" id="report-open-html" href="#" target="_blank" rel="noopener">Open report</a>
+          <label class="sr-only" for="report-dl-format">Export format</label>
+          <select id="report-dl-format" class="panel-input report-dl-select">
+            <option value="pdf">PDF (print view)</option>
+            <option value="csv">CSV (spreadsheet)</option>
+            <option value="json">JSON (raw data)</option>
+            <option value="sarif">SARIF</option>
+            <option value="cyclonedx">CycloneDX (SBOM)</option>
+          </select>
+          <button type="button" class="btn btn-ghost btn-sm" id="report-dl-btn">Download</button>
           <button type="button" class="btn btn-primary btn-sm" id="report-share-btn">Share</button>
         </div>
       </div>
       <div id="report-body"><div class="panel-empty">Loading report…</div></div>
     </div><!-- /view-report -->
+
+    <!-- ================= ACCOUNT ================= -->
+    <!-- Settings. Sub-routed as #/account/<section> so every section is a
+         real link: someone can be sent straight to Billing, and the back
+         button walks back through the sections they opened.
+
+         Almost everything below is built by dash-account.js rather than
+         written here. The sections differ too much from one another to share
+         markup, several of them render three or four different states, and a
+         static skeleton for all ten would be mostly hidden elements — the
+         same reasoning the Team screen's branding form already follows. -->
+    <div id="view-account" class="dash-view" hidden>
+      <div class="dash-head">
+        <span class="eyebrow">Account</span>
+        <h2 class="dash-view-title">Account management</h2>
+        <p class="lede" id="acct-lede">Your profile, plan, branding and team — everything that is about the account rather than about a scan.</p>
+      </div>
+
+      <!-- Summary pane: plan, next bill, credit, seats, one primary action.
+           Visible before any section is opened, because those four numbers
+           are what someone came to check most of the time. -->
+      <section class="acct-summary" id="acct-summary" hidden></section>
+
+      <div class="acct-layout">
+        <nav class="acct-nav" id="acct-nav" aria-label="Account sections"></nav>
+        <div class="acct-main">
+          <div class="acct-sec-head">
+            <h3 id="acct-sec-title">Profile &amp; identity</h3>
+            <p class="panel-desc" id="acct-sec-desc"></p>
+          </div>
+          <div id="acct-body"><div class="panel-empty">Loading your account…</div></div>
+        </div>
+      </div>
+    </div><!-- /view-account -->
 
   </div>
 </main>
@@ -727,4 +778,5 @@ permalink: /dashboard/
 <script src="{{ '/assets/js/dash-report.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-arch.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-estimate.js' | relative_url }}" defer></script>
+<script src="{{ '/assets/js/dash-account.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-router.js' | relative_url }}" defer></script>

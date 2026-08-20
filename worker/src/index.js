@@ -24,6 +24,34 @@ import {
   updateOrgBrandingHandler,
 } from "./handlers/org.js";
 import {
+  setOrgDomainHandler,
+  verifyOrgDomainHandler,
+  removeOrgDomainHandler,
+} from "./handlers/org_domain.js";
+import {
+  getAccountHandler,
+  updateProfileHandler,
+  requestEmailChangeHandler,
+  confirmEmailChangeHandler,
+  cancelEmailChangeHandler,
+  listSessionsHandler,
+  revokeSessionHandler,
+  revokeOtherSessionsHandler,
+  listLoginsHandler,
+  getNotificationsHandler,
+  updateNotificationsHandler,
+} from "./handlers/account.js";
+import {
+  exportAccountHandler,
+  deletePreviewHandler,
+  deleteOrgHandler,
+} from "./handlers/account_danger.js";
+import {
+  getReferralsHandler,
+  inviteReferralHandler,
+  referralLandingHandler,
+} from "./handlers/referrals.js";
+import {
   createApiKeyHandler,
   listApiKeysHandler,
   revokeApiKeyHandler,
@@ -53,7 +81,12 @@ import {
   sharedReportHandler,
 } from "./handlers/runs.js";
 import { ciRunHandler, ciSnippetHandler } from "./handlers/ci.js";
-import { billingPortalHandler } from "./handlers/billing.js";
+import {
+  billingPortalHandler,
+  billingSummaryHandler,
+  billingInvoicesHandler,
+  updateBillingEmailHandler,
+} from "./handlers/billing.js";
 import { requestMagicLinkHandler, verifyMagicLinkHandler } from "./handlers/auth_magic.js";
 import { googleStartHandler, googleCallbackHandler } from "./handlers/auth_google.js";
 import {
@@ -261,6 +294,60 @@ router.get( "/api/ci/snippet", requireAuth, ciSnippetHandler);
 
 // ---- Stripe Customer Portal (Task #18) — manage card / cancel / invoices --
 router.post("/api/billing/portal",  requireAuth, billingPortalHandler);
+// The read side of the same subject. Everything that is money is fetched from
+// Stripe live on each request — there is no cached price anywhere in this
+// codebase, deliberately (see migrations/0003), so these cannot go stale.
+router.get( "/api/billing/summary",  requireAuth, billingSummaryHandler);
+router.get( "/api/billing/invoices", requireAuth, billingInvoicesHandler);
+// Where invoices go. Owner-only, and additive — the owner keeps receiving
+// dunning regardless, because a finance inbox nobody reads is how a card
+// decline becomes a lapsed account.
+router.put( "/api/billing/email",    requireAuth, updateBillingEmailHandler);
+
+// ---- Account management ---------------------------------------------------
+// The settings area. Every route here requires a SESSION: an API key has no
+// human behind it, and a leaked key must not be able to move the account's
+// login address. The refusal is made explicitly in handlers/account.js rather
+// than assumed, because requireAuth accepts both credential types.
+//
+// Team and API-key management are deliberately NOT re-implemented here — the
+// settings page calls the existing /api/org and /api/keys routes, so there is
+// one set of rules for seats and roles rather than two that can drift.
+router.get(   "/api/account",                  requireAuth, getAccountHandler);
+router.patch( "/api/account/profile",          requireAuth, updateProfileHandler);
+// Changing the login email is an authentication change: it is staged, mailed
+// to the NEW address to prove control, and announced to the OLD one so a
+// hijacked session cannot silently lock the owner out. Shares the signup
+// rate-limit bucket because it, too, sends mail to an attacker-chosen address.
+router.post(  "/api/account/email",            signupRateLimit, requireAuth, requestEmailChangeHandler);
+router.delete("/api/account/email",            requireAuth, cancelEmailChangeHandler);
+// Deliberately UNauthenticated and a GET: it is clicked from an email, by
+// someone proving control of the new mailbox, possibly on a device that has
+// never signed in. The token is the authorisation, exactly as for a magic link.
+router.get(   "/api/account/email/confirm",
+  makeRateLimit({ keyName: "email_confirm", limit: 30, windowSec: 60 }), confirmEmailChangeHandler);
+// Literal path before the parameterised one that would also match it.
+router.post(  "/api/account/sessions/revoke-others", requireAuth, revokeOtherSessionsHandler);
+router.get(   "/api/account/sessions",         requireAuth, listSessionsHandler);
+router.delete("/api/account/sessions/:sessionId", requireAuth, revokeSessionHandler);
+router.get(   "/api/account/logins",           requireAuth, listLoginsHandler);
+router.get(   "/api/account/notifications",    requireAuth, getNotificationsHandler);
+router.put(   "/api/account/notifications",    requireAuth, updateNotificationsHandler);
+// Danger zone. Owner-only, both of them; the delete additionally requires the
+// organisation's name typed back and cancels Stripe before touching any data.
+router.get(   "/api/account/export",           requireAuth, exportAccountHandler);
+router.get(   "/api/account/delete-preview",   requireAuth, deletePreviewHandler);
+router.delete("/api/account/org",              requireAuth, deleteOrgHandler);
+
+// ---- Referrals and credit -------------------------------------------------
+// Credit only. There is no payout path here or anywhere else — see
+// src/credits.js for why that is a decision rather than a gap.
+router.get( "/api/referrals",        requireAuth, getReferralsHandler);
+router.post("/api/referrals/invite", requireAuth, inviteReferralHandler);
+// The public link. Unauthenticated by design — it is followed by someone who
+// does not have an account yet. An unknown code still redirects to the site
+// rather than 404ing at a stranger who was recommended the product.
+router.get( "/api/r/:code",          publicReadRateLimit, referralLandingHandler);
 
 // ---- Organisations, seats and roles ---------------------------------------
 // Role enforcement lives inside the handlers rather than in middleware: the
@@ -279,6 +366,13 @@ router.delete("/api/org/members/:userId",  requireAuth, removeMemberHandler);
 // White-label report branding. Owner/admin AND top tier — the tier check is
 // inside the handler, where the org is already resolved.
 router.put(   "/api/org/branding",         requireAuth, updateOrgBrandingHandler);
+// Custom report hostname. Same Firm-tier + owner/admin gate as branding.
+// "Verified" here means the CNAME resolves to us — serving from the hostname
+// is a separate operator step, and the response says which of the two is
+// done rather than implying both. See handlers/org_domain.js.
+router.put(   "/api/org/domain",           requireAuth, setOrgDomainHandler);
+router.post(  "/api/org/domain/verify",    requireAuth, verifyOrgDomainHandler);
+router.delete("/api/org/domain",           requireAuth, removeOrgDomainHandler);
 
 // ---- API keys (Task #P-4) — CI and other machine callers -----------------
 // Management (create/list/revoke) requires a human owner/admin session —

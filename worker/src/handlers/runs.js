@@ -27,6 +27,7 @@
 import { getActiveOrg } from "./_orgs.js";
 import { toSarif } from "../analyzers/sarif.js";
 import { toCycloneDX } from "../analyzers/cyclonedx.js";
+import { toAuditCsv } from "../analyzers/csv.js";
 import { reportHtmlFor } from "../reports/render.js";
 import { createShare, readShare, revokeShare, listShares, DEFAULT_SHARE_DAYS, MAX_SHARE_DAYS } from "../reports/share.js";
 
@@ -399,7 +400,7 @@ export async function getRunHandler(request, env) {
 // Report rendering — shared by the authenticated route and the share link
 // ---------------------------------------------------------------------------
 
-export const REPORT_FORMATS = Object.freeze(["html", "sarif", "cyclonedx", "json"]);
+export const REPORT_FORMATS = Object.freeze(["html", "sarif", "cyclonedx", "csv", "json"]);
 
 /**
  * Build the response for one run in one format.
@@ -467,6 +468,20 @@ async function renderReportResponse(env, ctx, run, format) {
       headers: {
         "content-type": "application/vnd.cyclonedx+json; version=1.5",
         "content-disposition": `attachment; filename="algosize-${run.id}.cdx.json"`,
+      },
+    });
+  }
+
+  if (format === "csv") {
+    // The spreadsheet export — for the person tracking remediation in Sheets
+    // or pasting findings into a client workbook. Same audit, same ordering
+    // as the HTML report; see analyzers/csv.js for why scope and score ride
+    // in the file as comment rows.
+    return new Response(toAuditCsv(run), {
+      status: 200,
+      headers: {
+        "content-type": "text/csv; charset=utf-8",
+        "content-disposition": `attachment; filename="algosize-audit-${run.id}.csv"`,
       },
     });
   }

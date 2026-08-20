@@ -21,6 +21,7 @@ import { persistRun, getRunReportHandler, createRunShareHandler, sharedReportHan
 import { updateOrgBrandingHandler, getOrgHandler } from "../src/handlers/org.js";
 import { toSarif } from "../src/analyzers/sarif.js";
 import { toCycloneDX, purlFor } from "../src/analyzers/cyclonedx.js";
+import { toAuditCsv, csvCell } from "../src/analyzers/csv.js";
 import { renderReportHtml, escapeHtml } from "../src/reports/html.js";
 import { tierForOrg, safeLogoUrl } from "../src/reports/branding.js";
 import { storeReportFor, reportHtmlFor } from "../src/reports/render.js";
@@ -764,6 +765,7 @@ console.log("\nReport route\n");
     ["?format=html",      "text/html",                        "inline"],
     ["?format=sarif",     "application/sarif+json",           "attachment"],
     ["?format=cyclonedx", "application/vnd.cyclonedx+json",   "attachment"],
+    ["?format=csv",       "text/csv",                         "attachment"],
     ["?format=json",      "application/json",                 null],
   ];
   for (const [qs, contentType, disposition] of expectations) {
@@ -796,11 +798,75 @@ console.log("\nReport route\n");
 
   // Cross-org isolation on every format, not just the one that was tested before.
   await seedOrg(env, { userId: "u_other", email: "other@example.com" });
-  for (const format of ["html", "sarif", "cyclonedx", "json"]) {
+  for (const format of ["html", "sarif", "cyclonedx", "csv", "json"]) {
     const req = authedRequest(`https://algosize.com/api/runs/${run.id}/report?format=${format}`, { userId: "u_other", params: { id: run.id } });
     const res = await getRunReportHandler(req, env, null);
     expect(res.status === 404, `another org cannot read this run as ${format}`);
   }
+}
+
+// ===========================================================================
+console.log("\nCSV export\n");
+// ===========================================================================
+{
+  // RFC-4180 first: Excel is the least forgiving reader this file will meet.
+  expect(csvCell('with,comma') === '"with,comma"', "a comma forces quoting");
+  expect(csvCell('say "hi"') === '"say ""hi"""', "quotes are doubled inside a quoted cell");
+  expect(csvCell(null) === "" && csvCell(undefined) === "", "null/undefined render as empty, not the word");
+
+  const run = {
+    id: "run_csv1",
+    input: { repo: "acme/api-gateway" },
+    result: {
+      scanned: { manifests: ["package-lock.json"], totalPackages: 412 },
+      summary: {
+        securityScore: 27, grade: "F", totalIssues: 2, worstSeverity: "critical",
+        counts: { critical: 1, high: 1, medium: 0, low: 0, unknown: 0 },
+        complete: false,
+        partialReason: "This audit hit an internal cap.",
+        remediation: [
+          { priority: "high", action: "Upgrade lodash, it's got a \"gadget\" chain", why: "Fix exists.", command: "npm install lodash@4.17.21" },
+        ],
+      },
+      advisories: [
+        { id: "GHSA-crit", package: "lodash", ecosystem: "npm", installedVersion: "4.17.11",
+          fixedIn: "4.17.21", severity: "critical", cvssScore: 9.1, cvssVersion: "3.1",
+          approximate: false, cvssVector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N" },
+        { id: "GHSA-nofix", package: "node-fetch-npm", ecosystem: "npm", installedVersion: "2.0.2",
+          fixedIn: null, severity: "high", cvssScore: null, cvssVersion: null,
+          approximate: false, cvssVector: null },
+      ],
+    },
+  };
+  const csv = toAuditCsv(run);
+  const lines = csv.split("\r\n");
+
+  expect(csv.includes("\r\n"), "lines end CRLF for Excel");
+  expect(lines[0].includes("acme/api-gateway"), "the repo rides in the file, not just on the page");
+  expect(csv.includes("Score 27/100") && csv.includes("grade F"), "score and grade ride along too");
+  expect(csv.includes("COVERAGE INCOMPLETE"), "a truncated audit says so IN the spreadsheet");
+  expect(csv.includes("This audit hit an internal cap."), "with the Worker's own partialReason verbatim");
+
+  const header = lines.find((l) => l.startsWith("severity,package"));
+  expect(!!header && header.includes("cvss_vector") && header.includes("upgrade_command"),
+    "findings header carries the columns a remediation tracker needs");
+  const lodash = lines.find((l) => l.includes("GHSA-crit"));
+  expect(!!lodash && lodash.includes("npm install lodash@4.17.21"),
+    "a fixable advisory row carries its upgrade command");
+  expect(lodash.includes("published"), "a published CVSS score is labeled published");
+  const nofix = lines.find((l) => l.includes("GHSA-nofix"));
+  expect(!!nofix && nofix.includes("none") && !nofix.includes("npm install node-fetch"),
+    "an unfixable advisory has no invented command and no invented score");
+
+  expect(lines.some((l) => l === "critical,1"), "the severity tally section is present");
+  const rem = lines.find((l) => l.includes("Upgrade lodash"));
+  expect(!!rem && rem.includes('""gadget""'),
+    "remediation text with embedded quotes survives quoting");
+
+  // The one-click PDF hook: the printable page auto-prints when asked to.
+  const html = renderReportHtml(run, { generatedAt: Date.UTC(2026, 7, 20) });
+  expect(html.includes('has("print")') && html.includes("window.print()"),
+    "the HTML report carries the ?print=1 autoprint hook for the dashboard's PDF export");
 }
 
 // ===========================================================================

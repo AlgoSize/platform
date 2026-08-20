@@ -136,6 +136,18 @@ EMAIL_DELEGATED_USER = "noreply@algosize.com"
 # once signed in, can hit /api/admin/* and view the signed-up email roster.
 # Override per-environment below.
 ADMIN_EMAILS         = "guillaumelauzier@gmail.com"
+# Custom report domains (migrations/0015). A Firm customer points a CNAME at
+# this hostname; the Worker verifies the record over DNS-over-HTTPS before it
+# will call the domain verified. See src/domains.js.
+#
+# Verifying the record is NOT the same as serving from it: terminating TLS for
+# a hostname somebody else owns is Cloudflare for SaaS (custom hostnames),
+# which needs zone-level credentials this Worker deliberately does not carry.
+# Until that is provisioned, leave CUSTOM_HOSTNAMES_ENABLED unset — the API
+# then reports `servingReady: false` and the UI says DNS is correct but the
+# hostname is not live yet, rather than implying a domain works when it does
+# not. See DEPLOY-account-management.md.
+REPORT_CNAME_TARGET  = "cname.algosize.com"
 
 # ----------------------------------------------------------------------------
 # NO top-level `[[durable_objects.bindings]]` / `[[migrations]]` for USAGE.
@@ -224,6 +236,18 @@ PLAUSIBLE_ENDPOINT = "https://plausible.io"
 EMAIL_FROM           = "Algosize <noreply@algosize.com>"
 EMAIL_DELEGATED_USER = "noreply@algosize.com"
 ADMIN_EMAILS         = "guillaumelauzier@gmail.com"
+# Custom report domains (migrations/0015). A Firm customer points a CNAME at
+# this hostname; the Worker verifies the record over DNS-over-HTTPS before it
+# will call the domain verified. See src/domains.js.
+#
+# Verifying the record is NOT the same as serving from it: terminating TLS for
+# a hostname somebody else owns is Cloudflare for SaaS (custom hostnames),
+# which needs zone-level credentials this Worker deliberately does not carry.
+# Until that is provisioned, leave CUSTOM_HOSTNAMES_ENABLED unset — the API
+# then reports `servingReady: false` and the UI says DNS is correct but the
+# hostname is not live yet, rather than implying a domain works when it does
+# not. See DEPLOY-account-management.md.
+REPORT_CNAME_TARGET  = "cname.algosize.com"
 
 [[env.production.kv_namespaces]]
 binding = "SESSIONS"
@@ -330,6 +354,18 @@ PLAUSIBLE_ENDPOINT = "https://plausible.io"
 EMAIL_FROM           = "Algosize Staging <noreply-staging@algosize.com>"
 EMAIL_DELEGATED_USER = "noreply-staging@algosize.com"
 ADMIN_EMAILS         = "guillaumelauzier@gmail.com"
+# Custom report domains (migrations/0015). A Firm customer points a CNAME at
+# this hostname; the Worker verifies the record over DNS-over-HTTPS before it
+# will call the domain verified. See src/domains.js.
+#
+# Verifying the record is NOT the same as serving from it: terminating TLS for
+# a hostname somebody else owns is Cloudflare for SaaS (custom hostnames),
+# which needs zone-level credentials this Worker deliberately does not carry.
+# Until that is provisioned, leave CUSTOM_HOSTNAMES_ENABLED unset — the API
+# then reports `servingReady: false` and the UI says DNS is correct but the
+# hostname is not live yet, rather than implying a domain works when it does
+# not. See DEPLOY-account-management.md.
+REPORT_CNAME_TARGET  = "cname.algosize.com"
 
 # KV namespace IDs are placeholders. Create the real ones with:
 #   wrangler kv namespace create SESSIONS --config wrangler.toml --env staging

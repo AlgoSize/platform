@@ -9,7 +9,8 @@
 // with this file; the browser the reader already has does the job for free and
 // produces selectable text rather than a raster.
 //
-// Self-contained on purpose: inline CSS, no scripts beyond one print button,
+// Self-contained on purpose: inline CSS, no scripts beyond the print button
+// and its ?print=1 autoprint hook (both inline, both covered by the CSP),
 // no remote fonts or images except a white-label logo the org explicitly set.
 // The file has to survive being emailed as an attachment and opened offline.
 //
@@ -529,6 +530,17 @@ export function renderReportHtml(run, { branding = ALGOSIZE_BRANDING, generatedA
   <div class="toolbar">
     <button type="button" class="print-btn" onclick="window.print()">Print or save as PDF</button>
   </div>
+  <script>
+  // ?print=1 — the dashboard's "PDF" download option. Opens this same page
+  // and goes straight to the print dialog, so exporting a PDF is one click
+  // instead of open-then-find-the-button. Deliberately still this page and
+  // this stylesheet: the PDF remains "this page, printed", never a second
+  // renderer that can drift. Waits for the load event so the logo image (the
+  // one external resource) is in before the dialog snapshots the page.
+  if (new URLSearchParams(location.search).has("print")) {
+    addEventListener("load", function () { setTimeout(function () { window.print(); }, 50); });
+  }
+  </script>
 
   ${mastheadHtml(branding, when)}
 

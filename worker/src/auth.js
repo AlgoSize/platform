@@ -13,6 +13,7 @@
 
 import { verifyApiKey, touchApiKeyLastUsed } from "./handlers/_api_keys.js";
 import { indexSession, unindexSession } from "./sessions.js";
+import { writeAudit, AUDIT_ACTIONS, SYSTEM_ACTOR } from "./audit.js";
 
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;  // 30 days
 const ALG = "HS256";
@@ -183,6 +184,34 @@ export async function issueJWT(env, userId, email, subStatus, { request = null, 
 
   try { await indexSession(env, userId, token, request); }
   catch { /* the session is valid; it is only missing from the sessions list */ }
+
+  // Sign-in history. Written here rather than at each call site so no auth
+  // flow can be added later that quietly does not record one.
+  //
+  // It has to be the audit log and not the session index: the index only
+  // knows about sessions that are still alive, so a sign-in from a device the
+  // owner did not recognise would vanish from the record the moment that
+  // session was revoked — which is exactly the sign-in they need to see.
+  //
+  // Fails soft, like everything else in this function. A session must be
+  // issuable when D1 is unreachable; refusing to log someone in because their
+  // login could not be logged would turn a reporting outage into an
+  // authentication outage.
+  try {
+    await writeAudit(env, null, {
+      actor:       email || SYSTEM_ACTOR,
+      actorUserId: userId,
+      action:      AUDIT_ACTIONS.AUTH_LOGIN,
+      targetType:  "user",
+      targetId:    userId,
+      metadata: {
+        method:    authMethod || "unknown",
+        userAgent: (request && request.headers.get("User-Agent")) || null,
+        ip:        (request && request.headers.get("CF-Connecting-IP")) || null,
+        country:   (request && request.headers.get("CF-IPCountry")) || null,
+      },
+    });
+  } catch { /* the sign-in happened; only its history entry is missing */ }
 
   if (authMethod) {
     try {

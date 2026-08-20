@@ -18,6 +18,7 @@
 import { issueJWT, buildSessionCookie } from "../auth.js";
 import { recordEmailSend } from "../oplog.js";
 import { getUserByEmail, createFreeUser } from "./_users.js";
+import { attributeSignupFromRequest } from "./referrals.js";
 import { sendTransactional } from "../email/transactional.js";
 import { magicLinkEmail } from "../email/templates.js";
 
@@ -161,6 +162,9 @@ export async function verifyMagicLinkHandler(request, env) {
   if (!user) {
     const created = await createFreeUser(env, { email });
     user = created.user;
+    // Brand-new account: credit whoever's link brought them here. Never
+    // blocks and never fails the signup — see attributeSignupFromRequest.
+    await attributeSignupFromRequest(env, request, user);
   }
 
   const sessionToken = await issueJWT(env, user.userId, user.email, user.subStatus, {

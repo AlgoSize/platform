@@ -27,6 +27,7 @@ export const WHITE_LABEL_TIER = "firm";
 export const ALGOSIZE_BRANDING = Object.freeze({
   companyName: "Algosize",
   logoUrl:     null,
+  accent:      null,      // null = the report's own stylesheet decides
   whiteLabel:  false,
 });
 
@@ -99,6 +100,61 @@ export function safeCompanyName(raw) {
   return trimmed;
 }
 
+/** Minimum contrast between the accent and the white text drawn on it. */
+export const MIN_ACCENT_CONTRAST = 4.5;
+
+/** WCAG relative luminance of an #rrggbb colour. */
+function luminance(hex) {
+  const channel = (v) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  };
+  const r = channel(parseInt(hex.slice(1, 3), 16));
+  const g = channel(parseInt(hex.slice(3, 5), 16));
+  const b = channel(parseInt(hex.slice(5, 7), 16));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/** Contrast ratio of an #rrggbb colour against white. */
+export function contrastWithWhite(hex) {
+  return 1.05 / (luminance(hex) + 0.05);
+}
+
+/**
+ * Validate a brand accent colour.
+ *
+ * `#rrggbb` only — no names, no rgb(), no alpha. The value is written into a
+ * `style` attribute in a document that gets forwarded to a third party, and
+ * accepting arbitrary CSS colour syntax there is accepting arbitrary CSS.
+ *
+ * It must also be DARK ENOUGH. The accent is used as a button and badge
+ * background with white text on it, so a pale yellow would render as white on
+ * white — an invisible "View report" button in a document the customer is
+ * handing to their own client. Requiring 4.5:1 against white is the same bar
+ * the rest of the report holds itself to, and refusing loudly is far better
+ * than shipping an unreadable one.
+ *
+ * Returns the normalised lowercase hex, or null.
+ */
+export function safeAccent(raw) {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim().toLowerCase();
+  if (!/^#[0-9a-f]{6}$/.test(trimmed)) return null;
+  if (contrastWithWhite(trimmed) < MIN_ACCENT_CONTRAST) return null;
+  return trimmed;
+}
+
+/**
+ * The accent a report should actually paint with.
+ *
+ * NEVER applied to severity colours. A client who could recolour "critical"
+ * could make a critical finding look calm, and a report whose whole purpose
+ * is to tell someone what is wrong must not let its author tune down how
+ * wrong it looks. This is a hard rule, not a default — see the severity ramp
+ * in the report stylesheet, which does not read this value at all.
+ */
+export const ALGOSIZE_ACCENT = "#0f766e";
+
 /**
  * Resolve the branding a report should carry.
  *
@@ -112,11 +168,16 @@ export function brandingFor(env, org, entitlement) {
 
   const companyName = safeCompanyName(org && org.brandCompanyName);
   const logoUrl     = safeLogoUrl(org && org.brandLogoUrl);
-  if (!companyName && !logoUrl) return { ...ALGOSIZE_BRANDING };
+  // Re-validated at render, like the logo URL and for the same reason: a
+  // value that passed validation on the day it was written must still pass on
+  // the day it is painted, because the rules can tighten between the two.
+  const accent      = safeAccent(org && org.brandAccent);
+  if (!companyName && !logoUrl && !accent) return { ...ALGOSIZE_BRANDING };
 
   return {
     companyName: companyName || (org && org.name) || ALGOSIZE_BRANDING.companyName,
     logoUrl,
+    accent,
     whiteLabel: true,
   };
 }

@@ -48,6 +48,16 @@ function rowToUser(row) {
     // hence the default rather than passing the NULL through.
     quantity:         typeof row.quantity === "number" ? row.quantity : 1,
     priceId:          row.price_id || null,
+    // How this account signs in — "magic_link" | "google" | "checkout" |
+    // "signup" (migrations/0011). NULL on rows written before that migration,
+    // and passed through as null rather than defaulted: "we don't know" and
+    // "magic link" are different answers, and the account page says which.
+    authMethod:       row.auth_method || null,
+    activeOrgId:      row.active_org_id || null,
+    // Display identity (migrations/0015). Both nullable; a user who has set
+    // neither renders from their email exactly as they did before.
+    displayName:      row.display_name || null,
+    avatarUrl:        row.avatar_url || null,
     createdAt:        row.created_at,
     updatedAt:        row.updated_at,
   };

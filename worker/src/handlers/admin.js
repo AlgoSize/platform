@@ -235,6 +235,17 @@ const MIGRATIONS = Object.freeze([
     checks: [{ table: "email_sends" }] },
   { id: "0014", name: "feature_flags",
     checks: [{ table: "feature_flags" }] },
+  // 0015 spans five concerns because they ship as one screen. Checked at both
+  // ends — a column added by the first statement and a table created by the
+  // last — so a migration that died partway through reports as missing rather
+  // than as applied.
+  { id: "0015", name: "account_management",
+    checks: [{ table: "users", column: "display_name" },
+             { table: "organisations", column: "brand_domain" },
+             { table: "email_changes" },
+             { table: "notification_prefs" },
+             { table: "referral_codes" },
+             { table: "credit_events" }] },
 ]);
 
 /** Plain SQLite identifier — the only shape we will interpolate into a PRAGMA. */

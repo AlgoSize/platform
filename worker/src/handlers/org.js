@@ -40,7 +40,9 @@ import {
   tierForOrg,
   safeLogoUrl,
   safeCompanyName,
+  safeAccent,
   MAX_COMPANY_NAME_LEN,
+  MIN_ACCENT_CONTRAST,
   WHITE_LABEL_TIER,
 } from "../reports/branding.js";
 import { sendTransactional as defaultSendTransactional } from "../email/transactional.js";
@@ -170,9 +172,21 @@ export async function getOrgHandler(request, env) {
     branding: {
       companyName: org.brandCompanyName || null,
       logoUrl:     org.brandLogoUrl || null,
+      accent:      org.brandAccent || null,
       available:   mayWhiteLabel(env, org, entitlement),
       appliesToNewReports: mayWhiteLabel(env, org, entitlement)
-        && !!(org.brandCompanyName || org.brandLogoUrl),
+        && !!(org.brandCompanyName || org.brandLogoUrl || org.brandAccent),
+      // The custom hostname and how far its verification got. Grouped under
+      // branding because that is where the user set it, but kept as its own
+      // object because unlike the other three it has a lifecycle rather than
+      // just a value.
+      domain: {
+        hostname:  org.brandDomain || null,
+        status:    org.brandDomainStatus || null,
+        detail:    org.brandDomainDetail || null,
+        checkedAt: org.brandDomainCheckedAt || null,
+        attempts:  org.brandDomainAttempts || 0,
+      },
     },
     role,
     members,
@@ -255,9 +269,33 @@ export async function updateOrgBrandingHandler(request, env) {
     }
   }
 
-  if (patch.companyName === undefined && patch.logoUrl === undefined) {
+  if (body && body.accent !== undefined) {
+    if (body.accent === null || body.accent === "") {
+      patch.accent = null;
+    } else {
+      const accent = safeAccent(body.accent);
+      if (!accent) {
+        // Two different refusals behind one error code, so the message says
+        // which. "Invalid colour" for a colour that is a perfectly good
+        // colour — just too pale — would send someone hunting for a typo.
+        const wellFormed = typeof body.accent === "string" && /^#[0-9a-f]{6}$/i.test(body.accent.trim());
+        return jsonResponse(
+          {
+            error: "invalid_accent",
+            message: wellFormed
+              ? `That colour is too light: report buttons draw white text on it, and at this shade the label would be unreadable. Pick something with at least ${MIN_ACCENT_CONTRAST}:1 contrast against white.`
+              : "The accent must be a six-digit hex colour like #1c5f4a.",
+          },
+          400,
+        );
+      }
+      patch.accent = accent;
+    }
+  }
+
+  if (patch.companyName === undefined && patch.logoUrl === undefined && patch.accent === undefined) {
     return jsonResponse(
-      { error: "nothing_to_update", message: "Provide companyName and/or logoUrl. Send null to clear one." },
+      { error: "nothing_to_update", message: "Provide companyName, logoUrl and/or accent. Send null to clear one." },
       400,
     );
   }
@@ -275,6 +313,7 @@ export async function updateOrgBrandingHandler(request, env) {
     metadata:   {
       companyName: (updated && updated.brandCompanyName) || null,
       logoUrl:     (updated && updated.brandLogoUrl) || null,
+      accent:      (updated && updated.brandAccent) || null,
     },
   });
 
@@ -283,6 +322,7 @@ export async function updateOrgBrandingHandler(request, env) {
     branding: {
       companyName: (updated && updated.brandCompanyName) || null,
       logoUrl:     (updated && updated.brandLogoUrl) || null,
+      accent:      (updated && updated.brandAccent) || null,
     },
     // Reports already rendered into R2 keep the branding they were generated
     // with. Said out loud because it is the surprising part.
