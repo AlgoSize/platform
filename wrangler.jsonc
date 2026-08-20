@@ -10,35 +10,52 @@
   // (Workers Route + DNS + retiring the GitHub Pages deploy).
   //
   // It used to ALSO be deployed by Cloudflare's own "Workers Builds" git
-  // integration — past tense for what deploys THIS config; that trigger is
-  // still connected as of this writing and still fires on every push. It
-  // turned out to be bound to the WRONG service: it uploads this site's
-  // build as a version on `algosize`, the API Worker's service, not on
-  // `algosize-site`. Nothing has been routed from it — `versions upload`
-  // never routes traffic — but a version that is a static site sitting on
-  // the API Worker's service is one accidental promotion away from
-  // replacing the live API, and pushes to this repo keep adding more of
-  // them. It needs deleting in the Cloudflare dashboard (Workers & Pages →
-  // algosize → Settings → Build → disconnect the Git integration) — that
-  // is a manual step nothing in this repo can do, and it has NOT been done
-  // yet. Until it is, do not promote any version on the `algosize` service
-  // without first confirming from its content that it is the API, not this
-  // site — `wrangler versions list --name algosize` shows them all.
+  // integration. RESOLVED 2026-08-20: there were TWO such triggers, both
+  // bound to the WRONG service (`algosize`, the API Worker) and both built
+  // from the repo root — i.e. from THIS config — so each one deployed the
+  // static site onto the API's service. Both are now deleted:
   //
-  // The GitHub Actions workflow this file's header describes is a second,
-  // correct deploy path added alongside the still-live bad one, not a
-  // replacement for it yet. It runs `wrangler deploy` (not `versions
-  // upload`) against exactly this config, from a job that only ever
-  // touches the service this file names — so once the dashboard trigger is
-  // gone, this is what keeps `algosize-site` deploying.
+  //   7d4c3cb7-…  "Deploy non-production branches"  every branch except main
+  //               deploy_command: npx wrangler versions upload
+  //   98c4057e-…  (unnamed; name field was the raw script id)  main only
+  //               deploy_command: npx wrangler deploy
+  //
+  // An earlier version of this comment reasoned that the first was harmless
+  // because `versions upload` never routes traffic, making it only a latent
+  // risk. That reasoning does not survive what happened on 2026-08-20: over
+  // roughly two hours, every push to this repo — feature branches and main
+  // alike — left `algosize` serving this site's 404 page instead of the API,
+  // with all seven of its secrets wiped, and each manual recovery held only
+  // until the next push. Notably the `main` trigger's builds were all marked
+  // FAILED in Cloudflare's own build history and still did this, so "the
+  // build failed" is not evidence that nothing was deployed.
+  //
+  // The exact mechanism was never pinned down and does not need to be: the
+  // fix is that no Workers Builds trigger may exist on the `algosize`
+  // service at all. Verify with:
+  //
+  //   curl -s ".../accounts/$ACCOUNT/builds/workers/$ALGOSIZE_SCRIPT_ID/triggers" \
+  //     -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"     # expect result: []
+  //
+  // Note that endpoint takes the internal script id, NOT the name "algosize"
+  // — querying by name returns an empty list whether or not triggers exist,
+  // which is why several checks during the incident wrongly read as clean.
+  //
+  // The GitHub Actions workflow this file's header describes is now the ONLY
+  // path that deploys this config. It runs `wrangler deploy` (not `versions
+  // upload`) against exactly this config, from a job that only ever touches
+  // the service this file names — verified during the incident: its logs
+  // show `Uploaded algosize-site` and assert only `staging.algosize.com/*`
+  // and `algosize.com/*`, never `algosize.com/api/*`.
   //
   // The service name MUST NOT be `algosize`. That is the API Worker's
   // service (see worker/wrangler.toml), deployed by `worker.yml`. With both
   // configs named `algosize`, the two pipelines would deploy different
   // Workers to the same service and the last one to run would win — so an
   // ordinary site change could silently replace the live API, and an API
-  // deploy could replace the site. This is not a hypothetical: it is what
-  // the still-connected Workers Builds trigger is doing right now.
+  // deploy could replace the site. This is not a hypothetical — it is
+  // exactly what the two deleted Workers Builds triggers did on 2026-08-20,
+  // by building this config and deploying it onto the API's service.
   //
   // Related: wrangler resolves its config by walking UP the directory tree,
   // so this file also shadows worker/wrangler.toml for any wrangler command
