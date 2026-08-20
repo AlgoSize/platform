@@ -36,6 +36,21 @@ function rowToOrg(row) {
     // NOT mean permitted to use — see brandingFor in src/reports/branding.js.
     brandCompanyName: row.brand_company_name || null,
     brandLogoUrl:     row.brand_logo_url || null,
+    // The rest of the branding surface (migrations/0015). Same rule as above:
+    // stored here, permitted-or-not resolved at render time.
+    brandAccent:      row.brand_accent || null,
+    brandDomain:      row.brand_domain || null,
+    // null | 'pending' | 'verified' | 'failed'. Never a boolean — "not
+    // verified" covers nothing-entered, waiting-on-DNS and gave-up, and those
+    // are three different things to tell someone.
+    brandDomainStatus:    row.brand_domain_status || null,
+    brandDomainCheckedAt: typeof row.brand_domain_checked_at === "number" ? row.brand_domain_checked_at : null,
+    brandDomainDetail:    row.brand_domain_detail || null,
+    brandDomainAttempts:  typeof row.brand_domain_attempts === "number" ? row.brand_domain_attempts : 0,
+    // Where invoices and dunning go. NULL means "the owner's login email",
+    // which is what every account had before this column existed.
+    billingEmail:     row.billing_email || null,
+    slackWebhookUrl:  row.slack_webhook_url || null,
     createdAt:        row.created_at,
     updatedAt:        row.updated_at,
   };
@@ -48,12 +63,13 @@ function rowToOrg(row) {
  * clears a field; `undefined` leaves it alone, so clearing the logo does not
  * also wipe the company name.
  */
-export async function updateOrgBranding(env, orgId, { companyName, logoUrl } = {}) {
+export async function updateOrgBranding(env, orgId, { companyName, logoUrl, accent } = {}) {
   if (!orgId) return null;
   const sets = [];
   const vals = [];
   if (companyName !== undefined) { sets.push("brand_company_name = ?"); vals.push(companyName); }
   if (logoUrl     !== undefined) { sets.push("brand_logo_url = ?");     vals.push(logoUrl); }
+  if (accent      !== undefined) { sets.push("brand_accent = ?");       vals.push(accent); }
   if (!sets.length) return getOrgById(env, orgId);
 
   sets.push("updated_at = ?");

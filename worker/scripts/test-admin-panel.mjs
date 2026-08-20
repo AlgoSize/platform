@@ -286,7 +286,9 @@ group("overview");
 
   expect(Array.isArray(body.checked) && body.checked.length > 0,
     "the response names what was CHECKED, so an empty alert list can be told apart from checks that never ran");
-  expect(body.activity.length === 2, "recent audit activity is included");
+  // Three, not two: the admin's own sign-in is audited now (see the audit
+  // feed group below), and it lands in this feed like any other event.
+  expect(body.activity.length === 3, "recent audit activity is included");
 }
 
 {
@@ -572,15 +574,25 @@ group("audit feed");
   const token = await adminToken(env);
 
   const { body } = await call(env, "/api/admin/audit", { token });
-  expect(body.events.length === 2, "the feed loads");
+  // Two seeded rows plus one auth.login: adminToken() goes through issueJWT,
+  // which records every sign-in so the account area can show a real login
+  // history. The session index cannot serve that — it only knows about
+  // sessions that are still alive, so a sign-in from a device the owner did
+  // not recognise would vanish the moment that session was revoked.
+  expect(body.events.length === 3, "the feed loads");
+  expect(body.events.some((e) => e.action === AUDIT_ACTIONS.AUTH_LOGIN),
+    "sign-ins reach the feed — a login history that only covers live sessions " +
+    "is missing exactly the sign-ins someone needs to see");
   expect(Array.isArray(body.actions) && body.actions.includes(AUDIT_ACTIONS.API_KEY_REVOKED),
     "the action vocabulary ships with the data, so the panel's filter menu cannot drift out of " +
     "sync with what the writers actually emit");
 
+  // The login row carries no org — a sign-in is a fact about a person, and
+  // guessing which of their orgs it "belonged to" would be inventing data.
   const byOrg = await call(env, "/api/admin/audit?orgId=org_north", { token });
   expect(byOrg.body.events.length === 2, "filters pass through");
   const byActor = await call(env, `/api/admin/audit?actor=${encodeURIComponent(ADMIN_EMAIL)}`, { token });
-  expect(byActor.body.events.length === 1, "including by actor");
+  expect(byActor.body.events.length === 2, "including by actor");
 }
 
 // ===========================================================================

@@ -45,14 +45,17 @@
 import { verifyStripeSignature, stripeFetch } from "../stripe.js";
 import { upsertUserFromCheckout } from "./_users.js";
 import {
+  getOrgById,
   getOrgByCustomerId,
   getOrgBillingEmail,
   updateOrgSubscriptionByCustomerId,
   setOrgSubStatusByCustomerId,
 } from "./_orgs.js";
+import { pendingReferralForOrg, setReferralStage } from "../referrals.js";
+import { earnCredit, syncUnsyncedCredit, creditBalance, formatCents, REFERRAL_CREDIT_CENTS } from "../credits.js";
 import { captureException, captureMessage } from "../observability.js";
 import { sendTransactional as defaultSendTransactional } from "../email/transactional.js";
-import { paymentFailed, trialEndingSoon } from "../email/templates.js";
+import { paymentFailed, trialEndingSoon, referralCredited } from "../email/templates.js";
 import { recordWebhookDelivery, recordEmailSend, WEBHOOK_OUTCOME } from "../oplog.js";
 import { writeAudit, AUDIT_ACTIONS, SYSTEM_ACTOR } from "../audit.js";
 
@@ -314,6 +317,23 @@ async function handleCheckoutCompleted(env, event) {
     stripeCustomerId: customerId,
     subStatus: "active",
   });
+
+  // An org can earn referral credit while it is still free — a referrer's
+  // credit is issued on the REFERRED org's first payment, and by then the
+  // referrer may themselves have been credited before they ever checked out.
+  // Credit earned with no Stripe customer to put it on sits in our ledger
+  // with a NULL stripe_txn_id; this is the moment there is finally somewhere
+  // to push it. Idempotent per event, so a webhook redelivery cannot
+  // double-credit.
+  try {
+    const org = await getOrgByCustomerId(env, customerId);
+    if (org) await syncUnsyncedCredit(env, org.orgId, customerId);
+  } catch (err) {
+    // Never fails the checkout webhook. The credit is still on the ledger and
+    // reaches Stripe on the next attempt; a 500 here would make Stripe
+    // redeliver an event whose account-creation half already succeeded.
+    console.error("checkout.session.completed: credit sync failed", err);
+  }
 }
 
 async function handleSubscriptionDeleted(env, event) {
@@ -416,7 +436,94 @@ async function handleInvoicePaid(env, ctx, event) {
   });
   if (!updated) {
     console.warn("invoice.paid: no org found for customer", customerId);
+    return;
   }
+
+  // A paid invoice is what makes a referral qualify — not the signup, and not
+  // a trial that never converts. Done here rather than on
+  // `customer.subscription.created` for exactly that reason: money has to
+  // have moved.
+  //
+  // Never throws. This handler's contract is that a 500 makes Stripe redeliver
+  // the event, and the subscription state above is already written by the time
+  // we get here — redelivering the whole event to retry a discount would risk
+  // re-running the part that already succeeded. Credit that fails to issue is
+  // recoverable (the referral stays in 'converted' and the ledger row carries
+  // no Stripe id); a webhook retry storm is not.
+  try {
+    await settleReferralCredit(env, ctx, updated);
+  } catch (err) {
+    console.error("invoice.paid: referral credit failed", err);
+  }
+}
+
+/**
+ * Issue referral credit for an org that has just paid.
+ *
+ * Two guards make this safe to call on every paid invoice rather than only
+ * the first:
+ *
+ *   1. pendingReferralForOrg only matches referrals still in 'signed_up' or
+ *      'converted', so an already-credited referral finds nothing.
+ *   2. earnCredit uses the referral id as Stripe's idempotency key, so even a
+ *      genuine double-call cannot credit the customer twice.
+ *
+ * The referrer is emailed, because credit that arrives silently is credit
+ * nobody knows they have — and the whole point of a referral programme is
+ * that earning from it feels like something happened.
+ */
+async function settleReferralCredit(env, ctx, referredOrg) {
+  const referral = await pendingReferralForOrg(env, referredOrg.orgId);
+  if (!referral) return;
+
+  await setReferralStage(env, referral.referralId, "converted");
+
+  const referrerOrg = await getOrgById(env, referral.referrerOrgId);
+  if (!referrerOrg) return;
+
+  const result = await earnCredit(env, {
+    orgId: referrerOrg.orgId,
+    stripeCustomerId: referrerOrg.stripeCustomerId || null,
+    amountCents: REFERRAL_CREDIT_CENTS,
+    description: `Earned — ${referral.label} first invoice paid`,
+    referralId: referral.referralId,
+  });
+  if (!result.ok) return;
+
+  await setReferralStage(env, referral.referralId, "credited", {
+    creditCents: REFERRAL_CREDIT_CENTS,
+  });
+
+  await writeAudit(env, ctx, {
+    actor: SYSTEM_ACTOR,
+    action: AUDIT_ACTIONS.CREDIT_EARNED,
+    targetType: "org", targetId: referrerOrg.orgId, orgId: referrerOrg.orgId,
+    metadata: {
+      referralId: referral.referralId,
+      amountCents: REFERRAL_CREDIT_CENTS,
+      // Recorded because it is the one thing an operator needs to know later:
+      // whether Stripe actually has this credit, or only we do.
+      stripeTxnId: result.stripeTxnId,
+      syncReason: result.reason,
+    },
+  });
+
+  const to = await getOrgBillingEmail(env, referrerOrg.orgId).catch(() => null);
+  if (!to) return;
+  const balance = await creditBalance(env, referrerOrg.orgId);
+  const tmpl = referralCredited({
+    email: to,
+    referredName: referral.label,
+    amount: formatCents(REFERRAL_CREDIT_CENTS),
+    balance: formatCents(balance.balanceCents),
+  });
+  const sendPromise = defaultSendTransactional(env, ctx, {
+    to, subject: tmpl.subject, text: tmpl.text, html: tmpl.html,
+  }).then((r) => recordEmailSend(env, ctx, {
+    recipient: to, template: "referral_credited", orgId: referrerOrg.orgId, result: r,
+  }));
+  if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(sendPromise);
+  else void sendPromise.catch(() => {});
 }
 
 /**

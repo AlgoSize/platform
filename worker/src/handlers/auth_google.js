@@ -19,6 +19,7 @@
 
 import { issueJWT, buildSessionCookie } from "../auth.js";
 import { getUserByEmail, createFreeUser } from "./_users.js";
+import { attributeSignupFromRequest } from "./referrals.js";
 
 const STATE_TTL_SEC = 10 * 60;        // 10 minutes
 const STATE_BYTES   = 32;
@@ -196,6 +197,9 @@ export async function googleCallbackHandler(request, env) {
   if (!user) {
     const created = await createFreeUser(env, { email });
     user = created.user;
+    // Brand-new account: credit whoever's link brought them here. Never
+    // blocks and never fails the signup — see attributeSignupFromRequest.
+    await attributeSignupFromRequest(env, request, user);
   }
 
   const sessionToken = await issueJWT(env, user.userId, user.email, user.subStatus, {
