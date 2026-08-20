@@ -1,0 +1,57 @@
+Diagnose (read-only first) why algosize.com/api/* was served by the
+algosize-site static Worker instead of the algosize API Worker after the
+last two production deploys, and propose a fix. Do not change any Cloudflare
+routing, DNS, or Worker configuration without showing me what you found and
+getting confirmation first. No secret changes, no wrangler deploy/delete.
+
+Background: two Workers share the algosize.com zone —
+
+  algosize        (worker/wrangler.toml)  route: algosize.com/api/*  (specific)
+  algosize-site    (root wrangler.jsonc)   route: algosize.com/*      (catch-all)
+
+algosize-site is a Workers STATIC ASSETS deployment — no `main` script, just
+an `assets` block, and no `run_worker_first` flag set. Cloudflare's documented
+rule is that the more specific route should always win regardless of deploy
+order, but on the last production deploy /api/me was served by algosize-site's
+404 page instead. Both Workers deploy from the same GitHub push (site-worker.yml
+and worker.yml run concurrently), so this could recur on every future push to
+main.
+
+1. Get the zone id:
+
+     curl -s "https://api.cloudflare.com/client/v4/zones?name=algosize.com" \
+       -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+
+2. List every route currently registered on that zone — this is ground truth,
+   independent of what either wrangler.toml/jsonc file claims:
+
+     curl -s "https://api.cloudflare.com/client/v4/zones/{zone_id}/workers/routes" \
+       -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+
+   Report the full JSON: every route's pattern, its bound script, and its id.
+   I need to see whether algosize.com/api/* is currently present at all, which
+   script it's bound to right now, and whether there are any duplicate or
+   stale route entries for overlapping patterns.
+
+3. Check whether Workers Static Assets deployments are documented to have
+   different route-precedence behavior than regular Worker scripts when they
+   share a zone with another Worker — specifically around `run_worker_first`
+   and how assets-serving interacts with a more specific route owned by a
+   DIFFERENT script (not the same script's own `run_worker_first`, which
+   controls asset-vs-code precedence WITHIN one Worker — I want to know about
+   precedence ACROSS two different Workers on the same zone). Check
+   developers.cloudflare.com/workers/static-assets/ and
+   developers.cloudflare.com/workers/configuration/routing/routes/ for this.
+
+4. Report back:
+   - the full current route list from step 2
+   - whether algosize.com/api/* is bound to the algosize script right now
+   - what the docs say about assets-Worker route precedence vs a plain Worker
+   - your best diagnosis of why the catch-all won last time
+
+Do not delete or modify any route yet. Once I see the diagnosis I'll decide
+between: (a) removing and re-creating the specific route so it's freshly
+registered after algosize-site's route, (b) filing this as a Cloudflare
+platform quirk if the docs confirm assets-Workers don't honor cross-Worker
+route specificity, or (c) a GitHub Actions change to stop the two deploy
+workflows from racing (which I can make directly in the repo).
