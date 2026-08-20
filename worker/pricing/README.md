@@ -24,17 +24,63 @@ flip its status.** That is the release gate, not a nice-to-have.
 
 ```
 pricing/
-  catalog.json          index: catalog version, currency, provider list
+  catalog.js          index: catalog version, currency, provider list
   providers/
-    aws.json            metered — real per-vCPU-hour and per-GiB-hour prices
-    digitalocean.json   plan-billed — whole Droplets, no unit prices published
-    hetzner.json        plan-billed — whole servers, no unit prices published
+    aws.js            metered — real per-vCPU-hour and per-GiB-hour prices
+    digitalocean.js   plan-billed — whole Droplets, no unit prices published
+    hetzner.js        plan-billed — whole servers, no unit prices published
+    akamai-linode.js  plan-billed — whole Linodes, no unit prices published
+    vultr.js          plan-billed — two Cloud Compute SKUs only, deliberately thin
 ```
+
+### Why these are `.js` and not `.json`
+
+They were `.json` until the estimator was wired into the router, at which point
+`wrangler dev` refused to build: importing JSON from an ES module needs an
+import attribute, and there is no spelling that works in both places this code
+runs. Node 22 accepts only `with { type: "json" }` (it removed `assert`); the
+esbuild inside wrangler 3.78 accepts only `assert` (it predates `with`). A
+plain attribute-less import works in esbuild and throws in Node.
+
+So each file exports one frozen object literal instead, which needs no
+attribute anywhere. **This is a packaging workaround, not permission to put
+logic in the catalog.** `scripts/test-estimator.mjs` asserts every pricing
+module is a single `export default Object.freeze(...)` whose contents parse as
+JSON once unwrapped — if it parses as JSON it cannot contain a function or a
+computed value, so the "inert data" property survives as a test rather than as
+a file extension. Editing them is unchanged: they are still plain data, still
+diff cleanly, still reviewable line by line.
+
+### Providers deliberately NOT in this catalog
+
+- **Scaleway** — the only pricing data sourced for it is EUR-denominated, and
+  this catalog performs no currency conversion (see below). It stays out until
+  a USD-priced page is found for it, the way `hetzner.js` only models
+  Hetzner's one USD-listed US region and skips its EUR ones.
+- **OVHcloud, Cloudflare Workers, Fly.io, Render, Railway, Lambda, RunPod** —
+  no real sourced pricing has been added for any of these yet; only schema
+  requirements have been discussed. Do not add a provider file with invented
+  numbers or as an empty stub — wait until real prices are sourced.
+- GPU pricing that DOES appear in `digitalocean.js` and `akamai-linode.js`
+  (as `gpuPlans`) is catalog reference data only. `engine.js` unconditionally
+  reports every GPU resource as unsupported regardless of what the catalog
+  contains — pricing GPUs for real needs an engine change, not just data, and
+  that change has not been made. Treat `gpuPlans` as inert until it has.
+
+### `verificationNotes` — provenance, not a verification tier
+
+Some provider files carry an optional `verificationNotes` string. It exists to
+say *how* a number arrived without inflating `verificationStatus`, which stays
+binary (`"verified"` or anything else) by design — see "Current status" above.
+A cross-check (e.g. a pulled hourly rate that divides cleanly out of the
+monthly price at the catalog's own cap-hours) is evidence, not verification;
+`verificationNotes` is where that nuance is written down instead of being lost
+or, worse, expressed by quietly flipping the status.
 
 ### Metered vs plan-billed — the distinction that matters
 
 AWS Fargate genuinely publishes a per-vCPU-hour and a per-GiB-hour price, so
-`aws.json` carries a `dimensions` block and the engine multiplies consumption by
+`aws.js` carries a `dimensions` block and the engine multiplies consumption by
 those rates.
 
 DigitalOcean and Hetzner sell **whole machines**. Neither publishes a per-vCPU or
@@ -54,7 +100,7 @@ plan-billed file has acquired a `vcpuHour` key.
 
 ## Required fields
 
-**`catalog.json`** — `schemaVersion`, `catalogVersion`, `currency`,
+**`catalog.js`** — `schemaVersion`, `catalogVersion`, `currency`,
 `effectiveDate`, `lastVerified`, `verificationStatus`, `providers`, `notice`.
 
 **Each provider file** — `providerId`, `providerName`, `category`,
@@ -87,7 +133,7 @@ USD-listed US location is modelled and its EUR locations are not.
    `lastVerified` to today.
 4. Set `verificationStatus` to `"verified"` **only** if you actually opened the
    page and compared every entry in the file.
-5. Bump `catalogVersion` in **both** `catalog.json` and every provider file. The
+5. Bump `catalogVersion` in **both** `catalog.js` and every provider file. The
    loader refuses to start when they disagree, because a partially-updated
    catalog would mix price vintages inside a single comparison table.
 6. Update `limitations` if the provider changed what is and is not included.

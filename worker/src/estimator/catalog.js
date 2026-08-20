@@ -10,13 +10,21 @@
 // pure and testable against fixtures — and what makes "the engine performs no
 // IO" a structural property rather than a promise.
 //
-// The JSON files are imported statically so the bundler inlines them at build
-// time. There is no fs, no fetch, and nothing to configure at runtime.
+// The pricing modules are imported statically so the bundler inlines them at
+// build time. There is no fs, no fetch, and nothing to configure at runtime.
+//
+// They are .js rather than .json because no import-attribute spelling works in
+// both places this code runs: Node 22 accepts only `with { type: "json" }`,
+// and the esbuild inside wrangler 3.78 accepts only `assert`. See the header
+// of pricing/catalog.js. The files are still pure data — a test asserts they
+// contain no logic.
 
-import catalogIndex from "../../pricing/catalog.json" with { type: "json" };
-import awsProvider from "../../pricing/providers/aws.json" with { type: "json" };
-import doProvider from "../../pricing/providers/digitalocean.json" with { type: "json" };
-import hetznerProvider from "../../pricing/providers/hetzner.json" with { type: "json" };
+import catalogIndex from "../../pricing/catalog.js";
+import awsProvider from "../../pricing/providers/aws.js";
+import doProvider from "../../pricing/providers/digitalocean.js";
+import hetznerProvider from "../../pricing/providers/hetzner.js";
+import akamaiLinodeProvider from "../../pricing/providers/akamai-linode.js";
+import vultrProvider from "../../pricing/providers/vultr.js";
 
 import { EstimatorError, CATALOG_STALE_AFTER_DAYS } from "./spec.js";
 
@@ -24,6 +32,8 @@ const PROVIDER_FILES = Object.freeze({
   aws: awsProvider,
   digitalocean: doProvider,
   hetzner: hetznerProvider,
+  "akamai-linode": akamaiLinodeProvider,
+  vultr: vultrProvider,
 });
 
 /** Fields every provider file must carry before it may price anything. */
@@ -36,19 +46,19 @@ const REQUIRED_PROVIDER_FIELDS = Object.freeze([
 function assertProviderShape(p, id) {
   for (const f of REQUIRED_PROVIDER_FIELDS) {
     if (p[f] === undefined || p[f] === null) {
-      throw new EstimatorError("catalog_invalid", `Provider "${id}" is missing required catalog field "${f}".`, `pricing/providers/${id}.json`);
+      throw new EstimatorError("catalog_invalid", `Provider "${id}" is missing required catalog field "${f}".`, `pricing/providers/${id}.js`);
     }
   }
   if (p.currency !== "USD") {
     // Rather than convert. A converted price is a price plus an exchange rate
     // we did not source, dated at a moment we did not record.
-    throw new EstimatorError("catalog_invalid", `Provider "${id}" is not priced in USD; currency conversion is deliberately not implemented.`, `pricing/providers/${id}.json`);
+    throw new EstimatorError("catalog_invalid", `Provider "${id}" is not priced in USD; currency conversion is deliberately not implemented.`, `pricing/providers/${id}.js`);
   }
   if (p.billingModel === "plan" && !Array.isArray(p.plans)) {
-    throw new EstimatorError("catalog_invalid", `Plan-billed provider "${id}" has no plans array.`, `pricing/providers/${id}.json`);
+    throw new EstimatorError("catalog_invalid", `Plan-billed provider "${id}" has no plans array.`, `pricing/providers/${id}.js`);
   }
   if (p.billingModel === "metered" && !p.dimensions) {
-    throw new EstimatorError("catalog_invalid", `Metered provider "${id}" has no dimensions.`, `pricing/providers/${id}.json`);
+    throw new EstimatorError("catalog_invalid", `Metered provider "${id}" has no dimensions.`, `pricing/providers/${id}.js`);
   }
 }
 
@@ -88,15 +98,15 @@ export function catalogFreshness(provider, now = Date.now()) {
 /** Load, validate and freeze the catalog. Throws EstimatorError if malformed. */
 export function loadCatalog() {
   if (!catalogIndex || !Array.isArray(catalogIndex.providers)) {
-    throw new EstimatorError("catalog_invalid", "Catalog index is missing its providers list.", "pricing/catalog.json");
+    throw new EstimatorError("catalog_invalid", "Catalog index is missing its providers list.", "pricing/catalog.js");
   }
   const providers = {};
   for (const id of catalogIndex.providers) {
     const p = PROVIDER_FILES[id];
-    if (!p) throw new EstimatorError("catalog_invalid", `Catalog names provider "${id}" but no provider file is bundled for it.`, "pricing/catalog.json");
+    if (!p) throw new EstimatorError("catalog_invalid", `Catalog names provider "${id}" but no provider file is bundled for it.`, "pricing/catalog.js");
     assertProviderShape(p, id);
     if (p.catalogVersion !== catalogIndex.catalogVersion) {
-      throw new EstimatorError("catalog_invalid", `Provider "${id}" is at a different catalog version than the index; releasing a partially-updated catalog would mix price vintages inside one comparison.`, `pricing/providers/${id}.json`);
+      throw new EstimatorError("catalog_invalid", `Provider "${id}" is at a different catalog version than the index; releasing a partially-updated catalog would mix price vintages inside one comparison.`, `pricing/providers/${id}.js`);
     }
     providers[id] = p;
   }

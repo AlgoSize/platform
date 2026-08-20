@@ -28,6 +28,16 @@ const DEFAULT_MODEL = "gpt-4o-mini";
 const DEFAULT_WORKERS_AI_MODEL = "@cf/moonshotai/kimi-k2.5";
 const MAX_TEXT_CHARS = 1500;            // hard ceiling on rendered prose
 const TIMEOUT_MS = 15000;
+// Kimi (and reasoning models generally) spend part of their token budget on
+// a hidden reasoning/thinking pass before the visible completion — the same
+// max_tokens cap that comfortably covers a plain chat model's answer can be
+// consumed entirely by reasoning, leaving zero tokens for the 100-300 word
+// explanation and code block the system prompt actually asks for, which
+// surfaces as a silent "Workers AI returned an empty reply". Enforced only
+// on the Workers AI leg: a cap is a ceiling, not a target, so raising it is
+// harmless for a non-reasoning model (it stops at its own natural end), and
+// OpenAI's default model isn't a reasoning model so its budget is untouched.
+const WORKERS_AI_MIN_MAX_TOKENS = 4096;
 
 const SYSTEM_PROMPT =
   "You are a senior performance engineer. The user shows you a JavaScript " +
@@ -58,14 +68,16 @@ export async function llmChat({ system, user, maxTokens = 800, temperature = 0.2
   let configured = false;
   let reason = null;
 
+  const workersAiMaxTokens = Math.max(maxTokens, WORKERS_AI_MIN_MAX_TOKENS);
+
   // 1. Workers AI binding.
   if (env && env.AI && typeof env.AI.run === "function") {
     configured = true;
     try {
       const out = await env.AI.run(env.WORKERS_AI_MODEL || DEFAULT_WORKERS_AI_MODEL, {
-        messages, max_tokens: maxTokens, temperature,
+        messages, max_tokens: workersAiMaxTokens, temperature,
       });
-      const reply = out && typeof out.response === "string" ? out.response : "";
+      const reply = extractWorkersAiReply(out);
       if (reply.trim()) return { ok: true, provider: "workers-ai", reply };
       reason = "Workers AI returned an empty reply";
     } catch (err) {
@@ -84,11 +96,10 @@ export async function llmChat({ system, user, maxTokens = 800, temperature = 0.2
       const url = `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/ai/run/${model}`;
       const r = await timedJsonFetch(fetchImpl, url, {
         headers: { authorization: `Bearer ${env.CLOUDFLARE_AI_TOKEN}` },
-        body: { messages, max_tokens: maxTokens, temperature },
+        body: { messages, max_tokens: workersAiMaxTokens, temperature },
       });
       if (r.ok) {
-        const reply = r.json && r.json.result && typeof r.json.result.response === "string"
-          ? r.json.result.response : "";
+        const reply = extractWorkersAiReply(r.json && r.json.result);
         if (reply.trim()) return { ok: true, provider: "workers-ai", reply };
         reason = "Workers AI returned an empty reply";
       } else {
@@ -123,6 +134,28 @@ export async function llmChat({ system, user, maxTokens = 800, temperature = 0.2
   }
 
   return { ok: false, configured, reason: reason || "no LLM provider configured" };
+}
+
+/**
+ * Workers AI's response shape depends on the model, not just the endpoint.
+ * Traditional text-generation models (e.g. Llama) return `{ response }`.
+ * Chat-completion-style models — Kimi K2 among them — return the
+ * OpenAI-compatible `{ choices: [{ message: { content } }] }` shape instead.
+ * Reading only `.response` against one of those returns an always-empty
+ * string, which this function previously did — the caller then reported
+ * "Workers AI returned an empty reply" no matter what the model actually
+ * said. Both shapes are checked; `.response` first since it's the more
+ * common/traditional case, matching every existing mock and test fixture.
+ *
+ * Exported so tests can pin both shapes directly, not just observe them
+ * through a full llmChat() round trip.
+ */
+export function extractWorkersAiReply(result) {
+  if (!result) return "";
+  if (typeof result.response === "string") return result.response;
+  const choice = Array.isArray(result.choices) ? result.choices[0] : null;
+  const content = choice && choice.message && choice.message.content;
+  return typeof content === "string" ? content : "";
 }
 
 /** POST JSON with a timeout; normalise every failure to { ok:false, reason }. */

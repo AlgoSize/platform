@@ -555,7 +555,7 @@ console.log("\ncatalog integrity\n");
   const fresh = catalogFreshness(CATALOG.providers.aws, Date.parse("2026-08-19T00:00:00Z"));
   expect(fresh.stale === true && /not been verified/.test(fresh.reason),
     "an unverified seed catalog reports itself stale rather than claiming accuracy");
-  expect(listProviders(CATALOG).length === 3, "listProviders returns descriptors for the UI without prices");
+  expect(listProviders(CATALOG).length === Object.keys(CATALOG.providers).length, "listProviders returns descriptors for the UI without prices");
 }
 {
   expect(deriveConfidence([]) === "high", "no assumptions -> high confidence");
@@ -591,6 +591,116 @@ console.log("\nmalformed and hostile input\n");
     { id: "a", type: "compute", quantity: 3, cpuCores: 2, memoryGiB: 4, storageGiB: 40, egressGiB: 500 },
   ] }, ["aws", "digitalocean", "hetzner"], { cpuUtilization: 0.6 }, STALE));
   expect(build() === build(), "estimation is deterministic across runs");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\nAkamai/Linode and Vultr — new plan-billed providers, same rules as DO/Hetzner\n");
+// ---------------------------------------------------------------------------
+{
+  const res = estimate({ duration: MONTH, resources: [
+    { id: "app", type: "compute", quantity: 1, cpuCores: 0.5, memoryGiB: 0.5 },
+  ] }, ["digitalocean"], { egressGiB: 0 });
+  const plan = res.providers[0].lineItems.find((li) => li.category === "compute-plan");
+  expect(plan && plan.sku === "basic-512mb", `smallest-fitting Droplet is the new basic-512mb tier (got ${plan && plan.sku})`);
+  expect(res.providers[0].estimatedTotalMicroUsd === 4_000_000, `a full month of basic-512mb costs exactly $4.00 (got ${formatMicroUsd(res.providers[0].estimatedTotalMicroUsd)})`);
+}
+{
+  const res = estimate({ duration: MONTH, resources: [
+    { id: "app", type: "compute", quantity: 1, cpuCores: 2, memoryGiB: 4 },
+  ] }, ["akamai-linode"], { egressGiB: 0 });
+  const p = res.providers[0];
+  const plan = p.lineItems.find((li) => li.category === "compute-plan");
+  expect(plan && plan.sku === "linode-4gb", `smallest fitting Linode plan chosen (got ${plan && plan.sku})`);
+  expect(p.estimatedTotalMicroUsd === 24_000_000, `a full month costs exactly the $24 Linode 4 GB list price (got ${formatMicroUsd(p.estimatedTotalMicroUsd)})`);
+  expect(p.assumptions.some((a) => a.cause === "bundled_plan_allocation"), "Akamai/Linode also gets a bundled_plan_allocation assumption, not an invented per-vCPU price");
+  const allocated = p.lineItems.filter((li) => li.allocated);
+  expect(allocated.length === 2 && allocated.every((li) => li.unitPriceMicroUsd === 0),
+    "Linode's CPU/RAM split is allocated at zero unit price — no per-vCPU rate is published, so none is fabricated");
+}
+{
+  const res = estimate({ duration: MONTH, resources: [
+    { id: "app", type: "compute", quantity: 1, cpuCores: 1, memoryGiB: 1 },
+  ] }, ["vultr"], { egressGiB: 0 });
+  const p = res.providers[0];
+  const plan = p.lineItems.find((li) => li.category === "compute-plan");
+  expect(plan && plan.sku === "vc2-1c-1gb", `smallest fitting Vultr plan chosen (got ${plan && plan.sku})`);
+  expect(p.estimatedTotalMicroUsd === 6_000_000, `a full month costs exactly the $6 Vultr Cloud Compute list price (got ${formatMicroUsd(p.estimatedTotalMicroUsd)})`);
+}
+{
+  // GPU catalog data (DigitalOcean and Akamai/Linode both carry gpuPlans) must
+  // stay inert: engine.js has no code path that reads gpuPlans, so a GPU
+  // resource must still come back unsupported rather than silently priced
+  // from reference-only data.
+  const res = estimate({ duration: MONTH, resources: [
+    { id: "gpu-box", type: "gpu", quantity: 1, gpuCount: 1, gpuType: "NVIDIA H100" },
+  ] }, ["digitalocean", "akamai-linode"], { egressGiB: 0 });
+  for (const p of res.providers) {
+    expect(p.unsupportedResources.some((u) => u.reason === "gpu_not_in_catalog"),
+      `${p.providerId} still reports GPU as unsupported — gpuPlans is reference data, not wired into pricing`);
+    expect(p.lineItems.length === 0, `${p.providerId} priced no line items for a GPU-only resource`);
+  }
+}
+{
+  // Every provider file in the index must agree on catalogVersion with the
+  // index itself — loadCatalog() already enforces this at import time (the
+  // whole test file would have thrown on load if it didn't), but assert it
+  // explicitly so the invariant has a named test rather than an implicit one.
+  const allMatch = Object.values(CATALOG.providers).every((p) => p.catalogVersion === CATALOG.catalogVersion);
+  expect(allMatch, `every bundled provider agrees with the catalog index on catalogVersion (${CATALOG.catalogVersion})`);
+}
+{
+  // Providers that were deliberately NOT added must not exist on disk. This
+  // guards against one being dropped in later without going through
+  // catalog.js's PROVIDER_FILES wiring, catalog.json's provider list, and
+  // this test file — i.e. without a currency check (Scaleway is EUR-only)
+  // or real sourced pricing (the rest have none yet).
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const providersDir = path.join(import.meta.dirname, "..", "pricing", "providers");
+  const excluded = ["scaleway", "ovhcloud", "cloudflare-workers", "flyio", "render", "railway", "lambda", "runpod"];
+  for (const id of excluded) {
+    expect(!fs.existsSync(path.join(providersDir, `${id}.js`)),
+      `${id}.js does not exist yet — no verified USD pricing has been sourced for it (Scaleway is EUR-only and blocked on currency conversion)`);
+  }
+}
+{
+  // The pricing modules are .js only because no import-attribute spelling
+  // works in both Node and wrangler's esbuild (see pricing/catalog.js). That
+  // is a packaging workaround, NOT permission to put logic in the catalog —
+  // so the "inert data" property JSON used to give us syntactically is
+  // asserted here instead. A price is data; anything that computes one is a
+  // rate nobody can review by reading the file.
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const pricingDir = path.join(import.meta.dirname, "..", "pricing");
+  const files = [
+    path.join(pricingDir, "catalog.js"),
+    ...fs.readdirSync(path.join(pricingDir, "providers"))
+      .filter((f) => f.endsWith(".js"))
+      .map((f) => path.join(pricingDir, "providers", f)),
+  ];
+  expect(files.length >= 6, `found the pricing modules (${files.length} files)`);
+
+  for (const file of files) {
+    const name = path.basename(file);
+    // Strip the comment header before checking, so the explanatory prose that
+    // mentions `import`/`assert` does not read as code.
+    const body = fs.readFileSync(file, "utf8").replace(/^\s*\/\/.*$/gm, "").trim();
+    expect(/^export default Object\.freeze\(/.test(body),
+      `${name} is a single frozen default export`);
+    expect(!/\bfunction\b|=>|\brequire\(|\bimport\b|\beval\b/.test(body),
+      `${name} contains no functions, imports or eval — it is data, not code`);
+    // The real guarantee, and it subsumes every hand-rolled pattern check:
+    // if the unwrapped literal parses as JSON then it is data by definition —
+    // JSON has no syntax for a template literal, a function, or a computed
+    // value, so none can be hiding in it. (A backtick INSIDE a string value is
+    // fine and does occur — several limitations quote config keys like
+    // `mem_limit` — which is why this is a parse check, not a grep.)
+    const literal = body.replace(/^export default Object\.freeze\(/, "").replace(/\);?$/, "");
+    let parsed = null;
+    try { parsed = JSON.parse(literal); } catch { /* stays null */ }
+    expect(parsed !== null, `${name} is valid JSON once unwrapped — data by construction, not by convention`);
+  }
 }
 
 console.log("");

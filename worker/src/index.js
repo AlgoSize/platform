@@ -83,6 +83,7 @@ import { enforceQuota } from "./quota.js";
 import { makeRateLimit, makeApiKeyRateLimit } from "./middleware/rate-limit.js";
 import { captureException } from "./observability.js";
 import { generateFixHandler } from "./handlers/fix.js";
+import { estimateHandler, estimateProvidersHandler } from "./handlers/estimate.js";
 export { UsageCounter } from "./usage-counter.js";
 
 const router = Router();
@@ -152,6 +153,19 @@ router.post("/api/analyze/architecture", analyzeRateLimit, requireAuth, apiKeyAn
 // to a run that was already counted — double-charging it would make the
 // button feel broken on the last run of a free month.
 router.post("/api/fix", analyzeRateLimit, requireAuth, generateFixHandler);
+
+// ---- Infrastructure Cost Estimator ----------------------------------------
+// Upload-triggered or manually entered ONLY. There is deliberately no
+// scheduled variant, no cloud-account connector, and no credential storage:
+// the estimate is computed from the configuration the user hands us and the
+// bundled pricing catalog, and nothing else is contacted. See
+// handlers/estimate.js for the sanitizing boundary this route depends on.
+//
+// Metered like the other analyzers — an estimate is a run.
+router.post("/api/estimate", analyzeRateLimit, requireAuth, apiKeyAnalyzeRateLimit, enforceQuota(estimateHandler));
+// Catalog metadata for the provider picker. Not quota-metered: it is a page
+// load, not a run, and charging for it would make the form cost a run to open.
+router.get("/api/estimate/providers", requireAuth, estimateProvidersHandler);
 
 // ---- Magic-link auth — email-verified sign-in/sign-up ---------------------
 // Replaces the old /api/signup endpoint (which issued a session immediately
