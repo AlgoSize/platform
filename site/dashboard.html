@@ -536,10 +536,22 @@ permalink: /dashboard/
     <div id="view-report" class="dash-view" hidden>
       <div class="report-topbar">
         <button type="button" class="btn btn-ghost btn-sm" id="report-back-btn">← Back to runs</button>
+        <!-- Export bar. "Open report" is the client-facing document (with its
+             own print-to-PDF); the select + Download pair is the file-picker —
+             one control, every format, options filtered per analyzer by
+             dash-report.js. PDF rides through the same printable page with
+             ?print=1 so the PDF can never drift from the page. -->
         <div class="report-topbar-actions" id="report-actions" hidden>
-          <a class="btn btn-ghost btn-sm" id="report-open-html" href="#" target="_blank" rel="noopener">Open HTML report</a>
-          <a class="btn btn-ghost btn-sm" id="report-dl-sarif" href="#">SARIF</a>
-          <a class="btn btn-ghost btn-sm" id="report-dl-cdx" href="#">CycloneDX</a>
+          <a class="btn btn-ghost btn-sm" id="report-open-html" href="#" target="_blank" rel="noopener">Open report</a>
+          <label class="sr-only" for="report-dl-format">Export format</label>
+          <select id="report-dl-format" class="panel-input report-dl-select">
+            <option value="pdf">PDF (print view)</option>
+            <option value="csv">CSV (spreadsheet)</option>
+            <option value="json">JSON (raw data)</option>
+            <option value="sarif">SARIF</option>
+            <option value="cyclonedx">CycloneDX (SBOM)</option>
+          </select>
+          <button type="button" class="btn btn-ghost btn-sm" id="report-dl-btn">Download</button>
           <button type="button" class="btn btn-primary btn-sm" id="report-share-btn">Share</button>
         </div>
       </div>

@@ -488,32 +488,95 @@
   // Open + wire
   // ---------------------------------------------------------------------
 
+  // ---------------------------------------------------------------------
+  // Export — the Download file-picker
+  // ---------------------------------------------------------------------
+
+  function reportBase() {
+    return core.apiUrl("") + "/api/runs/" + encodeURIComponent(state.runId) + "/report";
+  }
+
+  // Which formats exist per analyzer. The document formats (PDF page, CSV,
+  // SARIF, SBOM) all describe a dependency audit — the Worker refuses them
+  // for other analyzers with a 400, so the picker doesn't offer what the
+  // server would bounce. JSON is the raw result and works for every run.
+  function formatsFor(analyzer) {
+    return analyzer === "vuln"
+      ? ["pdf", "csv", "json", "sarif", "cyclonedx"]
+      : ["json"];
+  }
+
+  function syncExportBar(run) {
+    var actions = document.getElementById("report-actions");
+    if (actions) actions.hidden = !run;
+    if (!run) return;
+
+    var allowed = formatsFor(run.analyzer);
+    var select = document.getElementById("report-dl-format");
+    if (select) {
+      var visible = 0;
+      Array.prototype.forEach.call(select.options, function (opt) {
+        var on = allowed.indexOf(opt.value) !== -1;
+        opt.hidden = !on;
+        opt.disabled = !on;
+        if (on) visible++;
+      });
+      if (select.selectedOptions[0] && select.selectedOptions[0].disabled) {
+        select.value = allowed[0];
+      }
+      // One legal format means the picker is noise — the button says it all.
+      select.hidden = visible <= 1;
+    }
+    var btn = document.getElementById("report-dl-btn");
+    if (btn) btn.textContent = allowed.length === 1 ? "Download JSON" : "Download";
+
+    // "Open report" and "Share" are the client-facing document and its
+    // distribution — both audit-only, same reason as the document formats.
+    var htmlLink = document.getElementById("report-open-html");
+    if (htmlLink) {
+      htmlLink.hidden = run.analyzer !== "vuln";
+      htmlLink.href = reportBase() + "?format=html";
+    }
+    var shareBtn = document.getElementById("report-share-btn");
+    if (shareBtn) shareBtn.hidden = run.analyzer !== "vuln";
+  }
+
+  function download() {
+    if (!state.runId) return;
+    var select = document.getElementById("report-dl-format");
+    var format = (select && !select.hidden ? select.value : "json") || "json";
+    if (format === "pdf") {
+      // The PDF is the printable page, printed — ?print=1 opens it straight
+      // into the browser's print dialog. Same page, same stylesheet, so the
+      // PDF can never disagree with the report the customer read.
+      window.open(reportBase() + "?format=html&print=1", "_blank", "noopener");
+      return;
+    }
+    // Attachment formats: navigate the hidden frame-free way — an <a> click
+    // keeps the SPA untouched while content-disposition does the saving.
+    var a = el("a", { href: reportBase() + "?format=" + format });
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+
+  // ---------------------------------------------------------------------
+  // Open + wire
+  // ---------------------------------------------------------------------
+
   function open(runId) {
     if (!runId) return;
     var body = document.getElementById("report-body");
-    var actions = document.getElementById("report-actions");
-
-    // Download links point straight at the report route; the browser handles
-    // content-disposition. Set before the fetch so they work even while the
-    // in-page render is loading.
-    var origin = core.apiUrl("");
-    var base = origin + "/api/runs/" + encodeURIComponent(runId) + "/report";
-    var htmlLink  = document.getElementById("report-open-html");
-    var sarifLink = document.getElementById("report-dl-sarif");
-    var cdxLink   = document.getElementById("report-dl-cdx");
-    if (htmlLink)  htmlLink.href  = base + "?format=html";
-    if (sarifLink) sarifLink.href = base + "?format=sarif";
-    if (cdxLink)   cdxLink.href   = base + "?format=cyclonedx";
 
     if (state.runId === runId && state.run) {
-      if (actions) actions.hidden = state.run.analyzer !== "vuln";
+      syncExportBar(state.run);
       return;   // already rendered; back/forward shouldn't refetch
     }
 
     state.runId = runId;
     state.run = null;
     state.share = null;
-    if (actions) actions.hidden = true;
+    syncExportBar(null);
     if (body) {
       while (body.firstChild) body.removeChild(body.firstChild);
       body.appendChild(el("div", { class: "panel-empty" }, "Loading report…"));
@@ -523,7 +586,7 @@
       .then(function (run) {
         state.run = run;
         render(run);
-        if (actions) actions.hidden = run.analyzer !== "vuln";
+        syncExportBar(run);
       })
       .catch(function (e) {
         if (body) {
@@ -534,6 +597,9 @@
   }
 
   function attach() {
+    var dlBtn = document.getElementById("report-dl-btn");
+    if (dlBtn) dlBtn.addEventListener("click", download);
+
     var shareBtn = document.getElementById("report-share-btn");
     if (shareBtn) shareBtn.addEventListener("click", openShare);
 
