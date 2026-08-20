@@ -1966,6 +1966,18 @@ git revert <bad-sha>
 git push origin main          # GH Actions builds + deploys the revert
 ```
 
+## Appendix D — account management (migrations/0015)
+
+The account-management settings area ships with one required deploy step —
+applying migration `0015` to production D1 — and a handful of optional
+Cloudflare items behind it (custom-hostname serving, a prettier referral
+route). Those are written up separately, with the exact commands and the
+verification for each, in **DEPLOY-account-management.md**.
+
+Nothing in that document is a prerequisite for deploying the Worker itself,
+and the feature degrades honestly rather than breaking if the migration has
+not been applied yet — but the settings page does not work until it has.
+
 ## Appendix C — what's NOT in scope here
 
 - CI/CD pipelines beyond the existing `.github/workflows/jekyll.yml`.
