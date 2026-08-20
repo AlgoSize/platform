@@ -21,11 +21,11 @@ export default Object.freeze({
   "category": "cloud",
   "billingModel": "plan",
   "currency": "USD",
-  "catalogVersion": "2026.08.19-2",
+  "catalogVersion": "2026.08.20-1",
   "effectiveDate": "2026-08-01",
-  "lastVerified": "2026-08-19",
+  "lastVerified": "2026-08-20",
   "verificationStatus": "unverified-seed",
-  "verificationNotes": "Added from a secondhand pricing pull dated 2026-08-19, not independently opened by a human against the source URL. One plan row (a purported 32 GiB tier) was visibly truncated/corrupted in that pull — it arrived containing non-Latin garbage characters where a number should be — and has been dropped entirely rather than guessed at. The five rows kept below are the ones that arrived intact. planBillingCapHours is deliberately UNSET (see limitations): the pulled hourly-rate figures did not divide cleanly out of the monthly prices at any consistent cap-hours value the way DigitalOcean's do, which is a sign those hourly figures may themselves be unreliable — so they were discarded rather than stored, and the engine's default 730-hour (full calendar month) cap is used instead, pending real verification.",
+  "verificationNotes": "Added from a secondhand pricing pull dated 2026-08-19, not independently opened by a human against the source URL. One plan row (a purported 32 GiB tier) was visibly truncated/corrupted in that first pull — it arrived containing non-Latin garbage characters where a number should be — and was dropped rather than guessed at. A second, independent pull dated 2026-08-20 gave IDENTICAL figures for every row the first pull got intact (linode-1gb through linode-16gb), and additionally supplied linode-32gb and linode-64gb following the same doubling pattern (price, vCPU and memory each roughly double per tier) — consistent enough to add those two rows below. This is cross-pull corroboration, not verification: nobody on this side has opened akamai.com/cloud/pricing and checked a row against it, so verificationStatus stays unverified-seed. The same second pull's Vultr figures directly CONTRADICTED its own first pull for an equivalent-looking SKU (4 vCPU/8 GiB: $75/mo vs $48/mo) — a concrete reminder that agreement across two pulls is reassuring but not proof, and that this whole pipeline can still be wrong. planBillingCapHours is deliberately UNSET (see limitations): the pulled hourly-rate figures did not divide cleanly out of the monthly prices at any consistent cap-hours value the way DigitalOcean's do, which is a sign those hourly figures may themselves be unreliable — so they were discarded rather than stored, and the engine's default 730-hour (full calendar month) cap is used instead, pending real verification.",
   "sourceUrl": "https://www.akamai.com/cloud/pricing/north-america",
   "regions": [
     "north-america"
@@ -94,6 +94,28 @@ export default Object.freeze({
       "includedStorageGiB": 320,
       "includedEgressGiB": 8192,
       "priceMicroUsdPerMonth": 96000000,
+      "sourceUrl": "https://www.akamai.com/cloud/pricing/north-america"
+    },
+    {
+      "sku": "linode-32gb",
+      "displayName": "Linode 32 GB — 8 vCPU / 32 GiB",
+      "resourceType": "compute",
+      "vcpu": 8,
+      "memoryGiB": 32,
+      "includedStorageGiB": 640,
+      "includedEgressGiB": 16384,
+      "priceMicroUsdPerMonth": 192000000,
+      "sourceUrl": "https://www.akamai.com/cloud/pricing/north-america"
+    },
+    {
+      "sku": "linode-64gb",
+      "displayName": "Linode 64 GB — 16 vCPU / 64 GiB",
+      "resourceType": "compute",
+      "vcpu": 16,
+      "memoryGiB": 64,
+      "includedStorageGiB": 1280,
+      "includedEgressGiB": 20480,
+      "priceMicroUsdPerMonth": 384000000,
       "sourceUrl": "https://www.akamai.com/cloud/pricing/north-america"
     }
   ],

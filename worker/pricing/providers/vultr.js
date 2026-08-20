@@ -21,7 +21,7 @@ export default Object.freeze({
   "category": "cloud",
   "billingModel": "plan",
   "currency": "USD",
-  "catalogVersion": "2026.08.19-2",
+  "catalogVersion": "2026.08.20-1",
   "effectiveDate": "2026-08-01",
   "lastVerified": "2026-08-19",
   "verificationStatus": "unverified-seed",

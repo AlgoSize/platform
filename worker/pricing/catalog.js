@@ -17,7 +17,7 @@
 
 export default Object.freeze({
   "schemaVersion": 1,
-  "catalogVersion": "2026.08.19-2",
+  "catalogVersion": "2026.08.20-1",
   "currency": "USD",
   "effectiveDate": "2026-08-01",
   "lastVerified": "2026-08-19",
