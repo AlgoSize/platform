@@ -214,6 +214,15 @@ code, .mono {
   letter-spacing: -0.01em;
 }
 .footer-inner .brand-mark { color: var(--text-muted); }
+/* Groups the text links and the Sign in button as one right-hand cluster, so
+   nav-inner's `justify-content: space-between` still only ever balances two
+   children (.brand and .nav-right) regardless of how many links or buttons
+   live inside the group. */
+.nav-right {
+  display: flex;
+  align-items: center;
+  gap: var(--s-6);
+}
 .nav-links {
   display: none;
   gap: var(--s-6);
@@ -227,6 +236,9 @@ code, .mono {
 @media (min-width: 768px) {
   .nav-links { display: inline-flex; }
 }
+/* .nav-signin stays visible below 768px too — unlike .nav-links, this is the
+   only way back into the product from the marketing nav on mobile now that
+   "Dashboard" no longer appears as a plain text link. */
 
 /* --- Hero --- */
 .hero {
