@@ -4,6 +4,8 @@
 //   #/monitors       monitors + CI setup (D-3)
 //   #/team           organisation, members, keys, branding (D-2)
 //   #/report/<id>    the report viewer for one run (D-4)
+//   #/account        settings — profile, billing, branding, referrals…
+//   #/account/<sec>  …deep-linked straight to one of its sections
 //
 // Hash routing so deep links work, the back button works, and a "View
 // report" link in the runs feed is just an <a>. Each view loads its data
@@ -16,12 +18,22 @@
   var core = window.DashCore;
   if (!core) return;
 
-  var VIEWS = ["workspace", "monitors", "team", "report"];
+  var VIEWS = ["workspace", "monitors", "team", "report", "account"];
 
   function parseHash() {
     var h = window.location.hash || "";
     if (h.indexOf("#/report/") === 0) {
       return { view: "report", runId: decodeURIComponent(h.slice("#/report/".length)) };
+    }
+    // Account sub-routes. Every section is a real link, so someone can be
+    // sent straight to Billing and the back button walks back through the
+    // sections they opened rather than leaving the area entirely.
+    if (h === "#/account" || h.indexOf("#/account/") === 0 || h.indexOf("#/account?") === 0) {
+      var rest = h.slice("#/account".length).replace(/^\//, "");
+      // The confirm-email redirect lands here with a query string; strip it
+      // so "?email=changed" is never mistaken for a section name.
+      var section = rest.split("?")[0];
+      return { view: "account", section: section ? decodeURIComponent(section) : null };
     }
     if (h === "#/monitors") return { view: "monitors" };
     if (h === "#/team")     return { view: "team" };
@@ -33,6 +45,14 @@
       var elView = document.getElementById("view-" + v);
       if (elView) elView.hidden = v !== route.view;
     });
+    // The Account link is in the topbar actions rather than the tab strip,
+    // so it gets its own current-marking; without this, opening Account
+    // leaves "Workspace" looking selected while showing something else.
+    var acctLink = document.getElementById("account-link");
+    if (acctLink) {
+      if (route.view === "account") acctLink.setAttribute("aria-current", "page");
+      else acctLink.removeAttribute("aria-current");
+    }
     document.querySelectorAll(".dash-tab").forEach(function (tab) {
       var current = tab.dataset.view === route.view ||
         (route.view === "report" && tab.dataset.view === "workspace");
@@ -44,6 +64,7 @@
     if (route.view === "monitors" && window.DashMonitors) window.DashMonitors.load();
     if (route.view === "team"     && window.DashTeam)     window.DashTeam.load();
     if (route.view === "report"   && window.DashReport)   window.DashReport.open(route.runId);
+    if (route.view === "account"  && window.DashAccount)  window.DashAccount.open(route.section);
 
     // A fresh view starts at the top — otherwise switching tabs keeps the
     // previous tab's scroll depth, which reads as a broken page.
