@@ -1,0 +1,50 @@
+Two steps: delete the bad Workers Builds trigger, then restore the API.
+Step 1 is destructive and intentional — the repo's own wrangler.jsonc header
+documents this trigger as needing deletion.
+
+STEP 1 — confirm then delete the trigger
+
+  curl -s -X GET \
+    "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/builds/triggers/7d4c3cb7-208e-44f2-ad70-ade2c7e30562" \
+    -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+
+  Confirm it shows: trigger_name "Deploy non-production branches",
+  branch_excludes ["main"], deploy_command "npx wrangler versions upload",
+  bound to external_script_id abe719a7c4074ee69b64dee06158d426 (= algosize).
+
+  If it matches, delete it:
+
+  curl -s -X DELETE \
+    "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/builds/triggers/7d4c3cb7-208e-44f2-ad70-ade2c7e30562" \
+    -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+
+  Then confirm it's gone:
+
+  curl -s -X GET \
+    "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/builds/workers/abe719a7c4074ee69b64dee06158d426/triggers" \
+    -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+
+  Do NOT touch /builds/repos/connections — the account-level GitHub
+  connection may serve other Workers.
+
+STEP 2 — restore the API (only after step 1 confirms deleted)
+
+  Check what version is live and that it is NOT the site bundle:
+    worker/node_modules/.bin/wrangler versions list --name algosize | head -30
+
+  Deploy the real API bundle:
+    worker/node_modules/.bin/wrangler deploy --config worker/wrangler.toml --env production
+
+  Secrets were wiped again — list, and restore all seven if empty:
+    worker/node_modules/.bin/wrangler secret list --config worker/wrangler.toml --env production
+
+  Then verify eight times:
+    for i in $(seq 8); do
+      curl -s -o /tmp/b -w "$i: %{http_code} " https://algosize.com/api/me
+      head -c 80 /tmp/b; echo; sleep 3
+    done
+
+  Expected: 401 {"error":"unauthorized","reason":"missing_token"} all eight.
+
+Report the trigger JSON before deletion, the deletion result, the empty
+trigger list after, and all eight verification results.

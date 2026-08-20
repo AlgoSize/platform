@@ -29,6 +29,13 @@ description: Zone ID, Worker URLs, KV/D1 IDs, and routing architecture for the a
 ## Deploy gotcha — propagation delay
 After `wrangler deploy --env production`, the zone route takes ~2 minutes to propagate. A bare Cloudflare 404 immediately post-deploy is normal; wait and retry before diagnosing further.
 
+## Workers Builds recovery state
+The non-main Workers Builds trigger that uploaded versions on every branch push was removed after it repeatedly replaced the API service. A separate main-branch per-Worker build trigger remains and must be reviewed before treating the overwrite risk as fully resolved.
+
+**Why:** A correct `algosize.com/api/*` route can still serve static-site HTML when the `algosize` service's active code version has been replaced; route specificity alone does not protect against a wrong bundle deployed into the API service.
+
+**How to apply:** Before modifying or relying on Workers Builds, inspect the remaining main-branch trigger and confirm its deployment target and config. After any API recovery deploy, verify several unauthenticated `/api/me` responses, not just one.
+
 ## Secrets on the production Worker
 JWT_SECRET, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_ID, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET — all set as of 2026-08-18.
 
