@@ -238,6 +238,16 @@ const microRecs = (result) =>
   const legNames = (rec ? rec.legs : []).map((l) => l.leg).sort().join(",");
   expect(legNames === "distinct scaling profile,fan-in,own datastore",
     `the three legs are fan-in, own datastore and scaling profile (got ${legNames})`);
+
+  // Every recommendation names the node (or file) it is about, so the
+  // dashboard can scope its card list to a pinned node rather than always
+  // widening to the whole cluster. On a deduplicated card this is the first
+  // occurrence, which is enough to scope by.
+  expect(rec && typeof rec.target === "string" && rec.target.length > 0,
+    "the extraction names its target node");
+  const allRecs = result.recommendations.flatMap((g) => g.recommendations);
+  expect(allRecs.every((r) => typeof r.target === "string" && r.target.length > 0),
+    "every recommendation carries a target for selection-scoped display");
 }
 
 {

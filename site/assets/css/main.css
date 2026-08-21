@@ -2577,26 +2577,117 @@ code, .mono {
 }
 .report-scope span { overflow-wrap: anywhere; }
 
-/* --- Architecture explorer (D-5) --- */
-.xray-toolbar {
+/* --- Architecture explorer (D-5) ---
+   Layout matches the design canvas: a controls row (lens + diff + export),
+   then the canvas card (breadcrumb header, SVG, legend footer) beside the
+   explanation panel. Severity always rides on four channels — hatch density,
+   glyph count, the word, and the left stripe — never colour alone. */
+
+/* Controls row above the layout. */
+.xray-controls {
   display: flex;
   gap: var(--s-3);
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
   flex-wrap: wrap;
 }
-.xray-crumb { display: inline-flex; gap: var(--s-2); align-items: center; }
-.xray-crumb-sep { color: var(--text-dim); }
-.xray-crumb-here { background: var(--bg-card); color: var(--text); box-shadow: inset 0 0 0 1px var(--border); cursor: default; }
-.xray-canvas {
+.xray-lens-wrap { display: flex; flex-direction: column; gap: var(--s-1); min-width: 0; }
+.xray-controls-label {
+  font-size: 0.66rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.xray-lens-count { font-size: 0.7rem; color: var(--text-dim); }
+.xray-controls-actions { display: flex; gap: var(--s-2); align-items: center; flex-wrap: wrap; }
+.xray-diff-on { background: var(--bg-elevated); color: var(--text); box-shadow: inset 0 0 0 1px var(--text-muted); }
+
+/* Two columns: canvas card + explanation. */
+.xray-layout { display: flex; gap: var(--s-4); align-items: flex-start; flex-wrap: wrap; }
+.xray-canvas-card {
+  flex: 1 1 560px;
+  min-width: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--bg);
-  overflow-x: auto;
-  padding: var(--s-2);
+  overflow: hidden;
+  box-shadow: var(--shadow);
 }
+.xray-canvas-head, .xray-canvas-foot {
+  display: flex;
+  gap: var(--s-3);
+  align-items: center;
+  flex-wrap: wrap;
+  padding: var(--s-2) var(--s-3);
+  background: var(--bg-card);
+}
+.xray-canvas-head { justify-content: space-between; border-bottom: 1px solid var(--border-soft); }
+.xray-canvas-foot { border-top: 1px solid var(--border-soft); }
+.xray-crumb { display: inline-flex; gap: var(--s-2); align-items: center; flex-wrap: wrap; }
+.xray-crumb-sep { color: var(--text-dim); }
+.xray-crumb-here {
+  display: inline-flex;
+  gap: var(--s-2);
+  align-items: center;
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px #2a3340;
+  cursor: default;
+}
+.xray-crumb-level { font-size: 0.66rem; color: var(--accent); }
+.xray-canvas { background: var(--bg); overflow-x: auto; padding: var(--s-2); }
 .xray-canvas svg [data-arch-id]:focus-visible rect:first-of-type { stroke: var(--accent); stroke-width: 2.5; }
 .xray-hint { font-size: var(--fs-xs); color: var(--text-dim); }
+
+/* Legend: swatch (CSS hatch mirrors the SVG patterns) + glyph + word. */
+.xray-legend-item {
+  display: inline-flex;
+  gap: var(--s-1);
+  align-items: center;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+.xray-legend-swatch {
+  display: inline-block;
+  width: 16px;
+  height: 13px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+.xray-legend-mark { font-weight: 700; }
+
+/* Side panel. */
+.xray-side { flex: 1 1 320px; min-width: 0; display: grid; gap: var(--s-3); align-content: start; }
+.xray-diff-line { margin: 0; }
+.xray-sel {
+  display: grid;
+  gap: var(--s-2);
+  padding: var(--s-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+}
+.xray-sel-head { display: flex; gap: var(--s-2); align-items: baseline; justify-content: space-between; flex-wrap: wrap; }
+.xray-sel-kind { font-size: 0.66rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-dim); }
+.xray-sel-lens { font-size: 0.7rem; color: var(--accent); }
+.xray-sel-name { margin: 0; font-size: var(--fs-md); font-weight: 600; letter-spacing: -0.02em; overflow-wrap: anywhere; }
+.xray-sel-summary { margin: 0; color: var(--text-muted); font-size: var(--fs-sm); }
+.xray-sel-chips { display: flex; gap: var(--s-2); flex-wrap: wrap; }
+.xray-lens-chip {
+  display: inline-flex;
+  gap: var(--s-1);
+  align-items: center;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+.xray-lens-chip-on { border-color: var(--accent); }
+
+/* Findings. */
 .xray-panel { display: grid; gap: var(--s-3); }
 .xray-finding-list, .xray-rec-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s-2); }
 .xray-finding, .xray-rec {
@@ -2612,14 +2703,92 @@ code, .mono {
 .xray-sev-high     { border-left-color: #f59e0b; }
 .xray-sev-medium   { border-left-color: #facc15; }
 .xray-finding-top { display: flex; gap: var(--s-2); align-items: baseline; flex-wrap: wrap; }
+.xray-finding-title { font-size: var(--fs-sm); font-weight: 600; min-width: 0; }
 .xray-finding-rule { font-size: var(--fs-xs); color: var(--text-dim); }
-.xray-finding-why { color: var(--text-muted); font-size: var(--fs-sm); }
-.xray-finding-fix { color: var(--text); font-size: var(--fs-sm); }
+.xray-row { display: flex; gap: var(--s-2); align-items: baseline; }
+.xray-row-label {
+  flex: 0 0 auto;
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding-top: 2px;
+}
+.xray-finding-why { color: var(--text-muted); font-size: var(--fs-sm); min-width: 0; }
+.xray-finding-fix { color: var(--text); font-size: var(--fs-sm); min-width: 0; }
+.xray-finding-meta { display: flex; gap: var(--s-3); align-items: baseline; flex-wrap: wrap; }
 .xray-evidence { font-size: var(--fs-xs); color: var(--accent); overflow-wrap: anywhere; }
-.xray-rec-cluster { font-size: 0.7rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-dim); margin-top: var(--s-2); }
+
+/* The positive empty state: nothing under THIS lens is information. */
+.xray-clean {
+  display: grid;
+  gap: var(--s-1);
+  padding: var(--s-4);
+  border: 1px dashed #2a3340;
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.xray-clean strong { display: flex; gap: var(--s-2); align-items: baseline; font-size: var(--fs-sm); }
+.xray-clean-mark { color: var(--accent); }
+.xray-clean p { margin: 0; color: var(--text-muted); font-size: var(--fs-sm); }
+
+/* Resolved since last run — struck through, with what they were. */
+.xray-resolved {
+  display: grid;
+  gap: var(--s-2);
+  padding: var(--s-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.xray-resolved-title { font-size: var(--fs-sm); color: var(--text-muted); }
+.xray-resolved-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s-2); }
+.xray-resolved-item { display: flex; gap: var(--s-2); align-items: baseline; }
+.xray-resolved-mark { flex: 0 0 auto; color: var(--accent); font-size: 0.75rem; }
+.xray-resolved-body { display: grid; gap: 2px; min-width: 0; }
+.xray-resolved-was-title { color: var(--text-dim); font-size: var(--fs-sm); }
+.xray-resolved-was { font-size: 0.7rem; color: #3f4757; overflow-wrap: anywhere; }
+
+/* Recommendations: effort × impact as two separate glyph chips, and a teal
+   card border only when the three-leg evidence box is present. */
+.xray-rec-legs { border-color: rgba(94, 234, 212, 0.3); }
 .xray-rec-change { font-size: var(--fs-sm); font-weight: 600; }
-.xray-legs { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s-1); }
-.xray-leg { font-size: var(--fs-xs); color: var(--text-muted); }
+.xray-rec-chips { display: flex; gap: var(--s-2); flex-wrap: wrap; }
+.xray-chip-effort { color: var(--text); border-color: #2a3340; background: var(--bg); }
+.xray-legs-box {
+  display: grid;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.xray-legs-head { font-size: 0.66rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); }
+.xray-legs { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s-2); }
+.xray-leg { display: flex; gap: var(--s-2); align-items: baseline; font-size: var(--fs-xs); color: var(--text-muted); }
+.xray-leg-num { flex: 0 0 auto; color: var(--accent); font-size: 0.7rem; }
+.xray-leg-body { display: grid; gap: 2px; min-width: 0; }
+.xray-leg-name { font-size: 0.62rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); }
+.xray-leg-claim { color: var(--text); font-size: var(--fs-sm); }
+
+/* Diff pulses — each runs EXACTLY ONCE (iteration-count 1). After it
+   settles, the "New" badge and the dashed ring are the permanent signal;
+   the animation draws the eye once and then gets out of the way. Nothing
+   else on the screen moves, ever. */
+@keyframes xray-pulse {
+  0%   { stroke-width: 1.5; }
+  35%  { stroke-width: 6; }
+  100% { stroke-width: 1.5; }
+}
+@keyframes xray-pulse-card {
+  0%   { background-color: rgba(94, 234, 212, 0.18); }
+  100% { background-color: var(--bg-elevated); }
+}
+.xray-new { animation: xray-pulse 1100ms ease-out 1; }
+.xray-new-card { animation: xray-pulse-card 1400ms ease-out 1; }
+@media (prefers-reduced-motion: reduce) {
+  .xray-new, .xray-new-card { animation: none !important; }
+}
 
 /* --- Narrow headers ---
    The header carries brand + tabs + email + two pills + two buttons; below

@@ -161,6 +161,9 @@ function microserviceCandidates(graph) {
     if (legs.some((l) => !l || !l.evidence)) continue;   // silence unless all three hold
     out.push({
       cluster: node.cluster || node.id,
+      // Which node this is about, so the dashboard can scope the card to a
+      // pinned node instead of only to a cluster.
+      target: node.id,
       change: `Extract ${node.name} into its own service`,
       effort: "L",
       impact: "medium",
@@ -209,6 +212,12 @@ export function recommend(graph, findings) {
       evidence: finding.evidence,
       fromRule: finding.rule,
       severity: finding.severity,
+      // The node (or cluster, or file) the originating finding pointed at.
+      // Lets the dashboard show "recommendations for this selection" when a
+      // node is pinned, rather than always widening to the whole cluster.
+      // On a deduplicated card it names the FIRST occurrence, which is fine:
+      // the card is one change, and one place it applies is enough to scope by.
+      target: finding.target,
     });
   }
 
