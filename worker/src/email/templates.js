@@ -277,18 +277,45 @@ export function orgInvite({ email, orgName, inviterName, acceptUrl, expiresInDay
  */
 export function monitorNewFindings({
   repoUrl, branch, newAdvisories, groups, counts, fixCommand, isBaseline, dashboardUrl,
+  // Optional sections from the multi-analyzer sweep (migrations/0016). Each
+  // is null unless that analyzer alerted, so a vuln-only monitor produces
+  // byte-identical email to what it always has.
+  archSection = null, estimateSection = null, algoSection = null,
 }) {
   const total = newAdvisories.length;
   const worst = ["critical", "high", "medium", "low"].find((s) => counts[s] > 0) || "unknown";
   const repoLabel = `${repoUrl}${branch ? ` (${branch})` : ""}`;
 
-  const subject = isBaseline
-    ? `Algosize — baseline scan of ${repoUrl}: ${total} advisor${total === 1 ? "y" : "ies"}`
-    : `Algosize — ${total} new ${worst} advisor${total === 1 ? "y" : "ies"} in ${repoUrl}`;
+  // The subject names every section with something to say, because the
+  // subject is the triage line: "2 new advisories · cost changed" tells the
+  // reader whether tonight's email is security's problem or finance's.
+  const subjectParts = [];
+  if (total > 0) {
+    subjectParts.push(isBaseline
+      ? `baseline: ${total} advisor${total === 1 ? "y" : "ies"}`
+      : `${total} new ${worst} advisor${total === 1 ? "y" : "ies"}`);
+  }
+  if (archSection && archSection.newFindings.length) {
+    const n = archSection.newFindings.length;
+    subjectParts.push(`${n} architecture finding${n === 1 ? "" : "s"}`);
+  }
+  if (estimateSection) {
+    subjectParts.push(estimateSection.isBaseline ? "baseline cost estimate" : "estimated cost changed");
+  }
+  if (algoSection && algoSection.regressions.length) {
+    const n = algoSection.regressions.length;
+    subjectParts.push(`${n} complexity regression${n === 1 ? "" : "s"}`);
+  }
+
+  const subject = subjectParts.length
+    ? `Algosize — ${subjectParts.join(" · ")} in ${repoUrl}`
+    : (isBaseline
+        ? `Algosize — baseline scan of ${repoUrl}: ${total} advisor${total === 1 ? "y" : "ies"}`
+        : `Algosize — ${total} new ${worst} advisor${total === 1 ? "y" : "ies"} in ${repoUrl}`);
 
   const lead = isBaseline
     ? `First scheduled scan of ${repoLabel}. This is the current state — future emails will only list what's new since the previous scan.`
-    : `New advisories in ${repoLabel} since the last scan. Everything you'd already seen has been left out.`;
+    : `Changes in ${repoLabel} since the last scan. Everything you'd already seen has been left out.`;
 
   const textLines = [lead, ""];
   for (const group of groups) {
@@ -301,6 +328,48 @@ export function monitorNewFindings({
     textLines.push("");
   }
   if (fixCommand) textLines.push(`Fix: ${fixCommand}`, "");
+
+  if (archSection && archSection.newFindings.length) {
+    textLines.push(archSection.isBaseline
+      ? `ARCHITECTURE X-RAY — baseline (${archSection.newFindings.length})`
+      : `ARCHITECTURE X-RAY — new findings (${archSection.newFindings.length})`);
+    for (const f of archSection.newFindings.slice(0, 10)) {
+      textLines.push(`  [${(f.severity || "").toUpperCase()}] ${f.target} — ${String(f.rule || "").replace(/_/g, " ")}`);
+      if (f.fix) textLines.push(`    fix: ${f.fix}`);
+    }
+    if (archSection.newFindings.length > 10) {
+      textLines.push(`  …and ${archSection.newFindings.length - 10} more in the dashboard`);
+    }
+    textLines.push("");
+  }
+
+  if (estimateSection) {
+    textLines.push(estimateSection.isBaseline
+      ? "COST ESTIMATE — baseline (from the committed compose file)"
+      : "COST ESTIMATE — changed (the committed compose file changed, or prices did)");
+    if (estimateSection.isBaseline && Array.isArray(estimateSection.providers)) {
+      for (const pr of estimateSection.providers.slice(0, 5)) {
+        textLines.push(`  ${pr.providerName || pr.providerId}: ${microUsdText(pr.estimatedTotalMicroUsd)} / month (confidence: ${pr.confidence || "unknown"})`);
+      }
+    } else {
+      for (const c of estimateSection.changes) {
+        textLines.push(`  ${c.providerId}: ${microUsdText(c.from)} → ${microUsdText(c.to)} / month`);
+      }
+    }
+    textLines.push("  This is an estimate from your configuration and published list prices — not a bill or a prediction of your invoice.", "");
+  }
+
+  if (algoSection && algoSection.regressions.length) {
+    textLines.push(`ALGORITHM OPTIMIZER — complexity regressions (${algoSection.regressions.length})`);
+    for (const r of algoSection.regressions) {
+      textLines.push(`  ${r.name}: ${r.from} → ${r.to}`);
+    }
+    if (algoSection.improvements && algoSection.improvements.length) {
+      textLines.push(`  Improved: ${algoSection.improvements.map((i) => `${i.name} (${i.from} → ${i.to})`).join(", ")}`);
+    }
+    textLines.push("");
+  }
+
   textLines.push(`Full report: ${dashboardUrl}`, "", "— The Algosize team");
 
   const groupsHtml = groups.map((group) => `
@@ -321,6 +390,9 @@ export function monitorNewFindings({
       ${fixCommand ? `
       <p style="margin:18px 0 6px;font-size:13px;color:#8b949e">Start here:</p>
       <p style="margin:0 0 20px;padding:10px 12px;background:#0d1117;border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;color:#7ee0c0">${escapeHtml(fixCommand)}</p>` : ""}
+      ${archSectionHtml(archSection)}
+      ${estimateSectionHtml(estimateSection)}
+      ${algoSectionHtml(algoSection)}
       <p style="margin:0 0 16px">
         <a href="${dashboardUrl}" style="display:inline-block;padding:12px 20px;background:#7ee0c0;color:#06281f;text-decoration:none;border-radius:8px;font-weight:600">View the full report →</a>
       </p>
@@ -463,6 +535,57 @@ export function referralCredited({ email, referredName, amount, balance }) {
     `,
   );
   return { subject, text, html };
+}
+
+
+/** Micro-USD → "$123.45", "—" for null. The email's one rounding site. */
+function microUsdText(micro) {
+  if (typeof micro !== "number" || !Number.isFinite(micro)) return "—";
+  return "$" + (micro / 1_000_000).toFixed(2);
+}
+
+const SECTION_LABEL_STYLE = "margin:22px 0 6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#7ee0c0";
+
+function archSectionHtml(archSection) {
+  if (!archSection || !archSection.newFindings.length) return "";
+  const shown = archSection.newFindings.slice(0, 10);
+  const items = shown.map((f) => `
+      <div style="margin:0 0 10px;padding:10px 12px;background:#0d1117;border-left:3px solid #f59e0b;border-radius:0 4px 4px 0">
+        <p style="margin:0 0 3px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#f0f6fc">[${escapeHtml(String(f.severity || "").toUpperCase())}] ${escapeHtml(String(f.target || ""))} — ${escapeHtml(String(f.rule || "").replace(/_/g, " "))}</p>
+        ${f.fix ? `<p style="margin:0;font-size:13px;color:#c9d1d9">${escapeHtml(f.fix)}</p>` : ""}
+      </div>`).join("");
+  const more = archSection.newFindings.length > shown.length
+    ? `<p style="margin:0 0 10px;font-size:12px;color:#8b949e">…and ${archSection.newFindings.length - shown.length} more in the dashboard.</p>` : "";
+  return `
+      <p style="${SECTION_LABEL_STYLE}">Architecture X-ray — ${archSection.isBaseline ? "baseline" : "new findings"} (${archSection.newFindings.length})</p>
+      ${items}${more}`;
+}
+
+function estimateSectionHtml(estimateSection) {
+  if (!estimateSection) return "";
+  let rows;
+  if (estimateSection.isBaseline && Array.isArray(estimateSection.providers)) {
+    rows = estimateSection.providers.slice(0, 5).map((pr) => `
+      <p style="margin:0 0 4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;color:#c9d1d9">${escapeHtml(pr.providerName || pr.providerId)}: <span style="color:#7ee0c0">${microUsdText(pr.estimatedTotalMicroUsd)}</span> / month <span style="color:#8b949e">(confidence: ${escapeHtml(pr.confidence || "unknown")})</span></p>`).join("");
+  } else {
+    rows = estimateSection.changes.map((c) => `
+      <p style="margin:0 0 4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;color:#c9d1d9">${escapeHtml(c.providerId)}: ${microUsdText(c.from)} → <span style="color:#7ee0c0">${microUsdText(c.to)}</span> / month</p>`).join("");
+  }
+  return `
+      <p style="${SECTION_LABEL_STYLE}">Cost estimate — ${estimateSection.isBaseline ? "baseline" : "changed"}</p>
+      ${rows}
+      <p style="margin:8px 0 0;font-size:12px;color:#8b949e">Estimated from the committed compose file and published list prices — not a bill, a quote, or a prediction of your invoice.</p>`;
+}
+
+function algoSectionHtml(algoSection) {
+  if (!algoSection || !algoSection.regressions.length) return "";
+  const rows = algoSection.regressions.map((r) => `
+      <p style="margin:0 0 4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;color:#c9d1d9">${escapeHtml(r.name)}: ${escapeHtml(r.from)} → <span style="color:#fbbf24">${escapeHtml(r.to)}</span></p>`).join("");
+  const improved = algoSection.improvements && algoSection.improvements.length
+    ? `<p style="margin:6px 0 0;font-size:12px;color:#8b949e">Improved: ${algoSection.improvements.map((i) => `${escapeHtml(i.name)} (${escapeHtml(i.from)} → ${escapeHtml(i.to)})`).join(", ")}</p>` : "";
+  return `
+      <p style="${SECTION_LABEL_STYLE}">Algorithm optimizer — complexity regressions (${algoSection.regressions.length})</p>
+      ${rows}${improved}`;
 }
 
 function escapeHtml(s) {

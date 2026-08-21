@@ -6,6 +6,30 @@ function newMonitorId() {
 
 export const SCHEDULES = Object.freeze(["daily", "weekly"]);
 
+// What a monitor can run on its schedule (migrations/0016). Every entry reads
+// ONLY committed repository files — that constraint is what lets these join
+// the sweep at all under the product's no-credentials rule.
+//
+// "vuln" is mandatory: the API refuses a set without it, because a monitor
+// row that watches nothing still occupies a plan slot and reads as coverage.
+export const MONITOR_ANALYZERS = Object.freeze(["vuln", "arch", "estimate", "algo"]);
+
+/**
+ * Normalise a requested analyzer set.
+ *
+ * Returns the sorted valid set (vuln forced in, unknowns dropped, "vuln"
+ * first for readability), or null when the input is not an array at all —
+ * the caller treats that as "not provided" and defaults.
+ */
+export function normalizeAnalyzers(raw) {
+  if (!Array.isArray(raw)) return null;
+  const set = new Set(["vuln"]);
+  for (const a of raw) {
+    if (typeof a === "string" && MONITOR_ANALYZERS.includes(a)) set.add(a);
+  }
+  return MONITOR_ANALYZERS.filter((a) => set.has(a));
+}
+
 // How many monitored repos each plan gets.
 //
 // Plan-based rather than price-based because there is still exactly one
@@ -46,10 +70,61 @@ function rowToMonitor(row) {
     // render the two differently or it invents a clean bill of health for a
     // monitor that has never reported.
     lastDelta:       parseDelta(row.last_delta_json),
+    // Which analyzers this monitor runs (migrations/0016). NULL — every row
+    // written before the column existed, and every monitor created without
+    // choosing — reads as ["vuln"]: exactly what those monitors always did.
+    analyzers:       parseAnalyzers(row.analyzers),
+    // Per-analyzer baselines, same contract as lastAdvisoryIds: null means
+    // "never ran", never "ran and found nothing".
+    lastArchKeys:    parseIdList(row.last_arch_keys),
+    lastEstimate:    parseEstimateBaseline(row.last_estimate_json),
+    lastAlgo:        parseAlgoBaseline(row.last_algo_json),
     createdBy:       row.created_by || null,
     createdAt:       row.created_at,
     pausedAt:        typeof row.paused_at === "number" ? row.paused_at : null,
   };
+}
+
+function parseAnalyzers(raw) {
+  if (typeof raw !== "string" || !raw) return ["vuln"];
+  try {
+    const normalized = normalizeAnalyzers(JSON.parse(raw));
+    return normalized || ["vuln"];
+  } catch {
+    return ["vuln"];
+  }
+}
+
+/** {"byProvider":{id:microUsd},"at":sec} or null. Corrupt reads as null. */
+function parseEstimateBaseline(raw) {
+  if (typeof raw !== "string" || !raw) return null;
+  try {
+    const d = JSON.parse(raw);
+    if (!d || typeof d.byProvider !== "object" || d.byProvider === null) return null;
+    const byProvider = {};
+    for (const [k, v] of Object.entries(d.byProvider)) {
+      if (typeof v === "number" && Number.isFinite(v)) byProvider[k] = v;
+    }
+    return { byProvider, at: typeof d.at === "number" ? d.at : null };
+  } catch {
+    return null;
+  }
+}
+
+/** {"byName":{entry:"O(n)"},"at":sec} or null. Corrupt reads as null. */
+function parseAlgoBaseline(raw) {
+  if (typeof raw !== "string" || !raw) return null;
+  try {
+    const d = JSON.parse(raw);
+    if (!d || typeof d.byName !== "object" || d.byName === null) return null;
+    const byName = {};
+    for (const [k, v] of Object.entries(d.byName)) {
+      if (typeof v === "string" && v) byName[k] = v;
+    }
+    return { byName, at: typeof d.at === "number" ? d.at : null };
+  } catch {
+    return null;
+  }
 }
 
 function parseIdList(raw) {
@@ -95,14 +170,39 @@ export async function countMonitors(env, orgId) {
   return row ? row.n : 0;
 }
 
-export async function createMonitor(env, { orgId, repoUrl, branch = null, schedule = "daily", createdBy = null }) {
+export async function createMonitor(env, { orgId, repoUrl, branch = null, schedule = "daily",
+                                           createdBy = null, analyzers = null }) {
   const now = Math.floor(Date.now() / 1000);
   const id  = newMonitorId();
+  const set = normalizeAnalyzers(analyzers);
   await env.DB.prepare(
-    `INSERT INTO monitors (monitor_id, org_id, repo_url, branch, schedule, created_by, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).bind(id, orgId, repoUrl, branch, schedule, createdBy, now).run();
+    `INSERT INTO monitors (monitor_id, org_id, repo_url, branch, schedule, created_by, created_at, analyzers)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).bind(id, orgId, repoUrl, branch, schedule, createdBy, now,
+         set ? JSON.stringify(set) : null).run();
   return getMonitorById(env, id);
+}
+
+/**
+ * Change which analyzers a monitor runs.
+ *
+ * Baselines for analyzers being switched OFF are cleared, so switching one
+ * back on later starts with an honest baseline run instead of diffing
+ * against a set from an arbitrary point in the past — "3 new findings since
+ * whenever you last had this on" is a comparison nobody asked for.
+ */
+export async function setMonitorAnalyzers(env, orgId, monitorId, analyzers) {
+  const set = normalizeAnalyzers(analyzers) || ["vuln"];
+  const clears = [];
+  if (!set.includes("arch"))     clears.push("last_arch_keys = NULL");
+  if (!set.includes("estimate")) clears.push("last_estimate_json = NULL");
+  if (!set.includes("algo"))     clears.push("last_algo_json = NULL");
+  const res = await env.DB.prepare(
+    `UPDATE monitors SET analyzers = ?${clears.length ? ", " + clears.join(", ") : ""}
+      WHERE monitor_id = ? AND org_id = ?`,
+  ).bind(JSON.stringify(set), monitorId, orgId).run();
+  if (!(res.meta && res.meta.changes)) return null;
+  return getMonitor(env, orgId, monitorId);
 }
 
 export async function deleteMonitor(env, orgId, monitorId) {
@@ -134,20 +234,33 @@ export async function setMonitorPaused(env, orgId, monitorId, paused) {
  * leaves the column untouched rather than clearing it, so a caller that does
  * not compute a delta cannot erase the last one that did.
  */
-export async function recordMonitorRun(env, monitorId, { ranAt, resultHash, advisoryIds, delta = null }) {
-  if (delta) {
-    await env.DB.prepare(
-      `UPDATE monitors
-          SET last_run_at = ?, last_result_hash = ?, last_advisory_ids = ?, last_delta_json = ?
-        WHERE monitor_id = ?`,
-    ).bind(ranAt, resultHash, JSON.stringify(advisoryIds), JSON.stringify(delta), monitorId).run();
-    return;
+export async function recordMonitorRun(env, monitorId, {
+  ranAt, resultHash, advisoryIds, delta = null,
+  // Per-analyzer baselines (migrations/0016). `undefined` leaves a column
+  // untouched — the contract that makes a transient fetch failure safe: an
+  // analyzer that could not run this sweep keeps its old baseline and diffs
+  // correctly next time, instead of having its history wiped by an outage.
+  archKeys = undefined, estimate = undefined, algo = undefined,
+}) {
+  const sets  = ["last_run_at = ?", "last_result_hash = ?", "last_advisory_ids = ?"];
+  const binds = [ranAt, resultHash, JSON.stringify(advisoryIds)];
+  if (delta) { sets.push("last_delta_json = ?"); binds.push(JSON.stringify(delta)); }
+  if (archKeys !== undefined) {
+    sets.push("last_arch_keys = ?");
+    binds.push(archKeys === null ? null : JSON.stringify(archKeys));
   }
+  if (estimate !== undefined) {
+    sets.push("last_estimate_json = ?");
+    binds.push(estimate === null ? null : JSON.stringify(estimate));
+  }
+  if (algo !== undefined) {
+    sets.push("last_algo_json = ?");
+    binds.push(algo === null ? null : JSON.stringify(algo));
+  }
+  binds.push(monitorId);
   await env.DB.prepare(
-    `UPDATE monitors
-        SET last_run_at = ?, last_result_hash = ?, last_advisory_ids = ?
-      WHERE monitor_id = ?`,
-  ).bind(ranAt, resultHash, JSON.stringify(advisoryIds), monitorId).run();
+    `UPDATE monitors SET ${sets.join(", ")} WHERE monitor_id = ?`,
+  ).bind(...binds).run();
 }
 
 /**

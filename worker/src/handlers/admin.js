@@ -246,6 +246,11 @@ const MIGRATIONS = Object.freeze([
              { table: "notification_prefs" },
              { table: "referral_codes" },
              { table: "credit_events" }] },
+  // Checked at both ends (first and last ALTER) so a partial apply reports
+  // as missing rather than as applied.
+  { id: "0016", name: "monitor_analyzers",
+    checks: [{ table: "monitors", column: "analyzers" },
+             { table: "monitors", column: "last_algo_json" }] },
 ]);
 
 /** Plain SQLite identifier — the only shape we will interpolate into a PRAGMA. */

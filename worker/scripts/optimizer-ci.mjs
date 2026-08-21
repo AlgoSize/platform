@@ -28,7 +28,6 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import * as acorn from "acorn";
 
 import { runOptimizer } from "../src/analyzers/optimizer.js";
 
@@ -44,20 +43,10 @@ export function rankOf(label) {
   return i === -1 ? RANK.length : i;
 }
 
-/** Slice the named top-level function declaration out of a file's source. */
-export function extractFunction(source, functionName) {
-  const ast = acorn.parse(source, { ecmaVersion: "latest", sourceType: "module" });
-  for (const node of ast.body) {
-    const fn = node.type === "FunctionDeclaration" ? node
-      : (node.type === "ExportNamedDeclaration" || node.type === "ExportDefaultDeclaration")
-        && node.declaration && node.declaration.type === "FunctionDeclaration"
-        ? node.declaration : null;
-    if (fn && fn.id && fn.id.name === functionName) {
-      return source.slice(fn.start, fn.end);
-    }
-  }
-  return null;
-}
+// The function slicer moved into the analyzer module so the scheduled
+// monitors' optimizer pass and this script share one definition. Re-exported
+// here because existing tests (and any tooling) import it from this script.
+export { extractFunction } from "../src/analyzers/optimizer.js";
 
 function parseArgs(argv) {
   const args = { all: false, base: "origin/main", refactor: false,

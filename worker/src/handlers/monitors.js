@@ -21,8 +21,11 @@ import {
   createMonitor,
   deleteMonitor,
   setMonitorPaused,
+  setMonitorAnalyzers,
+  normalizeAnalyzers,
   monitorLimitFor,
   SCHEDULES,
+  MONITOR_ANALYZERS,
 } from "../monitors/_store.js";
 import { auditFromRequest, AUDIT_ACTIONS } from "../audit.js";
 
@@ -96,6 +99,18 @@ function publicMonitor(m) {
     lastDelta: m.lastDelta
       ? { total: m.lastDelta.total, counts: m.lastDelta.counts, at: m.lastDelta.at }
       : null,
+    // Which analyzers this monitor runs (migrations/0016), plus a one-number
+    // summary per secondary analyzer so the row can say what the last sweep
+    // knew. Null everywhere follows the house rule: "never ran" is not "ran
+    // and found nothing".
+    analyzers: m.analyzers,
+    archFindingCount: m.lastArchKeys === null ? null : m.lastArchKeys.length,
+    lastEstimate: m.lastEstimate
+      ? { byProvider: m.lastEstimate.byProvider, at: m.lastEstimate.at }
+      : null,
+    lastAlgo: m.lastAlgo
+      ? { functions: Object.keys(m.lastAlgo.byName).length, at: m.lastAlgo.at }
+      : null,
   };
 }
 
@@ -149,6 +164,22 @@ export async function createMonitorHandler(request, env) {
     );
   }
 
+  // Which analyzers to run (migrations/0016). Absent means vuln only — the
+  // behaviour every monitor had before the column existed. Anything provided
+  // must be an array drawn from the known set; "vuln" is forced in by
+  // normalizeAnalyzers because a monitor that watches nothing still occupies
+  // a plan slot while reading as coverage.
+  let analyzers = null;
+  if (body && body.analyzers !== undefined) {
+    if (!Array.isArray(body.analyzers)) {
+      return jsonResponse(
+        { error: "invalid_analyzers", message: `analyzers must be an array drawn from: ${MONITOR_ANALYZERS.join(", ")}.` },
+        400,
+      );
+    }
+    analyzers = normalizeAnalyzers(body.analyzers);
+  }
+
   // Tier limit, checked at creation. 402 rather than 403 for the same reason
   // quota exhaustion is a 402: the resolution is a purchase, not a permission.
   const limit = monitorLimitFor(env, ctxOrg.entitlement);
@@ -172,7 +203,7 @@ export async function createMonitorHandler(request, env) {
   try {
     monitor = await createMonitor(env, {
       orgId:     ctxOrg.orgId,
-      repoUrl, branch, schedule,
+      repoUrl, branch, schedule, analyzers,
       createdBy: ctxOrg.userId,
     });
   } catch (err) {
@@ -262,6 +293,54 @@ export async function pauseMonitorHandler(request, env) {
     targetId:   monitorId,
     orgId:      ctxOrg.orgId,
     metadata:   { repoUrl: existing.repoUrl, branch: existing.branch || null },
+  });
+
+  return jsonResponse({ ok: true, monitor: publicMonitor(updated) });
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/monitors/:id/analyzers   body {analyzers: ["vuln","arch",…]}
+// ---------------------------------------------------------------------------
+//
+// Explicit full-set semantics, like the pause endpoint's explicit form: the
+// client sends the set it wants, not a delta, so two tabs cannot race each
+// other into a state neither asked for. Baselines for analyzers switched off
+// are cleared in the same statement (see setMonitorAnalyzers) so re-enabling
+// later starts honest.
+export async function setMonitorAnalyzersHandler(request, env) {
+  const ctxOrg = await requireOrgContext(request, env);
+  if (ctxOrg.error) return ctxOrg.error;
+
+  const monitorId = request.params && request.params.id;
+  if (!monitorId) return jsonResponse({ error: "invalid_request", message: "No monitor id supplied." }, 400);
+
+  const existing = await getMonitor(env, ctxOrg.orgId, monitorId);
+  if (!existing) {
+    return jsonResponse({ error: "not_found", message: "No monitor with that id on this organisation." }, 404);
+  }
+
+  let body;
+  try { body = await request.json(); }
+  catch { return jsonResponse({ error: "invalid_json", message: "Request body must be valid JSON." }, 400); }
+
+  if (!body || !Array.isArray(body.analyzers)) {
+    return jsonResponse(
+      { error: "invalid_analyzers", message: `Send {analyzers: [...]} drawn from: ${MONITOR_ANALYZERS.join(", ")}.` },
+      400,
+    );
+  }
+
+  const updated = await setMonitorAnalyzers(env, ctxOrg.orgId, monitorId, body.analyzers);
+  if (!updated) {
+    return jsonResponse({ error: "not_found", message: "No monitor with that id on this organisation." }, 404);
+  }
+
+  await auditFromRequest(request, env, null, {
+    action:     AUDIT_ACTIONS.MONITOR_ANALYZERS_CHANGED,
+    targetType: "monitor",
+    targetId:   monitorId,
+    orgId:      ctxOrg.orgId,
+    metadata:   { repoUrl: existing.repoUrl, from: existing.analyzers, to: updated.analyzers },
   });
 
   return jsonResponse({ ok: true, monitor: publicMonitor(updated) });

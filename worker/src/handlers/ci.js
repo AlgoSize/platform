@@ -666,3 +666,177 @@ jobs:
           exit 1
 `;
 }
+
+// ---------------------------------------------------------------------------
+// GET /api/ci/optimizer-snippet — the Algorithm optimizer's per-PR gate
+// ---------------------------------------------------------------------------
+//
+// Same shape as the audit snippet: the customer's workflow collects inputs
+// from their own checkout and POSTs them to our API, so the verdict CI gets
+// and the verdict the dashboard would give for the same function are computed
+// by the same code. Which functions get audited is optimizer.config.json at
+// the repo root — the same manifest the scheduled monitors' optimizer pass
+// reads, so the nightly sweep and the per-PR gate watch the same list by
+// construction.
+export function ciOptimizerSnippetHandler(request, env) {
+  const origin = (env.SITE_ORIGIN || "https://algosize.com").replace(/\/$/, "");
+  return json({
+    filename: ".github/workflows/algosize-optimizer.yml",
+    configFilename: "optimizer.config.json",
+    secretName: "ALGOSIZE_API_KEY",
+    setupSteps: [
+      "Create an API key in the dashboard (API keys → Create key) and add it as the ALGOSIZE_API_KEY repository secret — the same key the dependency audit uses.",
+      "Commit optimizer.config.json at the repo root, naming the self-contained functions to watch (example below).",
+      "Commit the workflow file below.",
+    ],
+    configExample: buildOptimizerConfigExample(),
+    workflow: buildOptimizerWorkflow({ origin }),
+  }, 200);
+}
+
+export function buildOptimizerConfigExample() {
+  return JSON.stringify({
+    "$comment": "Each entry names one SELF-CONTAINED function: no imports, no closures over file-level helpers. `baseline` is a CEILING, not an expectation — set it one bucket above the true complexity so timing noise cannot fail a build; the check exists to catch real regressions like O(n) -> O(n^2). `file` is repo-root-relative.",
+    entries: [
+      {
+        name: "example-sum",
+        file: "src/math.js",
+        functionName: "sum",
+        sampleInput: [3, 1, 4, 1, 5],
+        baseline: "O(n log n)",
+      },
+    ],
+  }, null, 2);
+}
+
+export function buildOptimizerWorkflow({ origin }) {
+  return `name: Algosize algorithm optimizer
+
+# Big-O regression gate. Reads optimizer.config.json, slices each named
+# function out of its file, and asks the Algosize API to measure it — the
+# same analyzer behind the dashboard's Algorithm optimizer and the scheduled
+# monitors' nightly pass, so all three always agree about a function.
+#
+# The build fails only when a measured complexity lands ABOVE the entry's
+# declared baseline ceiling. A function that cannot be found or measured is
+# reported and skipped, not failed: a red build about config is how the gate
+# gets deleted.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  optimizer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Skipped-with-notice when the secret is absent, same as the audit
+      # workflow: a workflow that goes red the moment it is pasted reads as
+      # "this product is broken".
+      - name: Check for the API key
+        id: key
+        env:
+          ALGOSIZE_API_KEY: \${{ secrets.ALGOSIZE_API_KEY }}
+        run: |
+          if [ -n "$ALGOSIZE_API_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::ALGOSIZE_API_KEY is not set — skipping the optimizer gate. Add the secret to enable it."
+          fi
+
+      - name: Audit configured functions
+        if: steps.key.outputs.present == 'true'
+        env:
+          ALGOSIZE_API_KEY: \${{ secrets.ALGOSIZE_API_KEY }}
+        run: |
+          # acorn does the function slicing — a real parse, not a regex.
+          npm install --no-save --no-audit --no-fund acorn >/dev/null 2>&1
+          node - <<'NODE'
+          const fs = require("fs");
+          const acorn = require("acorn");
+
+          // Both spellings of the polynomial labels rank identically: the API
+          // measures "O(n²)" while config ceilings are typed "O(n^2)". Labels
+          // past O(n³) carry a raw exponent ("O(n^4.2)") and rank by it;
+          // anything unparseable — "unknown" included — ranks worst.
+          const RANKS = new Map([
+            ["O(1)", 0], ["O(log n)", 1], ["O(n)", 2], ["O(n log n)", 3],
+            ["O(n²)", 4], ["O(n^2)", 4], ["O(n³)", 5], ["O(n^3)", 5],
+          ]);
+          const rank = (l) => {
+            if (RANKS.has(l)) return RANKS.get(l);
+            const m = typeof l === "string" ? l.match(/^O\\(n\\^([0-9.]+)\\)$/) : null;
+            if (m && Number.parseFloat(m[1]) > 3) return Math.min(5 + (Number.parseFloat(m[1]) - 3), 99);
+            return 100;
+          };
+
+          function extractFunction(source, name) {
+            const ast = acorn.parse(source, { ecmaVersion: "latest", sourceType: "module" });
+            for (const node of ast.body) {
+              const fn = node.type === "FunctionDeclaration" ? node
+                : (node.type === "ExportNamedDeclaration" || node.type === "ExportDefaultDeclaration")
+                  && node.declaration && node.declaration.type === "FunctionDeclaration"
+                  ? node.declaration : null;
+              if (fn && fn.id && fn.id.name === name) return source.slice(fn.start, fn.end);
+            }
+            return null;
+          }
+
+          async function main() {
+            if (!fs.existsSync("optimizer.config.json")) {
+              console.log("::notice::optimizer.config.json not found — nothing to audit.");
+              return;
+            }
+            const config = JSON.parse(fs.readFileSync("optimizer.config.json", "utf8"));
+            const entries = Array.isArray(config.entries) ? config.entries : [];
+            let failed = 0;
+
+            for (const entry of entries) {
+              const label = entry.name || entry.functionName || "unnamed";
+              if (!entry.file || !entry.functionName) {
+                console.log("::warning::" + label + ": entry missing file or functionName — skipped");
+                continue;
+              }
+              if (!fs.existsSync(entry.file)) {
+                console.log("::warning::" + label + ": " + entry.file + " not found — skipped");
+                continue;
+              }
+              const code = extractFunction(fs.readFileSync(entry.file, "utf8"), entry.functionName);
+              if (!code) {
+                console.log("::warning::" + label + ": function " + entry.functionName + " not found in " + entry.file + " — skipped");
+                continue;
+              }
+
+              const res = await fetch("${origin}/api/analyze/algo", {
+                method: "POST",
+                headers: {
+                  "content-type": "application/json",
+                  authorization: "Bearer " + process.env.ALGOSIZE_API_KEY,
+                },
+                body: JSON.stringify({ code, sampleInput: entry.sampleInput }),
+              });
+              const body = await res.json().catch(() => ({}));
+              if (!res.ok) {
+                console.log("::warning::" + label + ": API " + res.status + " (" + (body.error || "error") + ") — skipped");
+                continue;
+              }
+              const measured = body.bigO && body.bigO.label || "unknown";
+              const ceiling = entry.baseline || null;
+              if (ceiling && rank(measured) > rank(ceiling)) {
+                console.log("::error::" + label + ": measured " + measured + " exceeds the declared ceiling " + ceiling);
+                failed++;
+              } else {
+                console.log(label + ": " + measured + (ceiling ? " (ceiling " + ceiling + ")" : ""));
+              }
+            }
+            if (failed > 0) process.exit(1);
+          }
+          main().catch((err) => { console.log("::error::" + err.message); process.exit(1); });
+          NODE
+`;
+}
