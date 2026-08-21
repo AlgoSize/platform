@@ -4,8 +4,10 @@
 //   GET    /api/monitors            list + monitorLimit + monitorsUsed
 //   POST   /api/monitors            402 monitor_limit_reached, 409 monitor_exists
 //   DELETE /api/monitors/:id
-//   POST   /api/monitors/:id/pause  explicit {paused} — a toggle races itself
-//   GET    /api/ci/snippet          workflow YAML + filename + setup steps
+//   POST   /api/monitors/:id/pause      explicit {paused} — a toggle races itself
+//   POST   /api/monitors/:id/analyzers  explicit full set, same reason
+//   GET    /api/ci/snippet              audit workflow YAML + filename
+//   GET    /api/ci/optimizer-snippet    optimizer workflow + config example
 //   GET    /api/runs?source=ci      "has the first CI run arrived?"
 //
 // Deliberately NOT here: a validate-before-create endpoint. The create
@@ -28,7 +30,20 @@
     schedule: "daily",
     limit: null,
     used: 0,
+    // Secondary analyzers ticked in the new-monitor form. The dependency
+    // audit is not in here because it is not a choice — the Worker forces
+    // "vuln" into every set it stores.
+    analyzers: { arch: false, estimate: false, algo: false },
   };
+
+  // Order and labels for the secondary analyzers, everywhere they render.
+  var SECONDARY_ANALYZERS = ["arch", "estimate", "algo"];
+  var ANALYZER_LABEL = {
+    arch: "Architecture X-ray",
+    estimate: "Cost estimate",
+    algo: "Algorithm optimizer",
+  };
+  var ANALYZER_SHORT = { arch: "x-ray", estimate: "cost", algo: "algo" };
 
   function shortRepo(url) {
     var m = REPO_RE.exec(url || "");
@@ -121,6 +136,8 @@
       meta.appendChild(el("span", null,
         m.lastRunAt ? "last ran " + core.formatRelativeTime(m.lastRunAt * 1000) : "first run pending"));
       info.appendChild(meta);
+      var az = analyzerRow(m);
+      if (az) info.appendChild(az);
       li.appendChild(info);
 
       var actions = el("div", { class: "monitor-actions" });
@@ -219,6 +236,93 @@
   }
 
   // ---------------------------------------------------------------------
+  // Per-row analyzer chips — which secondary analyzers this monitor runs,
+  // each with the one number its last sweep produced. Clicking a chip
+  // toggles the analyzer; the whole desired set is POSTed explicitly for
+  // the same reason the pause endpoint takes {paused}.
+  // ---------------------------------------------------------------------
+
+  function microUsdText(v) {
+    if (typeof v !== "number" || !isFinite(v)) return null;
+    return "$" + (v / 1e6).toFixed(2);
+  }
+
+  /**
+   * One line of chip summary for an ENABLED analyzer. Null baselines mean
+   * "never ran" and say so — the null-vs-zero rule from deltaBadges applies
+   * to every analyzer, not just the audit.
+   */
+  function analyzerSummary(m, key) {
+    if (key === "arch") {
+      if (m.archFindingCount === null || m.archFindingCount === undefined) return "first run pending";
+      if (m.archFindingCount === 0) return "no findings";
+      return m.archFindingCount + " finding" + (m.archFindingCount === 1 ? "" : "s");
+    }
+    if (key === "estimate") {
+      if (!m.lastEstimate) return "first run pending";
+      var totals = [];
+      var by = m.lastEstimate.byProvider || {};
+      Object.keys(by).forEach(function (p) {
+        if (typeof by[p] === "number") totals.push(by[p]);
+      });
+      // An empty recorded baseline means the sweep looked and found no
+      // compose file to price — a fact, not a pending state.
+      if (!totals.length) return "no compose file";
+      var cheapest = microUsdText(Math.min.apply(null, totals));
+      return cheapest ? "from " + cheapest + "/mo" : "estimated";
+    }
+    if (key === "algo") {
+      if (!m.lastAlgo) return "first run pending";
+      if (!m.lastAlgo.functions) return "no config";
+      return m.lastAlgo.functions + " function" + (m.lastAlgo.functions === 1 ? "" : "s") + " graded";
+    }
+    return null;
+  }
+
+  function toggleAnalyzer(m, key, chip) {
+    var enabled = (m.analyzers || []).indexOf(key) !== -1;
+    if (enabled && !window.confirm(
+      "Switch off " + ANALYZER_LABEL[key] + " for " + shortRepo(m.repoUrl) +
+      "? Its baseline is cleared — switching it back on starts fresh with a new baseline email.")) return;
+    // The full desired set, rebuilt from scratch in canonical order.
+    var next = ["vuln"];
+    SECONDARY_ANALYZERS.forEach(function (k) {
+      var has = (m.analyzers || []).indexOf(k) !== -1;
+      if (k === key ? !enabled : has) next.push(k);
+    });
+    setBusy(chip, true, "…");
+    callApi("/api/monitors/" + encodeURIComponent(m.monitorId) + "/analyzers", { analyzers: next })
+      .then(function () { return load(true); })
+      .catch(function (e) { window.alert(e.message || "Could not update the monitor's analyzers"); })
+      .then(function () { setBusy(chip, false); });
+  }
+
+  function analyzerRow(m) {
+    var box = el("div", { class: "monitor-analyzers" });
+    SECONDARY_ANALYZERS.forEach(function (key) {
+      var enabled = (m.analyzers || []).indexOf(key) !== -1;
+      var chip;
+      if (enabled) {
+        var text = ANALYZER_SHORT[key];
+        var summary = analyzerSummary(m, key);
+        if (summary) text += " · " + summary;
+        chip = el("button", {
+          type: "button", class: "chip chip-toggle chip-toggle-on",
+          title: ANALYZER_LABEL[key] + " runs on this monitor's schedule — click to switch it off",
+        }, text);
+      } else {
+        chip = el("button", {
+          type: "button", class: "chip chip-toggle",
+          title: "Add " + ANALYZER_LABEL[key] + " to this monitor's scheduled sweep",
+        }, "+ " + ANALYZER_SHORT[key]);
+      }
+      chip.addEventListener("click", function () { toggleAnalyzer(m, key, chip); });
+      box.appendChild(chip);
+    });
+    return box;
+  }
+
+  // ---------------------------------------------------------------------
   // New-monitor form — client-side mirror of the Worker's rules, plus the
   // real POST's structured errors rendered field-level.
   // ---------------------------------------------------------------------
@@ -257,6 +361,26 @@
     });
   }
 
+  function setFormAnalyzer(key, on) {
+    if (!(key in state.analyzers)) return;
+    state.analyzers[key] = on;
+    var b = document.querySelector("#monitor-form [data-analyzer=\"" + key + "\"]");
+    if (b) {
+      b.setAttribute("aria-pressed", on ? "true" : "false");
+      b.classList.toggle("analyzer-opt-on", on);
+    }
+  }
+
+  // The full set the create POST sends: the audit always, then whichever
+  // secondaries are ticked, in canonical order.
+  function formAnalyzers() {
+    var out = ["vuln"];
+    SECONDARY_ANALYZERS.forEach(function (k) {
+      if (state.analyzers[k]) out.push(k);
+    });
+    return out;
+  }
+
   function submitMonitor(event) {
     event.preventDefault();
     if (!validateRepoField()) {
@@ -272,7 +396,7 @@
     var branch = branchInput && branchInput.value.trim() ? branchInput.value.trim() : undefined;
 
     setBusy(submit, true, "Creating…");
-    callApi("/api/monitors", { repoUrl: repoUrl, branch: branch, schedule: state.schedule })
+    callApi("/api/monitors", { repoUrl: repoUrl, branch: branch, schedule: state.schedule, analyzers: formAnalyzers() })
       .then(function () {
         toggleForm(false);
         return load(true);
@@ -304,6 +428,7 @@
       form.reset();
       setFieldMsg("monitor-repo", "monitor-repo-msg", true, "");
       setFieldMsg("monitor-branch", "monitor-branch-msg", true, "");
+      SECONDARY_ANALYZERS.forEach(function (k) { setFormAnalyzer(k, false); });
       var formError = document.getElementById("monitor-form-error");
       if (formError) formError.hidden = true;
     }
@@ -321,6 +446,24 @@
       if (yamlEl) yamlEl.textContent = res.workflow || "";
     }).catch(function (e) {
       if (yamlEl) yamlEl.textContent = "Could not load the workflow: " + (e.message || "error");
+    });
+  }
+
+  // Same shape as loadSnippet, for the optimizer panel — plus the config
+  // example, which is the part users actually have to edit.
+  function loadOptimizerSnippet() {
+    var yamlEl = document.getElementById("ci-opt-yaml");
+    var cfgEl  = document.getElementById("ci-opt-config");
+    var fileEl = document.getElementById("ci-opt-filename");
+    var cfgNameEl = document.getElementById("ci-opt-config-filename");
+    return callApi("/api/ci/optimizer-snippet", null, "GET").then(function (res) {
+      if (fileEl && res.filename) fileEl.textContent = res.filename;
+      if (cfgNameEl && res.configFilename) cfgNameEl.textContent = res.configFilename;
+      if (cfgEl) cfgEl.textContent = res.configExample || "";
+      if (yamlEl) yamlEl.textContent = res.workflow || "";
+    }).catch(function (e) {
+      if (yamlEl) yamlEl.textContent = "Could not load the workflow: " + (e.message || "error");
+      if (cfgEl) cfgEl.textContent = "Could not load the example.";
     });
   }
 
@@ -367,7 +510,7 @@
       }),
       checkFirstRun(),
     ];
-    if (first) jobs.push(loadSnippet());
+    if (first) jobs.push(loadSnippet(), loadOptimizerSnippet());
     return Promise.all(jobs);
   }
 
@@ -382,7 +525,9 @@
       form.addEventListener("submit", submitMonitor);
       form.addEventListener("click", function (event) {
         var b = event.target.closest && event.target.closest("[data-schedule]");
-        if (b) setSchedule(b.dataset.schedule);
+        if (b) { setSchedule(b.dataset.schedule); return; }
+        var a = event.target.closest && event.target.closest("[data-analyzer]");
+        if (a) setFormAnalyzer(a.dataset.analyzer, a.getAttribute("aria-pressed") !== "true");
       });
     }
     var repoInput = document.getElementById("monitor-repo");

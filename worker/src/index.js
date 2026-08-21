@@ -67,6 +67,7 @@ import {
   createMonitorHandler,
   deleteMonitorHandler,
   pauseMonitorHandler,
+  setMonitorAnalyzersHandler,
 } from "./handlers/monitors.js";
 import { sweepDueMonitors, handleMonitorQueue } from "./monitors/run.js";
 import { logoutHandler } from "./handlers/logout.js";
@@ -80,7 +81,7 @@ import {
   revokeRunShareHandler,
   sharedReportHandler,
 } from "./handlers/runs.js";
-import { ciRunHandler, ciSnippetHandler } from "./handlers/ci.js";
+import { ciRunHandler, ciSnippetHandler, ciOptimizerSnippetHandler } from "./handlers/ci.js";
 import {
   billingPortalHandler,
   billingSummaryHandler,
@@ -188,11 +189,13 @@ router.post("/api/analyze/architecture", analyzeRateLimit, requireAuth, apiKeyAn
 router.post("/api/fix", analyzeRateLimit, requireAuth, generateFixHandler);
 
 // ---- Infrastructure Cost Estimator ----------------------------------------
-// Upload-triggered or manually entered ONLY. There is deliberately no
-// scheduled variant, no cloud-account connector, and no credential storage:
-// the estimate is computed from the configuration the user hands us and the
-// bundled pricing catalog, and nothing else is contacted. See
-// handlers/estimate.js for the sanitizing boundary this route depends on.
+// No cloud-account connector and no credential storage, ever: the estimate is
+// computed from configuration handed to us and the bundled pricing catalog,
+// and nothing else is contacted. Two ways configuration reaches it: this
+// route (upload or manual entry), and a scheduled monitor pricing the
+// repository's COMMITTED compose file (monitors/analyzers.js) — the same
+// no-credentials posture, on a schedule. See handlers/estimate.js for the
+// sanitizing boundary both paths share.
 //
 // Metered like the other analyzers — an estimate is a run.
 router.post("/api/estimate", analyzeRateLimit, requireAuth, apiKeyAnalyzeRateLimit, enforceQuota(estimateHandler));
@@ -291,6 +294,10 @@ router.get(   "/api/share/:token",            publicReadRateLimit, sharedReportH
 router.post("/api/ci/runs",    analyzeRateLimit, requireAuth, apiKeyAnalyzeRateLimit, enforceQuota(ciRunHandler));
 // The setup snippet is dashboard-facing, so either credential may read it.
 router.get( "/api/ci/snippet", requireAuth, ciSnippetHandler);
+// The optimizer's per-PR gate: workflow + optimizer.config.json example. The
+// same manifest drives the scheduled monitors' optimizer pass, so the
+// nightly sweep and the CI gate watch the same functions by construction.
+router.get( "/api/ci/optimizer-snippet", requireAuth, ciOptimizerSnippetHandler);
 
 // ---- Stripe Customer Portal (Task #18) — manage card / cancel / invoices --
 router.post("/api/billing/portal",  requireAuth, billingPortalHandler);
@@ -391,6 +398,10 @@ router.get(   "/api/monitors",           requireAuth, listMonitorsHandler);
 router.post(  "/api/monitors",           requireAuth, createMonitorHandler);
 router.delete("/api/monitors/:id",       requireAuth, deleteMonitorHandler);
 router.post(  "/api/monitors/:id/pause", requireAuth, pauseMonitorHandler);
+// Which analyzers a monitor runs on its schedule (migrations/0016). All of
+// them read only committed repository files — see monitors/analyzers.js for
+// the rule that keeps them inside the no-credentials posture.
+router.post(  "/api/monitors/:id/analyzers", requireAuth, setMonitorAnalyzersHandler);
 
 // ---- Analytics noscript pixel (Task #26) ----------------------------------
 // Forwards a GET <img> request to Plausible's POST events API so visitors

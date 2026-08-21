@@ -366,8 +366,10 @@ permalink: /dashboard/
         <h2 class="dash-view-title">Repositories under continuous watch.</h2>
         <p class="lede">
           Advisories get published against code that hasn't changed. A monitor
-          re-scans on a schedule and emails only what's new; the CI hook runs
-          the same audit on every pull request.
+          re-scans on a schedule and emails only what's new — the dependency
+          audit always, plus architecture, cost, and complexity checks you can
+          switch on per repo. The CI hooks run the audit and the optimizer on
+          every pull request.
         </p>
       </div>
 
@@ -412,6 +414,30 @@ permalink: /dashboard/
                 <span class="choice-title">Weekly</span><span class="choice-hint">every 7 days</span>
               </button>
             </div>
+
+            <!-- Which analyzers the sweep runs. The dependency audit is what a
+                 monitor IS, so it renders as a locked fact, not a control; the
+                 other three are opt-in and each reads only committed files. -->
+            <span class="panel-input-label" id="monitor-analyzers-label">Analyzers</span>
+            <div class="analyzer-row" role="group" aria-labelledby="monitor-analyzers-label">
+              <span class="analyzer-opt analyzer-opt-on analyzer-opt-locked">
+                <span class="analyzer-name">Dependency audit</span>
+                <span class="analyzer-hint">always on — reads the committed lockfile</span>
+              </span>
+              <button type="button" class="analyzer-opt" data-analyzer="arch" aria-pressed="false">
+                <span class="analyzer-name">Architecture X-ray</span>
+                <span class="analyzer-hint">reads root manifests — wrangler.toml, Dockerfile, compose</span>
+              </button>
+              <button type="button" class="analyzer-opt" data-analyzer="estimate" aria-pressed="false">
+                <span class="analyzer-name">Cost estimate</span>
+                <span class="analyzer-hint">prices the committed compose file — never a cloud account</span>
+              </button>
+              <button type="button" class="analyzer-opt" data-analyzer="algo" aria-pressed="false">
+                <span class="analyzer-name">Algorithm optimizer</span>
+                <span class="analyzer-hint">re-grades functions named in optimizer.config.json</span>
+              </button>
+            </div>
+            <p class="field-msg" id="monitor-analyzers-note">Extra analyzers read only committed files. A repo missing the file an analyzer needs reports that in the email — it never fails the sweep.</p>
 
             <div class="form-actions">
               <button type="submit" class="btn btn-primary" id="monitor-submit">Start monitoring</button>
@@ -470,6 +496,49 @@ permalink: /dashboard/
             <span class="ci-status-text" id="ci-status-text">Checking for a first CI run…</span>
             <button type="button" class="btn btn-ghost btn-sm" id="ci-status-refresh">Check again</button>
           </div>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-ci-optimizer">
+        <header class="panel-head">
+          <div class="panel-heading">
+            <span class="panel-tag">CI</span>
+            <h2>Gate complexity regressions</h2>
+            <p class="panel-desc">The optimizer's own workflow re-measures the Big-O of functions you name on every pull request — and fails the build only when a measured grade grows past the ceiling you set.</p>
+          </div>
+        </header>
+        <div class="panel-body">
+          <ol class="wizard" id="ci-opt-wizard">
+            <li class="wizard-step">
+              <div class="wizard-step-head">
+                <span class="wizard-n" aria-hidden="true">1</span>
+                <h3>Reuse the audit's API key</h3>
+              </div>
+              <p class="wizard-copy">This workflow reads the same <code>ALGOSIZE_API_KEY</code> repository secret as the dependency audit — if step 2 above is done, this step is done. Until the secret exists the workflow skips itself with a notice, never a red build.</p>
+            </li>
+            <li class="wizard-step">
+              <div class="wizard-step-head">
+                <span class="wizard-n" aria-hidden="true">2</span>
+                <h3>Commit the function list</h3>
+              </div>
+              <p class="wizard-copy">Save as <code class="mono" id="ci-opt-config-filename">optimizer.config.json</code> at the repo root. Each entry names one self-contained function and the complexity ceiling it must stay under — a scheduled monitor with the optimizer switched on watches this same list.</p>
+              <div class="snippet-row snippet-row-tall">
+                <pre class="result-snippet" id="ci-opt-config">Loading example…</pre>
+                <button type="button" class="btn btn-ghost btn-sm" data-copy-target="ci-opt-config">Copy</button>
+              </div>
+            </li>
+            <li class="wizard-step">
+              <div class="wizard-step-head">
+                <span class="wizard-n" aria-hidden="true">3</span>
+                <h3>Commit the workflow file</h3>
+              </div>
+              <p class="wizard-copy">Save as <code class="mono" id="ci-opt-filename">.github/workflows/algosize-optimizer.yml</code>. A build goes red only for a real regression past a ceiling; a missing file or function is a warning, not a failure.</p>
+              <div class="snippet-row snippet-row-tall">
+                <pre class="result-snippet" id="ci-opt-yaml">Loading workflow…</pre>
+                <button type="button" class="btn btn-ghost btn-sm" data-copy-target="ci-opt-yaml">Copy</button>
+              </div>
+            </li>
+          </ol>
         </div>
       </section>
     </div><!-- /view-monitors -->

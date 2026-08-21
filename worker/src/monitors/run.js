@@ -29,6 +29,11 @@ import {
   countBySeverityOrdered,
   hashKeySet,
 } from "./diff.js";
+import {
+  runArchForMonitor, diffArchFindings,
+  runEstimateForMonitor, diffEstimate,
+  runAlgoForMonitor, diffAlgoGrades,
+} from "./analyzers.js";
 import { recordEmailSend } from "../oplog.js";
 
 // Bound on how many monitors one sweep enqueues. Far above any plausible
@@ -142,6 +147,73 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
   const advisories = Array.isArray(result && result.advisories) ? result.advisories : [];
   const diff = diffAdvisories(advisories, monitor.lastAdvisoryIds);
 
+  // ---- secondary analyzers (migrations/0016) ------------------------------
+  // Each runs only when its toggle is on, reads only committed repo files,
+  // and fails SOFT: a skip is captured and its baseline stays untouched
+  // (recordMonitorRun writes only baselines explicitly provided), so an
+  // outage costs a night's coverage rather than a false "all new" email.
+  const analyzers = monitor.analyzers || ["vuln"];
+  const fetchImpl = (env && env.FETCH) || globalThis.fetch;
+  const skips = [];
+
+  let archDiff = null, archBaseline;
+  if (analyzers.includes("arch")) {
+    const arch = await runArchForMonitor(monitor, env, fetchImpl);
+    if (arch.status === "ok") {
+      archDiff = diffArchFindings(arch.findings, arch.keys, monitor.lastArchKeys);
+      archBaseline = archDiff.currentKeys;
+    } else if (arch.status === "no_manifests") {
+      // A permanent condition, not an outage: record the empty set so a repo
+      // that later gains a manifest baselines from "nothing", and the run
+      // status says why nothing was compared.
+      archBaseline = [];
+      skips.push({ analyzer: "arch", reason: "no_manifests" });
+    } else {
+      skips.push({ analyzer: "arch", reason: arch.reason });
+    }
+  }
+
+  let estDiff = null, estBaseline, estProviders = null;
+  if (analyzers.includes("estimate")) {
+    const est = await runEstimateForMonitor(monitor, env, ctx, fetchImpl);
+    if (est.status === "ok") {
+      estDiff = diffEstimate(est.byProvider, monitor.lastEstimate);
+      estBaseline = { byProvider: est.byProvider, at: nowSec };
+      estProviders = est.providers;
+    } else if (est.status === "no_compose") {
+      estBaseline = { byProvider: {}, at: nowSec };
+      skips.push({ analyzer: "estimate", reason: "no_compose" });
+    } else {
+      skips.push({ analyzer: "estimate", reason: est.reason });
+    }
+  }
+
+  let algoDiff = null, algoBaseline, algoSkippedEntries = [];
+  if (analyzers.includes("algo")) {
+    const algo = await runAlgoForMonitor(monitor, env, fetchImpl);
+    if (algo.status === "ok") {
+      algoDiff = diffAlgoGrades(algo.grades, monitor.lastAlgo);
+      algoBaseline = { byName: algo.grades, at: nowSec };
+      algoSkippedEntries = algo.skippedEntries || [];
+    } else if (algo.status === "no_config") {
+      algoBaseline = { byName: {}, at: nowSec };
+      skips.push({ analyzer: "algo", reason: "no_config" });
+    } else {
+      skips.push({ analyzer: "algo", reason: algo.reason });
+    }
+  }
+
+  // Transient skips are worth an operator's eyes; permanent ones are the
+  // owner's configuration and would only be noise in Sentry.
+  for (const skip of skips) {
+    if (skip.reason === "github_throttled" || skip.reason === "sandbox_unreachable") {
+      await captureException(env, ctx,
+        new Error(`monitor ${monitorId}: ${skip.analyzer} skipped (${skip.reason})`),
+        { tags: { source: "monitors", phase: skip.analyzer, reason: skip.reason },
+          extra: { monitorId, repoUrl: monitor.repoUrl } });
+    }
+  }
+
   // Record the run BEFORE emailing. If the send fails, the baseline is still
   // advanced — which means the next run reports only what's new relative to
   // tonight rather than re-reporting tonight's list on top of tomorrow's.
@@ -151,6 +223,9 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
     ranAt:       nowSec,
     resultHash:  hashKeySet(diff.currentKeys),
     advisoryIds: diff.currentKeys,
+    archKeys:    archBaseline,
+    estimate:    estBaseline,
+    algo:        algoBaseline,
     // Persist what this run found new (migrations/0009). It has to be written
     // here, in the same statement that advances the baseline, because the
     // moment advisoryIds lands the previous set is gone and this number can
@@ -167,12 +242,19 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
     },
   });
 
-  if (!diff.shouldAlert) {
+  const anySecondaryAlert =
+    (archDiff && archDiff.shouldAlert) ||
+    (estDiff && estDiff.shouldAlert) ||
+    (algoDiff && algoDiff.shouldAlert);
+
+  if (!diff.shouldAlert && !anySecondaryAlert) {
     return {
       status: "no_change",
       monitorId,
       newCount: 0,
       resolvedCount: diff.resolvedKeys.length,
+      analyzersRun: analyzers,
+      skips,
     };
   }
 
@@ -193,6 +275,23 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
       fixCommand:    (result && result.fixCommand) || null,
       isBaseline:    diff.isBaseline,
       dashboardUrl:  `${origin}/dashboard/`,
+      // Secondary sections — each absent unless its analyzer alerted, so the
+      // template (and every existing test of it) is unchanged when a monitor
+      // runs vuln alone.
+      archSection: archDiff && archDiff.shouldAlert ? {
+        newFindings: archDiff.newFindings,
+        isBaseline:  archDiff.isBaseline,
+      } : null,
+      estimateSection: estDiff && estDiff.shouldAlert ? {
+        changes:    estDiff.changes,
+        isBaseline: estDiff.isBaseline,
+        providers:  estProviders,
+      } : null,
+      algoSection: algoDiff && algoDiff.shouldAlert ? {
+        regressions:  algoDiff.regressions,
+        improvements: algoDiff.improvements,
+        skipped:      algoSkippedEntries,
+      } : null,
     }),
   });
 
@@ -210,6 +309,11 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
     resolvedCount: diff.resolvedKeys.length,
     isBaseline:    diff.isBaseline,
     emailed:       !!(sent && sent.sent),
+    analyzersRun:  analyzers,
+    archNewCount:      archDiff ? archDiff.newFindings.length : 0,
+    estimateChanged:   !!(estDiff && estDiff.shouldAlert),
+    algoRegressions:   algoDiff ? algoDiff.regressions.length : 0,
+    skips,
   };
 }
 

@@ -25,10 +25,16 @@ import {
 import { sweepDueMonitors, runMonitorCheck, handleMonitorQueue } from "../src/monitors/run.js";
 import {
   createMonitor, getMonitorById, listMonitorsDue, isDue, monitorLimitFor, setMonitorPaused,
+  normalizeAnalyzers, recordMonitorRun,
 } from "../src/monitors/_store.js";
 import {
   listMonitorsHandler, createMonitorHandler, deleteMonitorHandler, pauseMonitorHandler,
+  setMonitorAnalyzersHandler,
 } from "../src/handlers/monitors.js";
+import {
+  diffArchFindings, diffEstimate, diffAlgoGrades, bigORank, archFindingKey, formatMicroUsd,
+} from "../src/monitors/analyzers.js";
+import { ciOptimizerSnippetHandler } from "../src/handlers/ci.js";
 import { makeD1 } from "./_d1-stub.mjs";
 
 let failures = 0;
@@ -513,6 +519,334 @@ console.log("\nroutes and the tier limit\n");
 
   const stillThere = await getMonitorById(env, mA.monitorId);
   expect(stillThere && stillThere.pausedAt === null, "org A's monitor is untouched");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\nanalyzer sets — normalization, the API, and baseline clearing\n");
+// ---------------------------------------------------------------------------
+
+{
+  expect(normalizeAnalyzers(null) === null && normalizeAnalyzers("arch") === null,
+    "a non-array reads as 'not provided', never as an empty set");
+  expect(JSON.stringify(normalizeAnalyzers([])) === '["vuln"]',
+    "the audit is forced into every set — a monitor that watches nothing still occupies a slot");
+  expect(JSON.stringify(normalizeAnalyzers(["algo", "arch", "vuln"])) === '["vuln","arch","algo"]',
+    "sets come back in canonical order regardless of request order");
+  expect(JSON.stringify(normalizeAnalyzers(["arch", "bogus", 42])) === '["vuln","arch"]',
+    "unknown entries are dropped, not stored");
+}
+
+{
+  const env = makeEnv();
+  await seedOrg(env, { userId: "usr_az", email: "az@example.com" });
+
+  const created = await createMonitorHandler(
+    authed("usr_az", { method: "POST",
+      body: { repoUrl: "https://github.com/o/az", analyzers: ["estimate", "arch"] } }), env,
+  );
+  const body = await created.json();
+  expect(created.status === 201, `creating with analyzers → 201 (got ${created.status})`);
+  expect(JSON.stringify(body.monitor.analyzers) === '["vuln","arch","estimate"]',
+    `the stored set is normalised (got ${JSON.stringify(body.monitor.analyzers)})`);
+  expect(body.monitor.archFindingCount === null && body.monitor.lastEstimate === null && body.monitor.lastAlgo === null,
+    "every secondary baseline starts null — 'never ran', distinct from 'ran and found nothing'");
+
+  const bad = await createMonitorHandler(
+    authed("usr_az", { method: "POST",
+      body: { repoUrl: "https://github.com/o/az2", analyzers: "all" } }), env,
+  );
+  const badBody = await bad.json();
+  expect(bad.status === 400 && badBody.error === "invalid_analyzers",
+    `a non-array analyzers value is a 400, not a silent default (got ${bad.status})`);
+
+  const plain = await createMonitorHandler(
+    authed("usr_az", { method: "POST", body: { repoUrl: "https://github.com/o/az3" } }), env,
+  ).then((r) => r.json());
+  expect(JSON.stringify(plain.monitor.analyzers) === '["vuln"]',
+    "a monitor created without choosing runs exactly what monitors always ran");
+}
+
+{
+  // The toggle endpoint, and the baseline-clearing rule: switching an
+  // analyzer OFF forgets its baseline, so switching it back on later starts
+  // with an honest baseline run rather than diffing against an arbitrary
+  // point in the past.
+  const env = makeEnv();
+  const orgId = await seedOrg(env, { userId: "usr_tog", email: "tog@example.com" });
+  const m = await createMonitor(env, {
+    orgId, repoUrl: "https://github.com/o/tog", analyzers: ["vuln", "arch", "estimate"],
+  });
+  await recordMonitorRun(env, m.monitorId, {
+    ranAt: NOW, resultHash: "h", advisoryIds: [],
+    archKeys: ["web|reliability|single-instance"],
+    estimate: { byProvider: { digitalocean: 12_340_000 }, at: NOW },
+  });
+
+  const before = await getMonitorById(env, m.monitorId);
+  expect(before.lastArchKeys.length === 1 && before.lastEstimate.byProvider.digitalocean === 12_340_000,
+    "both secondary baselines are recorded");
+
+  const res = await setMonitorAnalyzersHandler(
+    authed("usr_tog", { method: "POST", params: { id: m.monitorId },
+      body: { analyzers: ["vuln", "estimate"] } }), env,
+  );
+  const resBody = await res.json();
+  expect(res.status === 200 && JSON.stringify(resBody.monitor.analyzers) === '["vuln","estimate"]',
+    "the endpoint stores the explicit full set");
+  const after = await getMonitorById(env, m.monitorId);
+  expect(after.lastArchKeys === null, "the switched-off analyzer's baseline is cleared");
+  expect(after.lastEstimate && after.lastEstimate.byProvider.digitalocean === 12_340_000,
+    "and the still-on analyzer's baseline is untouched");
+
+  const notArray = await setMonitorAnalyzersHandler(
+    authed("usr_tog", { method: "POST", params: { id: m.monitorId }, body: { analyzers: "arch" } }), env,
+  );
+  expect(notArray.status === 400, `a non-array set is refused (got ${notArray.status})`);
+
+  const missing = await setMonitorAnalyzersHandler(
+    authed("usr_tog", { method: "POST", params: { id: "mon_nope" }, body: { analyzers: ["vuln"] } }), env,
+  );
+  expect(missing.status === 404, `an unknown monitor id is a 404 (got ${missing.status})`);
+}
+
+// ---------------------------------------------------------------------------
+console.log("\nsecondary diffs — the same null-vs-empty contract as advisories\n");
+// ---------------------------------------------------------------------------
+
+{
+  const f = (target, lens, rule) => ({ target, lens, rule, title: rule });
+  expect(archFindingKey(f("web", "cost", "oversized")) === "web|cost|oversized",
+    "an arch finding's identity is target|lens|rule");
+
+  const base = diffArchFindings([f("web", "cost", "a")], ["web|cost|a"], null);
+  expect(base.isBaseline && base.shouldAlert, "a first arch run with findings alerts as a baseline");
+  expect(diffArchFindings([], [], null).shouldAlert === false, "a clean first arch run is silent");
+
+  const same = diffArchFindings([f("web", "cost", "a")], ["web|cost|a"], ["web|cost|a"]);
+  expect(same.shouldAlert === false, "unchanged arch findings send nothing");
+
+  const grown = diffArchFindings(
+    [f("web", "cost", "a"), f("db", "reliability", "b")],
+    ["db|reliability|b", "web|cost|a"], ["web|cost|a"]);
+  expect(grown.shouldAlert && grown.newFindings.length === 1 && grown.newFindings[0].rule === "b",
+    "only the finding they haven't seen is reported");
+}
+
+{
+  expect(diffEstimate({ digitalocean: 1 }, null).shouldAlert === true,
+    "a first estimate alerts — it's the number they turned the analyzer on to see");
+  expect(diffEstimate({}, null).shouldAlert === false, "an empty first estimate is silent");
+  expect(diffEstimate({ digitalocean: 5 }, { byProvider: { digitalocean: 5 } }).shouldAlert === false,
+    "an unchanged total sends nothing");
+
+  const moved = diffEstimate({ digitalocean: 6 }, { byProvider: { digitalocean: 5 } });
+  expect(moved.shouldAlert && moved.changes[0].from === 5 && moved.changes[0].to === 6,
+    "a moved total names both numbers");
+  const swapped = diffEstimate({ aws: 5 }, { byProvider: { digitalocean: 5 } });
+  expect(swapped.changes.length === 2, "a provider appearing and one disappearing are both changes");
+  expect(formatMicroUsd(12_340_000) === "$12.34", "micro-USD renders as dollars in one place");
+}
+
+{
+  expect(bigORank("unknown") > bigORank("O(n^3)"),
+    "'unknown' ranks worst — a grade becoming unmeasurable is a change worth hearing about");
+  expect(bigORank("O(n²)") === bigORank("O(n^2)") && bigORank("O(n³)") === bigORank("O(n^3)"),
+    "the analyzer's superscript labels and the human-typed caret spellings rank identically");
+  expect(bigORank("O(n³)") > bigORank("O(n²)"),
+    "and n³ still ranks worse than n² — the regression the spellings must not mask");
+  expect(bigORank("O(n^4.2)") > bigORank("O(n^3)") && bigORank("O(n^4.2)") < bigORank("unknown"),
+    "open-ended exponents rank between O(n³) and unmeasurable");
+
+  expect(diffAlgoGrades({ f: "O(n^2)" }, null).shouldAlert === false,
+    "the baseline algo run records silently — a grade isn't actionable until it moves");
+
+  const reg = diffAlgoGrades({ f: "O(n^2)", g: "O(1)" }, { byName: { f: "O(n)", g: "O(n)" } });
+  expect(reg.shouldAlert && reg.regressions.length === 1 && reg.regressions[0].to === "O(n^2)",
+    "a grade moving to a worse bucket is a regression");
+  expect(reg.improvements.length === 1 && reg.improvements[0].name === "g",
+    "an improvement rides along but never triggers");
+  expect(diffAlgoGrades({ h: "O(n^3)" }, { byName: { f: "O(n)" } }).shouldAlert === false,
+    "a newly-watched function's first grade is its baseline, not a regression");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\nmulti-analyzer run end to end\n");
+// ---------------------------------------------------------------------------
+
+const COMPOSE_2G = `
+services:
+  web:
+    image: nginx
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 2G
+`;
+const COMPOSE_4G = COMPOSE_2G.replace("memory: 2G", "memory: 4G");
+const OPT_CONFIG = JSON.stringify({
+  entries: [{ name: "sum", file: "src/sum.js", functionName: "sum", sampleInput: [1, 2, 3] }],
+});
+const SUM_SRC = "export function sum(arr) { let t = 0; for (const x of arr) t += x; return t; }\n";
+
+/**
+ * env.FETCH covering the audit (lockfile + OSV, via makeAuditFetch) and the
+ * secondary analyzers' raw-content fetches. `repoFiles` maps root-relative
+ * path → content; `throttleSecondary` 403s everything that isn't the
+ * lockfile, which is exactly what a GitHub rate limit looks like.
+ */
+function makeMultiFetch({ vulns = [], repoFiles = {}, throttleSecondary = false }) {
+  const audit = makeAuditFetch({ vulns });
+  return async (url) => {
+    const u = String(url);
+    if (u.includes("raw.githubusercontent.com")) {
+      const name = decodeURIComponent(u.split("/").slice(6).join("/"));
+      // The audit's lockfile names (SUPPORTED_FILES in analyzers/lockfile.js)
+      // stay with the audit stub even under throttleSecondary — the throttle
+      // being simulated hits only the secondaries' extra fetches.
+      if (!/(package-lock\.json|yarn\.lock|requirements\.txt|Gemfile\.lock|go\.sum)$/.test(name)) {
+        if (throttleSecondary) return new Response("rate limited", { status: 403 });
+        if (name in repoFiles) return new Response(repoFiles[name], { status: 200 });
+        return new Response("not found", { status: 404 });
+      }
+    }
+    return audit(url);
+  };
+}
+
+/** A sandbox whose run time is an exact function of input size — so the
+ *  Big-O fit is deterministic instead of hostage to test-host timing. */
+function makeSandbox(msForN) {
+  return {
+    fetch: async (url, init) => {
+      const { input } = JSON.parse(init.body);
+      const n = Array.isArray(input) ? input.length : (typeof input === "number" ? input : 1);
+      return new Response(JSON.stringify({ ok: true, ms: msForN(n), result: 0, heapBytes: 1024 }));
+    },
+  };
+}
+const LINEAR    = (n) => n * 0.01;         // slope 1 → O(n)
+const QUADRATIC = (n) => n * n * 0.0001;   // slope 2 → O(n^2)
+
+{
+  const env = makeEnv();
+  const orgId = await seedOrg(env, { userId: "usr_multi", email: "multi@example.com" });
+  const m = await createMonitor(env, {
+    orgId, repoUrl: "https://github.com/o/multi",
+    analyzers: ["vuln", "arch", "estimate", "algo"],
+  });
+  const mailbox = makeMailbox();
+  const files = {
+    "docker-compose.yml": COMPOSE_2G,
+    "optimizer.config.json": OPT_CONFIG,
+    "src/sum.js": SUM_SRC,
+  };
+
+  // Run 1 — baselines. The estimate is the only section that alerts on a
+  // baseline (it's the number the analyzer exists to produce); arch found
+  // nothing new to a fresh baseline unless the compose trips a rule, and the
+  // algo baseline is silent by design.
+  env.FETCH = makeMultiFetch({ vulns: [], repoFiles: files });
+  env.SANDBOX = makeSandbox(LINEAR);
+  const r1 = await runMonitorCheck(env, m.monitorId, {}, { now: NOW, sendTransactional: mailbox.send });
+  expect(r1.status === "alerted", `the baseline estimate alerts (got ${r1.status})`);
+  expect(r1.estimateChanged === true && r1.algoRegressions === 0,
+    "for the estimate, not the optimizer");
+  expect(mailbox.sent.length === 1 && /baseline cost estimate/.test(mailbox.sent[0].subject),
+    `the subject says baseline cost estimate (got "${mailbox.sent.length && mailbox.sent[0].subject}")`);
+  expect(/not a bill/i.test(mailbox.sent[0].text), "and the body repeats that an estimate is not a bill");
+
+  const after1 = await getMonitorById(env, m.monitorId);
+  expect(Array.isArray(after1.lastArchKeys), "the arch baseline is recorded");
+  expect(after1.lastEstimate && Object.keys(after1.lastEstimate.byProvider).length > 0,
+    "the estimate baseline holds per-provider totals");
+  expect(after1.lastAlgo && after1.lastAlgo.byName.sum === "O(n)",
+    `the algo baseline graded sum as O(n) (got ${after1.lastAlgo && after1.lastAlgo.byName.sum})`);
+
+  // Run 2 — nothing moved. Silence, across all four analyzers.
+  const r2 = await runMonitorCheck(env, m.monitorId, {}, { now: NOW + DAY, sendTransactional: mailbox.send });
+  expect(r2.status === "no_change", `an unchanged multi-analyzer run is no_change (got ${r2.status})`);
+  expect(mailbox.sent.length === 1, "and sends nothing");
+
+  // Run 3 — the compose doubles its memory and sum degrades to O(n^2).
+  env.FETCH = makeMultiFetch({ vulns: [], repoFiles: { ...files, "docker-compose.yml": COMPOSE_4G } });
+  env.SANDBOX = makeSandbox(QUADRATIC);
+  const r3 = await runMonitorCheck(env, m.monitorId, {}, { now: NOW + 2 * DAY, sendTransactional: mailbox.send });
+  expect(r3.status === "alerted", `a moved estimate + algo regression alerts (got ${r3.status})`);
+  expect(r3.estimateChanged === true && r3.algoRegressions === 1,
+    `both sections report (estimateChanged ${r3.estimateChanged}, regressions ${r3.algoRegressions})`);
+  expect(mailbox.sent.length === 2, "one email carries both");
+  const subject3 = mailbox.sent[1].subject;
+  expect(/estimated cost changed/.test(subject3) && /1 complexity regression/.test(subject3),
+    `the subject names both sections (got "${subject3}")`);
+  expect(/sum/.test(mailbox.sent[1].text) && mailbox.sent[1].text.includes("O(n²)"),
+    "the body names the regressed function and its new grade");
+
+  const after3 = await getMonitorById(env, m.monitorId);
+  expect(after3.lastAlgo.byName.sum === "O(n²)", "the algo baseline advanced to the new grade");
+
+  // Run 4 — GitHub throttles the secondary fetches. Every secondary skips,
+  // and crucially every baseline stays where run 3 left it: an outage costs
+  // a night's coverage, never a false "everything is new again" email.
+  env.FETCH = makeMultiFetch({ vulns: [], throttleSecondary: true });
+  const r4 = await runMonitorCheck(env, m.monitorId, {}, { now: NOW + 3 * DAY, sendTransactional: mailbox.send });
+  expect(r4.status === "no_change", `a throttled night is no_change, not an alert (got ${r4.status})`);
+  expect(r4.skips.length === 3 && r4.skips.every((s) => s.reason === "github_throttled"),
+    `all three secondaries report the throttle (got ${JSON.stringify(r4.skips)})`);
+  const after4 = await getMonitorById(env, m.monitorId);
+  expect(after4.lastAlgo.byName.sum === "O(n²)" &&
+         JSON.stringify(after4.lastEstimate.byProvider) === JSON.stringify(after3.lastEstimate.byProvider) &&
+         JSON.stringify(after4.lastArchKeys) === JSON.stringify(after3.lastArchKeys),
+    "no baseline moved — the transient skip left every one untouched");
+  expect(mailbox.sent.length === 2, "and no email was sent about the outage");
+}
+
+{
+  // Permanent absence: the repo simply has none of the files the secondary
+  // analyzers read. Each records an EMPTY baseline — a fact ("we looked,
+  // nothing there"), not an unknown — and the run is quiet.
+  const env = makeEnv();
+  const orgId = await seedOrg(env, { userId: "usr_none", email: "none@example.com" });
+  const m = await createMonitor(env, {
+    orgId, repoUrl: "https://github.com/o/none",
+    analyzers: ["vuln", "arch", "estimate", "algo"],
+  });
+  env.FETCH = makeMultiFetch({ vulns: [], repoFiles: {} });
+  const mailbox = makeMailbox();
+  const res = await runMonitorCheck(env, m.monitorId, {}, { now: NOW, sendTransactional: mailbox.send });
+  expect(res.status === "no_change", `a repo with no secondary files runs quietly (got ${res.status})`);
+  expect(res.skips.map((s) => s.reason).sort().join(",") === "no_compose,no_config,no_manifests",
+    `each analyzer states why it had nothing to do (got ${JSON.stringify(res.skips)})`);
+  const after = await getMonitorById(env, m.monitorId);
+  expect(Array.isArray(after.lastArchKeys) && after.lastArchKeys.length === 0 &&
+         after.lastEstimate && Object.keys(after.lastEstimate.byProvider).length === 0 &&
+         after.lastAlgo && Object.keys(after.lastAlgo.byName).length === 0,
+    "and each recorded an explicit empty baseline, not null");
+  expect(mailbox.sent.length === 0, "no email");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\nthe optimizer CI snippet\n");
+// ---------------------------------------------------------------------------
+
+{
+  const env = makeEnv();
+  const res = ciOptimizerSnippetHandler(new Request("https://algosize.com/api/ci/optimizer-snippet"), env);
+  const body = await res.json();
+  expect(res.status === 200, `the snippet endpoint answers (got ${res.status})`);
+  expect(body.filename === ".github/workflows/algosize-optimizer.yml" &&
+         body.configFilename === "optimizer.config.json" &&
+         body.secretName === "ALGOSIZE_API_KEY",
+    "and names the three files/secrets the wizard shows");
+  const cfg = JSON.parse(body.configExample);
+  expect(Array.isArray(cfg.entries) && cfg.entries.length > 0 &&
+         typeof cfg.entries[0].file === "string" && typeof cfg.entries[0].functionName === "string",
+    "the config example is valid JSON in the shape the sweep and workflow both read");
+  expect(body.workflow.includes("/api/analyze/algo"),
+    "the workflow grades through the same API endpoint as the dashboard");
+  expect(body.workflow.includes("ALGOSIZE_API_KEY") && /skip/i.test(body.workflow),
+    "and skips itself with a notice while the secret is missing — never a red build");
 }
 
 // ---------- summary ----------

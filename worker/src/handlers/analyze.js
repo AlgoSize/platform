@@ -562,7 +562,11 @@ export async function auditManifests(manifests, fetchImpl, { env, ctx, request, 
  * (so a runaway user loop only burns CPU on the sibling Worker), else falls
  * back to in-process execution so single-Worker dev mode and tests work.
  */
-async function runInSandbox(env, code, input) {
+// Exported for the scheduled monitors' optimizer pass (monitors/analyzers.js)
+// — the same sandbox invoker the dashboard endpoint uses, so a nightly grade
+// and an on-demand grade for the same function can never disagree about how
+// the code was run.
+export async function runInSandbox(env, code, input) {
   if (env && env.SANDBOX && typeof env.SANDBOX.fetch === "function") {
     let res;
     try {

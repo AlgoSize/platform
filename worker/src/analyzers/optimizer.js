@@ -28,8 +28,35 @@
 import { runUserCode } from "./sandbox_runner.js";
 import { inferBigO } from "./bigo.js";
 import { getRefactorSuggestion } from "./llm.js";
+import * as acorn from "acorn";
 
 export const PROBE_SIZES = [100, 1000, 10000];
+
+/**
+ * Slice a named top-level function declaration out of a file's source.
+ *
+ * Shared by the CI entrypoint (scripts/optimizer-ci.mjs) and the scheduled
+ * monitors' optimizer pass (monitors/analyzers.js), so the function the
+ * nightly sweep grades is character-for-character the one the per-PR gate
+ * grades. A proper parse rather than a regex because a regex that finds
+ * function boundaries in real JavaScript is a parser with fewer tests.
+ *
+ * Returns the exact source slice, or null when no top-level declaration
+ * (plain, `export`, or `export default`) carries that name.
+ */
+export function extractFunction(source, functionName) {
+  const ast = acorn.parse(source, { ecmaVersion: "latest", sourceType: "module" });
+  for (const node of ast.body) {
+    const fn = node.type === "FunctionDeclaration" ? node
+      : (node.type === "ExportNamedDeclaration" || node.type === "ExportDefaultDeclaration")
+        && node.declaration && node.declaration.type === "FunctionDeclaration"
+        ? node.declaration : null;
+    if (fn && fn.id && fn.id.name === functionName) {
+      return source.slice(fn.start, fn.end);
+    }
+  }
+  return null;
+}
 
 /**
  * Generate a synthetic input of the requested size in the same broad shape
