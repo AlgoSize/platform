@@ -48,6 +48,15 @@ export async function pageviewPixelHandler(request, env, ctx) {
     new Response(TRANSPARENT_GIF, { status: 200, headers: PIXEL_HEADERS });
 
   try {
+    // Global Privacy Control, honored server-side. The JS tracker is gated
+    // in the page layout, but this noscript pixel reaches us from browsers
+    // that never ran JS — the Sec-GPC request header is the one signal they
+    // still send, and the privacy policy (§8) promises we honor it. The GIF
+    // is still returned; the count simply isn't forwarded.
+    if (request.headers.get("Sec-GPC") === "1" || request.headers.get("DNT") === "1") {
+      return respond();
+    }
+
     const url = new URL(request.url);
     const pageUrl = url.searchParams.get("u");
     const domain  = url.searchParams.get("d");
