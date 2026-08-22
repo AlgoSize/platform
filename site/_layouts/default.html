@@ -58,15 +58,27 @@
     event on click — see assets/js/analytics.js for our wrapper.
     {%- endcomment -%}
     {%- if site.analytics.enabled -%}
-    <script defer
-            data-domain="{{ site.analytics.domain }}"
-            src="{{ site.analytics.src }}"></script>
     <script>
-      // Queue stub so events fired before the async Plausible script
-      // loads aren't dropped — Plausible's recommended pattern.
-      window.plausible = window.plausible || function () {
-        (window.plausible.q = window.plausible.q || []).push(arguments);
-      };
+      // Plausible is cookieless and aggregate, but we still honor the
+      // Global Privacy Control and Do Not Track signals as a FULL opt-out
+      // (privacy policy §8): the tracker script is injected only when
+      // neither signal is present, so opted-out visitors send no pageview
+      // at all — not even an anonymous one. The promise in the policy and
+      // this gate must move together.
+      (function () {
+        var dnt = navigator.doNotTrack || window.doNotTrack || navigator.msDoNotTrack;
+        if (navigator.globalPrivacyControl || dnt === "1" || dnt === "yes") return;
+        var s = document.createElement("script");
+        s.defer = true;
+        s.setAttribute("data-domain", "{{ site.analytics.domain }}");
+        s.src = "{{ site.analytics.src }}";
+        document.head.appendChild(s);
+        // Queue stub so events fired before the async Plausible script
+        // loads aren't dropped — Plausible's recommended pattern.
+        window.plausible = window.plausible || function () {
+          (window.plausible.q = window.plausible.q || []).push(arguments);
+        };
+      })();
     </script>
     {%- endif -%}
   </head>
