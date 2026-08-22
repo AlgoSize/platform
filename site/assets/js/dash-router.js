@@ -18,7 +18,7 @@
   var core = window.DashCore;
   if (!core) return;
 
-  var VIEWS = ["workspace", "monitors", "team", "report", "account"];
+  var VIEWS = ["workspace", "optimizer", "estimate", "monitors", "team", "report", "account"];
 
   function parseHash() {
     var h = window.location.hash || "";
@@ -35,8 +35,10 @@
       var section = rest.split("?")[0];
       return { view: "account", section: section ? decodeURIComponent(section) : null };
     }
-    if (h === "#/monitors") return { view: "monitors" };
-    if (h === "#/team")     return { view: "team" };
+    if (h === "#/monitors")  return { view: "monitors" };
+    if (h === "#/team")      return { view: "team" };
+    if (h === "#/optimizer") return { view: "optimizer" };
+    if (h === "#/estimate")  return { view: "estimate" };
     return { view: "workspace" };
   }
 
@@ -61,10 +63,12 @@
     });
 
     // Lazy loaders — each module exposes load() and is idempotent.
-    if (route.view === "monitors" && window.DashMonitors) window.DashMonitors.load();
-    if (route.view === "team"     && window.DashTeam)     window.DashTeam.load();
-    if (route.view === "report"   && window.DashReport)   window.DashReport.open(route.runId);
-    if (route.view === "account"  && window.DashAccount)  window.DashAccount.open(route.section);
+    if (route.view === "monitors"  && window.DashMonitors)  window.DashMonitors.load();
+    if (route.view === "team"      && window.DashTeam)      window.DashTeam.load();
+    if (route.view === "report"    && window.DashReport)    window.DashReport.open(route.runId);
+    if (route.view === "account"   && window.DashAccount)   window.DashAccount.open(route.section);
+    if (route.view === "optimizer" && window.DashOptimizer) window.DashOptimizer.load();
+    if (route.view === "estimate"  && window.DashEstimate)  window.DashEstimate.load();
 
     // A fresh view starts at the top — otherwise switching tabs keeps the
     // previous tab's scroll depth, which reads as a broken page.

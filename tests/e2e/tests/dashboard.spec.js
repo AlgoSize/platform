@@ -77,7 +77,9 @@ test.describe("dashboard happy path", () => {
     await expect(page.locator("h1")).toHaveText(/Audit, monitor, hand over the report\./);
     await expect(page.locator("#panel-cost")).toBeVisible();
     await expect(page.locator("#panel-vuln")).toBeVisible();
-    await expect(page.locator("#panel-algo")).toBeVisible();
+    // The Algorithm Optimizer graduated to its own tab (#/optimizer) — on the
+    // workspace it is reachable, not visible.
+    await expect(page.locator('a[data-view="optimizer"]')).toBeVisible();
     await expect(page.locator("#logout-btn")).toBeVisible();
 
     // Header was hydrated with the seeded email + the active pill.
@@ -109,16 +111,25 @@ test.describe("dashboard happy path", () => {
     await expect(page.locator("#input-vuln")).toHaveValue(/github\.com\//);
 
     // ----------------------------------------------------------------
-    // 4. Algorithm optimizer — Load sample populates the code +
-    //    sample-input textareas. We do NOT click Optimize: the rebased
-    //    handler routes /api/analyze/algo to a sibling SANDBOX Worker
-    //    (worker-sandbox/) which isn't deployed in this suite, so the
-    //    request comes back with `sandbox_bad_response`. The unit-suite
+    // 4. Algorithm optimizer — now its own tab (#/optimizer). Load
+    //    sample populates the code + sample-input textareas. We do NOT
+    //    click Optimize: the rebased handler routes /api/analyze/algo
+    //    to a sibling SANDBOX Worker (worker-sandbox/) which isn't
+    //    deployed in this suite, so the request comes back with
+    //    `sandbox_bad_response`. The unit-suite
     //    `worker/scripts/test-algo.mjs` covers the analyzer end-to-end.
     // ----------------------------------------------------------------
+    await page.locator('a[data-view="optimizer"]').click();
+    await expect(page.locator("#panel-algo")).toBeVisible();
     await page.locator('button[data-action="sample"][data-target="algo"]').click();
     await expect(page.locator("#input-algo")).toHaveValue(/findDuplicates/);
     await expect(page.locator("#input-algo-sample")).not.toHaveValue("");
+
+    // The estimator tab renders its page too — panel plus the nightly
+    // watch card that pairs it with the repo monitors.
+    await page.locator('a[data-view="estimate"]').click();
+    await expect(page.locator("#panel-estimate")).toBeVisible();
+    await expect(page.locator("#panel-est-watch")).toBeVisible();
 
     // ----------------------------------------------------------------
     // 5. Sign out — POST /api/logout clears the cookie + bounces home

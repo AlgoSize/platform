@@ -128,10 +128,26 @@
       if (!(meta.providers || []).length) {
         host.appendChild(el("span", { class: "panel-empty" }, "No providers are configured."));
       }
+      updateUnverifiedBanner(meta.providers || []);
     }).catch(function (err) {
       clear(host);
       host.appendChild(el("span", { class: "panel-empty" }, "Could not load providers: " + err.message));
     });
+  }
+
+  /**
+   * The page-level amber band (D-7). Shown while ANY provider's catalog is
+   * not human-verified — driven by the providers response, never hardcoded
+   * on, so the day a human verifies the catalog the band goes away without
+   * a frontend change. Per-card flags keep carrying the per-provider state.
+   */
+  function updateUnverifiedBanner(providers) {
+    var banner = $("est-unverified-banner");
+    if (!banner) return;
+    var anyUnverified = providers.some(function (p) {
+      return p.freshness && p.freshness.verificationStatus !== "verified";
+    });
+    banner.hidden = !anyUnverified;
   }
 
   function chosenProviders() {
@@ -766,9 +782,101 @@
     loadProviders();
   }
 
+  // -----------------------------------------------------------------------
+  // "Keep it priced" — the nightly watch card (D-7)
+  // -----------------------------------------------------------------------
+  //
+  // Real monitor data only. The same null-vs-empty rule as everywhere else:
+  // lastEstimate null = the sweep has not priced yet ("first run pending"),
+  // an EMPTY byProvider = the sweep looked and found no compose file — a
+  // fact, not an error, and not a pending state.
+
+  var EST_REPO_RE = /github\.com\/([\w.-]+\/[\w.-]+?)(?:\.git)?\/*$/i;
+  function estShortRepo(url) {
+    var m = EST_REPO_RE.exec(url || "");
+    return m ? m[1] : url;
+  }
+
+  var watchLoaded = false;
+
+  function loadWatch(force) {
+    var wrap = $("est-watch-body");
+    if (!wrap) return Promise.resolve();
+    if (watchLoaded && !force) return Promise.resolve();
+    watchLoaded = true;
+    return callApi("/api/monitors", null, "GET").then(function (res) {
+      renderWatch((res && res.monitors) || []);
+    }).catch(function () {
+      clear(wrap);
+      wrap.appendChild(el("div", { class: "est-error" }, "Could not load monitors."));
+    });
+  }
+
+  function renderWatch(monitors) {
+    var wrap = $("est-watch-body");
+    if (!wrap) return;
+    clear(wrap);
+
+    var watching = monitors.filter(function (m) {
+      return (m.analyzers || []).indexOf("estimate") !== -1;
+    });
+
+    if (!watching.length) {
+      var off = el("div", { class: "night-off" });
+      off.appendChild(el("p", null,
+        "A repo monitor can price your committed compose file every night and email you only when a " +
+        "provider's total moves. Committed text only — no cloud account, no credentials, same boundary as this page."));
+      off.appendChild(el("a", { class: "btn btn-ghost btn-sm", href: "#/monitors" }, "Enable on a repo monitor →"));
+      wrap.appendChild(off);
+      return;
+    }
+
+    watching.forEach(function (m) {
+      var row = el("div", { class: "night-row" });
+      var top = el("div", { class: "night-row-top" });
+      top.appendChild(el("strong", { class: "mono" }, estShortRepo(m.repoUrl)));
+
+      var byProvider = m.lastEstimate && m.lastEstimate.byProvider;
+      var totals = [];
+      if (byProvider) {
+        Object.keys(byProvider).forEach(function (pid) {
+          if (typeof byProvider[pid] === "number") totals.push({ id: pid, micro: byProvider[pid] });
+        });
+        totals.sort(function (a, b) { return a.micro - b.micro; });
+      }
+
+      if (m.paused) {
+        top.appendChild(el("span", { class: "chip chip-muted" }, "paused"));
+      } else if (!m.lastEstimate) {
+        top.appendChild(el("span", { class: "chip chip-muted" }, "first run pending"));
+      } else if (!totals.length) {
+        top.appendChild(el("span", { class: "chip chip-warn" }, "no compose file"));
+      } else {
+        top.appendChild(el("span", { class: "chip chip-ok" },
+          "cheapest " + money(totals[0].micro) + "/mo"));
+      }
+      row.appendChild(top);
+
+      var meta = el("p", { class: "night-meta mono" },
+        m.paused ? "Paused — resumes against the same baseline."
+        : !m.lastEstimate ? "First price within a day; the baseline email lists every provider's total."
+        : !totals.length ? "We looked at the repo root and found nothing to price — a fact, not an error. The watch keeps looking nightly."
+        : totals.map(function (t) { return t.id + " " + money(t.micro); }).join(" · ") +
+          (typeof m.lastEstimate.at === "number"
+            ? " · priced " + new Date(m.lastEstimate.at * 1000).toISOString().slice(0, 10)
+            : ""));
+      row.appendChild(meta);
+      wrap.appendChild(row);
+    });
+  }
+
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", attach);
   } else {
     attach();
   }
+
+  // Router hook: the panel wires itself at parse time; entering the view
+  // (re)loads the automation card, which is the only part that goes stale.
+  window.DashEstimate = { load: loadWatch };
 })();
