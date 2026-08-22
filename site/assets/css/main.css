@@ -2404,6 +2404,114 @@ button.analyzer-opt:focus-visible { outline: 2px solid var(--accent); outline-of
 .analyzer-hint { font-size: var(--fs-xs); color: var(--text-dim); }
 .branding-upsell { display: flex; gap: var(--s-4); align-items: center; flex-wrap: wrap; color: var(--text-muted); font-size: var(--fs-sm); }
 
+/* --- Optimizer & Estimator pages (D-6 / D-7) --- */
+
+/* The pipeline strip: bench → config → automations. The hub node is the
+   accent because the committed file is the load-bearing piece. */
+.flow-strip {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex-wrap: wrap;
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+}
+.flow-node {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text);
+  padding: 4px 11px;
+  border: 1px solid #2a3340;
+  border-radius: 999px;
+  background: var(--bg);
+  white-space: nowrap;
+}
+.flow-node-hub {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+.flow-line {
+  flex: 1 1 24px;
+  min-width: 24px;
+  height: 1px;
+  background: linear-gradient(90deg, #2a3340, color-mix(in srgb, var(--accent) 50%, transparent), #2a3340);
+}
+.flow-note { flex: 1 1 100%; margin: var(--s-2) 0 0; font-size: var(--fs-xs); color: var(--text-muted); }
+
+.opt-grid, .est-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: var(--s-5);
+  align-items: start;
+  margin-top: var(--s-5);
+}
+.opt-col, .est-col { min-width: 0; display: grid; gap: var(--s-5); }
+@media (max-width: 900px) {
+  .opt-grid, .est-grid { grid-template-columns: minmax(0, 1fr); }
+}
+.panel-hub { border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+
+/* Watchlist rows — the config file as a live list. */
+.watch-row { display: grid; gap: var(--s-2); padding: var(--s-3) 0; border-bottom: 1px solid var(--border); }
+.watch-row:last-child { border-bottom: 0; }
+.watch-row-top { display: flex; gap: var(--s-3); align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.watch-fn { font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; }
+.watch-pills { display: flex; gap: var(--s-2); align-items: center; flex-wrap: wrap; }
+.watch-ceiling { width: auto; min-height: 32px; padding: 4px 8px; font-family: var(--font-mono); font-size: var(--fs-xs); }
+.watch-file { display: grid; gap: 4px; }
+.watch-file-input { min-height: 34px; font-size: var(--fs-xs); }
+
+/* Gate setup steps. */
+.opt-step { display: flex; gap: var(--s-3); align-items: flex-start; }
+.opt-step + .opt-step { margin-top: var(--s-3); }
+.opt-step-glyph { flex: 0 0 auto; margin-top: 2px; color: var(--accent); font-weight: 700; }
+.opt-step-done { color: #34d399; }
+.opt-step-body { flex: 1 1 auto; min-width: 0; display: grid; gap: var(--s-2); }
+.opt-step-body p { margin: 0; font-size: var(--fs-xs); color: var(--text-muted); }
+.opt-safety {
+  margin: var(--s-3) 0 0;
+  padding: var(--s-2) var(--s-3);
+  border: 1px dashed #2a3340;
+  border-radius: var(--radius);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  background: var(--bg);
+}
+
+/* Nightly watch rows — shared by both pages. */
+.night-off { display: grid; gap: var(--s-3); justify-items: start; }
+.night-off p { margin: 0; font-size: var(--fs-sm); color: var(--text-muted); }
+.night-row { display: grid; gap: 4px; padding: var(--s-3) 0; border-bottom: 1px solid var(--border); }
+.night-row:last-child { border-bottom: 0; }
+.night-row-top { display: flex; gap: var(--s-3); align-items: center; flex-wrap: wrap; }
+.night-meta { margin: 0; font-size: var(--fs-xs); color: var(--text-dim); overflow-wrap: anywhere; }
+
+/* Bench → watchlist handoff, and the measured rewrite comparison. */
+.opt-handoff {
+  display: flex;
+  gap: var(--s-3);
+  align-items: center;
+  flex-wrap: wrap;
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  margin-top: var(--s-3);
+}
+.opt-handoff-dashed { border-style: dashed; border-color: #2a3340; background: var(--bg); }
+.opt-handoff-text { flex: 1 1 24ch; min-width: 0; display: grid; gap: 2px; }
+.opt-handoff-text p { margin: 0; font-size: var(--fs-xs); color: var(--text-muted); }
+.rewrite-measure { margin-top: var(--s-3); }
+.rewrite-delta { margin: 0 0 var(--s-2); font-size: var(--fs-sm); font-weight: 700; }
+.rewrite-better { color: #34d399; }
+.rewrite-worse  { color: #fda4af; }
+.rewrite-same   { color: var(--text-muted); }
+
 /* --- CI wizard (D-3) --- */
 .wizard { list-style: none; margin: 0 0 var(--s-5); padding: 0; display: grid; gap: var(--s-5); }
 .wizard-step { display: grid; gap: var(--s-2); }

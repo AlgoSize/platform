@@ -492,6 +492,27 @@
         "Result was larger than 100 KB — preview truncated."));
     }
 
+    // Handoff to the watchlist (D-6). Rendered only when the optimizer page
+    // module is present AND a top-level function name is parseable from the
+    // pasted source — a button that can't fill a row is not rendered.
+    var opt = window.DashOptimizer;
+    var bench = opt && opt.lastBench && opt.lastBench();
+    var fnName = bench ? opt.parseFunctionName(bench.code) : null;
+    if (opt && fnName) {
+      var ceiling = opt.ceilingAbove(bigOLabel);
+      var hand = el("div", { class: "opt-handoff" });
+      var handText = el("div", { class: "opt-handoff-text" });
+      handText.appendChild(el("strong", null, "Keep this grade honest"));
+      handText.appendChild(el("p", null,
+        "Ceiling pre-filled one bucket above the measured grade, so run-to-run noise can't turn a green build red."));
+      hand.appendChild(handText);
+      var watchBtn = el("button", { type: "button", class: "btn btn-primary btn-sm" },
+        "Watch " + fnName + " · ceiling " + opt.prettyGrade(ceiling));
+      watchBtn.addEventListener("click", function () { opt.addFromBench(); });
+      hand.appendChild(watchBtn);
+      wrap.appendChild(hand);
+    }
+
     // LLM refactor suggestion + copy-to-clipboard rewrite block.
     if (result.suggestion) {
       var sugTitle = result.suggestion.provider === "openai" || result.suggestion.provider === "workers-ai"
@@ -514,10 +535,100 @@
         var pre = el("pre", { class: "result-snippet", id: "suggestion-code" },
           result.suggestion.code);
         wrap.appendChild(pre);
+
+        // "Measure the rewrite" (D-6): advice is a guess until the sandbox
+        // grades it. Runs the suggestion through the same endpoint with the
+        // same sample input, so the comparison is like for like.
+        if (window.DashOptimizer && window.DashOptimizer.lastBench()) {
+          wrap.appendChild(rewriteMeasureBox(result));
+        }
       }
     }
 
     showOutput("algo", wrap);
+  }
+
+  function lastProbeMs(res) {
+    var pts = res && res.bigO && res.bigO.points;
+    if (!Array.isArray(pts) || !pts.length) return null;
+    var last = pts[pts.length - 1];
+    return typeof last.ms === "number" ? last.ms : null;
+  }
+
+  function rewriteMeasureBox(beforeResult) {
+    var box = el("div", { class: "rewrite-measure" });
+    var pitch = el("div", { class: "opt-handoff opt-handoff-dashed" });
+    var t = el("div", { class: "opt-handoff-text" });
+    t.appendChild(el("strong", null, "This rewrite has not been measured"));
+    t.appendChild(el("p", null, "Advice is a guess until the sandbox grades it."));
+    pitch.appendChild(t);
+    var btn = el("button", { type: "button", class: "btn btn-primary btn-sm" }, "Measure the rewrite →");
+    pitch.appendChild(btn);
+    box.appendChild(pitch);
+
+    btn.addEventListener("click", function () {
+      var bench = window.DashOptimizer.lastBench();
+      var body = bench.sampleInput === undefined
+        ? { code: beforeResult.suggestion.code }
+        : { code: beforeResult.suggestion.code, sampleInput: bench.sampleInput };
+      setBusy(btn, true, "Measuring…");
+      callApi("/api/analyze/algo", body)
+        .then(function (after) { renderRewriteCompare(box, beforeResult, after); })
+        .catch(function (e) {
+          t.appendChild(el("p", { class: "result-reason" },
+            "Could not measure the rewrite: " + (e.message || "request failed") + ". The advice above stands unproven."));
+          setBusy(btn, false);
+        });
+    });
+    return box;
+  }
+
+  /**
+   * Before / after, both measured through the same three probes on the same
+   * sandbox. The three outcomes get equal prominence — "the suggestion was
+   * wrong and the measurement says so" is a result, not a failure state.
+   */
+  function renderRewriteCompare(box, before, after) {
+    while (box.firstChild) box.removeChild(box.firstChild);
+    var opt = window.DashOptimizer;
+    var bLabel = (before.bigO && before.bigO.label) || "unknown";
+    var aLabel = (after.bigO && after.bigO.label) || "unknown";
+    var bRank = opt.gradeRank(bLabel), aRank = opt.gradeRank(aLabel);
+    var bMs = lastProbeMs(before), aMs = lastProbeMs(after);
+    var ratio = (bMs !== null && aMs !== null && aMs > 0) ? bMs / aMs : null;
+
+    var tone, headline, note;
+    if (aRank < bRank) {
+      tone = "rewrite-better";
+      headline = "↓ " + bLabel + " → " + aLabel +
+        (ratio && ratio > 1 ? ", " + (Math.round(ratio * 10) / 10) + "× faster at n = 10,000" : "");
+      note = "Both curves measured through the same three probes on the same sandbox, so the comparison is like for like.";
+    } else if (aRank > bRank) {
+      tone = "rewrite-worse";
+      headline = "↑ " + bLabel + " → " + aLabel + " — the rewrite made it worse";
+      note = "Keep what you have; the suggestion was wrong and the measurement says so.";
+    } else {
+      var slower = ratio !== null && ratio < 1;
+      tone = slower ? "rewrite-worse" : "rewrite-same";
+      headline = bLabel + " → " + aLabel + " — same complexity class" +
+        (ratio !== null ? (slower
+          ? ", " + (Math.round((1 / ratio) * 100) / 100) + "× slower at n = 10,000"
+          : ", " + (Math.round(ratio * 100) / 100) + "× the speed at n = 10,000") : "");
+      note = slower
+        ? "The rewrite did not help — same class, more constant overhead. Keep what you have."
+        : "No class change — the difference is constant factors. Take whichever version reads better.";
+    }
+
+    box.appendChild(el("h4", { class: "result-section-title" }, "Measured — before vs after"));
+    box.appendChild(el("p", { class: "rewrite-delta mono " + tone }, headline));
+    var stats = el("div", { class: "result-stats" });
+    stats.appendChild(statCard("Before · yours", bLabel, "mono"));
+    stats.appendChild(statCard("After · rewrite", aLabel, "mono"));
+    if (bMs !== null && aMs !== null) {
+      stats.appendChild(statCard("At n = 10,000", formatMs(bMs) + " → " + formatMs(aMs), "mono"));
+    }
+    box.appendChild(stats);
+    box.appendChild(el("p", { class: "result-reason" }, note));
   }
 
   // Inline SVG chart for the Big-O probe — renders 3 (n, ms) points with a
@@ -651,7 +762,15 @@
       : { code: src, sampleInput: sampleInput };
     setBusy(button, true, "Running…");
     callApi("/api/analyze/algo", body)
-      .then(function (res) { renderAlgo(res); loadRuns(); })
+      .then(function (res) {
+        // Hand the run to the optimizer page module BEFORE rendering, so the
+        // verdict can offer "Watch this function" with the right context.
+        if (window.DashOptimizer) {
+          window.DashOptimizer.onBenchResult({ code: src, sampleInput: sampleInput, result: res });
+        }
+        renderAlgo(res);
+        loadRuns();
+      })
       .catch(function (e)  { showOutput("algo", errorState(e.message || "Request failed")); })
       .then(function ()    { setBusy(button, false); });
   }

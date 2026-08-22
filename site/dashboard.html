@@ -15,6 +15,8 @@ permalink: /dashboard/
          work without a framework. dash-router.js toggles the views. -->
     <nav class="dash-tabs" aria-label="Dashboard sections">
       <a href="#/" class="dash-tab" data-view="workspace" aria-current="page">Workspace</a>
+      <a href="#/optimizer" class="dash-tab" data-view="optimizer">Optimizer</a>
+      <a href="#/estimate" class="dash-tab" data-view="estimate">Estimator</a>
       <a href="#/monitors" class="dash-tab" data-view="monitors">Monitors &amp; CI</a>
       <a href="#/team" class="dash-tab" data-view="team">Team</a>
     </nav>
@@ -183,43 +185,9 @@ permalink: /dashboard/
       </section>
 
       <!-- ============= ALGORITHM OPTIMIZER ============= -->
-      <section class="panel" id="panel-algo">
-        <header class="panel-head">
-          <div class="panel-heading">
-            <span class="panel-tag">Algo</span>
-            <h2>Algorithm optimizer</h2>
-            <p class="panel-desc">Paste a JS function plus a sample input. We run it in an isolated sandbox, infer the Big-O at three input sizes, and ask GPT for a refactor.</p>
-          </div>
-          <div class="panel-actions">
-            <button type="button" class="btn btn-ghost btn-sm" data-action="sample" data-target="algo">Load sample</button>
-            <button type="button" class="btn btn-primary btn-sm" data-action="run" data-target="algo">Optimize →</button>
-          </div>
-        </header>
-        <div class="panel-body">
-          <label class="panel-input-label" for="input-algo">Function · JavaScript</label>
-          <textarea
-            id="input-algo"
-            class="panel-input mono"
-            rows="12"
-            spellcheck="false"
-            autocomplete="off"
-            placeholder="function search(arr, x) { /* … */ }"></textarea>
-
-          <label class="panel-input-label" for="input-algo-sample">Sample input · JSON</label>
-          <textarea
-            id="input-algo-sample"
-            class="panel-input mono"
-            rows="3"
-            spellcheck="false"
-            autocomplete="off"
-            placeholder="[1, 2, 3, 1]"></textarea>
-
-          <label class="panel-input-label" for="output-algo">Result</label>
-          <div id="output-algo" class="panel-output">
-            <div class="panel-empty">Run the optimizer to measure the function and get a refactor.</div>
-          </div>
-        </div>
-      </section>
+      <!-- The Algorithm Optimizer and the Infrastructure Cost Estimator have
+           graduated to their own tabs (#/optimizer, #/estimate) — full pages
+           that pair the interactive tool with its CI and nightly automation. -->
 
       <!-- ============= ARCHITECTURE X-RAY (P-10 → D-5) ============= -->
       <section class="panel" id="panel-arch">
@@ -254,17 +222,149 @@ permalink: /dashboard/
         </div>
       </section>
 
-      <!-- ================= INFRASTRUCTURE COST ESTIMATOR ================= -->
-      <!-- Upload-triggered or manually entered ONLY. There is deliberately no
-           "connect your cloud account" affordance anywhere in this panel: the
-           product never asks for, stores, or uses a customer's cloud account key,
-           and the security note below says so in the user's own words rather
-           than burying it in a policy page. -->
+    </div><!-- /view-workspace -->
+
+    <!-- ================= ALGORITHM OPTIMIZER (D-6) ================= -->
+    <div id="view-optimizer" class="dash-view" hidden>
+      <div class="dash-head">
+        <span class="eyebrow">Algorithm Optimizer</span>
+        <h2 class="dash-view-title">Measure once, enforce forever.</h2>
+        <p class="lede">
+          Measured complexity, not guessed — and enforced on every pull request
+          and every night. The bench grades a function; the watchlist turns
+          that grade into a ceiling both automations hold it to.
+        </p>
+      </div>
+
+      <!-- The pipeline strip: one committed file, three consumers. -->
+      <div class="flow-strip" aria-label="How the optimizer's pieces connect">
+        <span class="flow-node">① the bench measures</span>
+        <span class="flow-line" aria-hidden="true"></span>
+        <span class="flow-node flow-node-hub">② optimizer.config.json</span>
+        <span class="flow-line" aria-hidden="true"></span>
+        <span class="flow-node">③ the gate and the watch enforce</span>
+        <p class="flow-note">One committed file, three consumers by construction — the grade CI gets and the grade this page would give can never disagree.</p>
+      </div>
+
+      <div class="opt-grid">
+        <div class="opt-col">
+          <section class="panel" id="panel-algo">
+            <header class="panel-head">
+              <div class="panel-heading">
+                <span class="panel-tag">Bench</span>
+                <h2>Algorithm optimizer</h2>
+                <p class="panel-desc">Paste a JS function plus a sample input. We run it in an isolated sandbox, probe it at n = 100 / 1,000 / 10,000 to measure the Big-O, and — when AI suggestions are enabled — propose a rewrite you can measure the same way.</p>
+              </div>
+              <div class="panel-actions">
+                <button type="button" class="btn btn-ghost btn-sm" data-action="sample" data-target="algo">Load sample</button>
+                <button type="button" class="btn btn-primary btn-sm" data-action="run" data-target="algo">Optimize →</button>
+              </div>
+            </header>
+            <div class="panel-body">
+              <label class="panel-input-label" for="input-algo">Function · JavaScript <span class="field-optional">one function, no imports or outer variables — we run exactly what you paste</span></label>
+              <textarea
+                id="input-algo"
+                class="panel-input mono"
+                rows="12"
+                spellcheck="false"
+                autocomplete="off"
+                placeholder="function search(arr, x) { /* … */ }"></textarea>
+
+              <label class="panel-input-label" for="input-algo-sample">Sample input · JSON <span class="field-optional">an array or a number — the probe grows it to n = 10,000</span></label>
+              <textarea
+                id="input-algo-sample"
+                class="panel-input mono"
+                rows="3"
+                spellcheck="false"
+                autocomplete="off"
+                placeholder="[1, 2, 3, 1]"></textarea>
+
+              <label class="panel-input-label" for="output-algo">Result</label>
+              <div id="output-algo" class="panel-output">
+                <div class="panel-empty">Run the optimizer to measure the function — three probes, then one run on your own input.</div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="opt-col">
+          <section class="panel panel-hub" id="panel-watchlist">
+            <header class="panel-head">
+              <div class="panel-heading">
+                <span class="panel-tag">Config</span>
+                <h2>Watchlist</h2>
+                <p class="panel-desc mono" id="opt-watch-count">optimizer.config.json · fed by the bench, read by both automations</p>
+              </div>
+            </header>
+            <div class="panel-body">
+              <div id="opt-watch-rows"><div class="panel-empty">Nothing watched yet — measure a function on the bench, then “Watch this function” promotes it here with a ceiling one bucket above its grade.</div></div>
+              <div id="opt-watch-cap" class="banner banner-amber" hidden></div>
+              <div class="form-actions" id="opt-watch-actions" hidden>
+                <button type="button" class="btn btn-ghost btn-sm" id="opt-watch-copy">Copy JSON</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="opt-watch-download">Download</button>
+                <span class="field-msg">Commit this at the repo root — the PR gate and the nightly watch both read it.</span>
+              </div>
+              <pre id="opt-watch-json" class="sr-only" aria-hidden="true"></pre>
+            </div>
+          </section>
+
+          <section class="panel" id="panel-opt-gate">
+            <header class="panel-head">
+              <div class="panel-heading">
+                <span class="panel-tag">CI</span>
+                <h2>Every pull request</h2>
+                <p class="panel-desc">The gate re-measures each watched function from the PR's own checkout, through the same API as this page — the two grades can never disagree. Red only past a ceiling.</p>
+              </div>
+            </header>
+            <div class="panel-body">
+              <div id="opt-gate-body"><div class="panel-empty">Loading the gate setup…</div></div>
+            </div>
+          </section>
+
+          <section class="panel" id="panel-opt-night">
+            <header class="panel-head">
+              <div class="panel-heading">
+                <span class="panel-tag">Nightly</span>
+                <h2>Every night</h2>
+                <p class="panel-desc">A repo monitor with the optimizer switched on re-grades the watched functions nightly and emails only regressions. The first run records grades silently as the baseline.</p>
+              </div>
+            </header>
+            <div class="panel-body">
+              <div id="opt-night-body"><div class="panel-empty">Loading monitors…</div></div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div><!-- /view-optimizer -->
+
+    <!-- ============ INFRASTRUCTURE COST ESTIMATOR (D-7) ============ -->
+    <div id="view-estimate" class="dash-view" hidden>
+      <div class="dash-head">
+        <span class="eyebrow">Infrastructure Cost Estimator</span>
+        <h2 class="dash-view-title">Price it once, watch it forever.</h2>
+        <p class="lede">
+          Prices a configuration forward, across providers, from the text you
+          paste. For what you already spent, use the Cost analyzer — it reads
+          your AWS bill; this estimates the bill you don't have yet.
+        </p>
+      </div>
+
+      <!-- Shown whenever any provider's pricing catalog is not human-verified.
+           Driven by GET /api/estimate/providers — never hardcoded on. -->
+      <div id="est-unverified-banner" class="banner banner-amber" role="alert" hidden>
+        <div class="banner-text">
+          <strong><span class="banner-glyph" aria-hidden="true">▲</span>Prices are seeded from provider sites but not yet human-verified</strong>
+          <p>Treat every number here as provisional. Each provider card carries its catalog's verification state.</p>
+        </div>
+      </div>
+
+      <div class="est-grid">
+        <div class="est-col">
       <section class="panel" id="panel-estimate">
         <header class="panel-head">
           <div class="panel-heading">
             <span class="panel-tag">Cost est.</span>
-            <h2>Infrastructure Cost Estimator</h2>
+            <h2>Price it now</h2>
             <p class="panel-desc">Price a Kubernetes manifest, a Compose file, a Terraform plan, or a hand-entered stack across providers — before you deploy it. Every number is an estimate from published list prices, and every range names the assumption behind it.</p>
           </div>
           <div class="panel-actions">
@@ -356,8 +456,24 @@ permalink: /dashboard/
           </div>
         </div>
       </section>
+        </div>
 
-    </div><!-- /view-workspace -->
+        <div class="est-col">
+          <section class="panel" id="panel-est-watch">
+            <header class="panel-head">
+              <div class="panel-heading">
+                <span class="panel-tag">Nightly</span>
+                <h2>Keep it priced</h2>
+                <p class="panel-desc">A repo monitor with the cost estimate switched on prices the repository's committed compose file every night — committed text only, no cloud account — and emails only when a provider's total moves.</p>
+              </div>
+            </header>
+            <div class="panel-body">
+              <div id="est-watch-body"><div class="panel-empty">Loading monitors…</div></div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div><!-- /view-estimate -->
 
     <!-- ================= MONITORS & CI (D-3) ================= -->
     <div id="view-monitors" class="dash-view" hidden>
@@ -847,5 +963,6 @@ permalink: /dashboard/
 <script src="{{ '/assets/js/dash-report.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-arch.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-estimate.js' | relative_url }}" defer></script>
+<script src="{{ '/assets/js/dash-optimizer.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-account.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-router.js' | relative_url }}" defer></script>
