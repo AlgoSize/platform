@@ -20,7 +20,23 @@
 (function () {
   "use strict";
 
+  // Global Privacy Control / Do Not Track: either signal disables analytics
+  // events entirely for this visit. GPC is a legally recognized opt-out under
+  // the CCPA/CPRA and similar U.S. state laws, and the privacy policy
+  // (Section 8) promises exactly this behavior — the promise and this gate
+  // must move together. Computed once: the signals don't change mid-page.
+  var privacyOptOut = (function () {
+    try {
+      if (navigator.globalPrivacyControl) return true;
+      var dnt = navigator.doNotTrack || window.doNotTrack || navigator.msDoNotTrack;
+      return dnt === "1" || dnt === "yes";
+    } catch (_e) {
+      return false;   // an exotic browser must not break the page
+    }
+  })();
+
   function track(name, props) {
+    if (privacyOptOut) return;                           // GPC/DNT honored
     if (typeof window.plausible !== "function") return;  // analytics off
     try {
       window.plausible(name, props ? { props: props } : undefined);

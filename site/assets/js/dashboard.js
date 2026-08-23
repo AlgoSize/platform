@@ -515,10 +515,20 @@
 
     // LLM refactor suggestion + copy-to-clipboard rewrite block.
     if (result.suggestion) {
-      var sugTitle = result.suggestion.provider === "openai" || result.suggestion.provider === "workers-ai"
+      var aiProvider = result.suggestion.provider === "openai" || result.suggestion.provider === "workers-ai";
+      var sugTitle = aiProvider
         ? "AI refactor suggestion"
         : "Refactor suggestion (AI disabled)";
       wrap.appendChild(el("h4", { class: "result-section-title" }, sugTitle));
+      if (aiProvider) {
+        // EU AI Act Art. 50 transparency: AI-generated content is labeled as
+        // such at the moment it is shown, not in a policy page footnote. The
+        // grades and timings above are measured, not generated — this label
+        // marks exactly the part that isn't.
+        wrap.appendChild(el("p", { class: "result-reason ai-disclosure" },
+          "AI-generated — a suggestion for your review, never applied automatically. " +
+          "The grade and curve above are measured; this text is not."));
+      }
       if (result.suggestion.text) {
         wrap.appendChild(el("p", { class: "result-reason" }, result.suggestion.text));
       }

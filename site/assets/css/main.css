@@ -1197,7 +1197,16 @@ code, .mono {
   font-size: var(--fs-xs);
 }
 
-/* Dashboard top bar */
+/* Dashboard top bar
+   Five section tabs plus a busy signed-in actions cluster (email, quota
+   pill, plan pill, billing button, Account, Admin, Sign out) don't fit one
+   row within --content's 1120px cap at ANY viewport width — unlike the
+   marketing nav, this isn't a narrow-screen problem to media-query around.
+   So the dashboard header is always two deliberate rows: brand + actions on
+   top, the full-width tab strip below. Scoped to .dash-nav so the shared
+   marketing .nav-inner (just a brand and a couple of links) is untouched. */
+.dash-nav .nav-inner { flex-wrap: wrap; gap: var(--s-2) var(--s-4); }
+
 .dash-nav-actions {
   display: inline-flex;
   align-items: center;
@@ -1973,14 +1982,29 @@ code, .mono {
    carries its word and a glyph.
    ========================================================================== */
 
-/* --- Section tabs in the header --- */
+/* --- Section tabs in the header ---
+   Always the tab strip's own full-width row (paired with .dash-nav
+   .nav-inner's flex-wrap above) and NEVER internally wrapping — five tabs
+   wrapping mid-list reads as broken (an uneven two-line clump), so instead
+   the strip scrolls horizontally, the standard mobile-tab-bar pattern. On
+   desktop the strip is narrower than --content and never needs to scroll;
+   on narrow viewports it does — no fade mask, since one would sit there
+   permanently faded on the (common) desktop case where nothing overflows. */
 .dash-tabs {
   display: flex;
   gap: var(--s-1);
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  order: 3;
+  width: 100%;
 }
+.dash-tabs::-webkit-scrollbar { display: none; }
 .dash-tab {
+  flex: 0 0 auto;
+  white-space: nowrap;
   padding: 0.4rem 0.8rem;
   border-radius: 8px;
   font-size: var(--fs-sm);
@@ -2512,6 +2536,12 @@ button.analyzer-opt:focus-visible { outline: 2px solid var(--accent); outline-of
 .rewrite-worse  { color: #fda4af; }
 .rewrite-same   { color: var(--text-muted); }
 
+/* EU AI Act Art. 50 label — quiet but present wherever AI output renders. */
+.ai-disclosure {
+  border-left: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  padding-left: var(--s-3);
+}
+
 /* --- CI wizard (D-3) --- */
 .wizard { list-style: none; margin: 0 0 var(--s-5); padding: 0; display: grid; gap: var(--s-5); }
 .wizard-step { display: grid; gap: var(--s-2); }
@@ -2941,15 +2971,6 @@ button.analyzer-opt:focus-visible { outline: 2px solid var(--accent); outline-of
   .xray-new, .xray-new-card { animation: none !important; }
 }
 
-/* --- Narrow headers ---
-   The header carries brand + tabs + email + two pills + two buttons; below
-   ~1360px they can't share a row without the tabs wrapping mid-list, which
-   reads as broken. Give the tabs their own full row instead — a deliberate
-   two-row header beats an accidental one. */
-@media (max-width: 1360px) {
-  .nav-inner { flex-wrap: wrap; gap: var(--s-2) var(--s-4); }
-  .dash-tabs { order: 3; width: 100%; }
-}
 @media (max-width: 700px) {
   .finding-id { margin-left: 0; }
   .report-counts { margin-left: 0; }
