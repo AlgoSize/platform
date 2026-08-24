@@ -220,6 +220,25 @@ permalink: /dashboard/
       <!-- The Algorithm Optimizer and the Infrastructure Cost Estimator have
            graduated to their own tabs (#/optimizer, #/estimate) — full pages
            that pair the interactive tool with its CI and nightly automation. -->
+
+      <!-- ============= UNDER WATCH (D-9) =============
+           Same pattern as the X-ray's. Re-audits the monitored repo's
+           committed lockfiles on demand and renders through the same
+           renderer the manual scan uses. -->
+      <section class="panel" id="panel-vuln-watch">
+        <header class="panel-head">
+          <div class="panel-heading">
+            <span class="panel-tag">Nightly</span>
+            <h2>Repositories under watch</h2>
+            <p class="panel-desc">The advisories affecting each watched repository as of right now, re-read from its committed lockfiles. Looking does not consume tomorrow's alert.</p>
+          </div>
+        </header>
+        <div class="panel-body">
+          <div id="vuln-watch-body">
+            <div class="panel-empty">Loading your monitors…</div>
+          </div>
+        </div>
+      </section>
     </div><!-- /view-scanner -->
 
     <!-- ================= CLOUD COST ANALYZER =================
@@ -312,7 +331,30 @@ permalink: /dashboard/
 
           <label class="panel-input-label" for="output-arch">System map</label>
           <div id="output-arch" class="panel-output">
-            <div class="panel-empty">Choose files (or click <em>Load sample</em>) and run the analysis.</div>
+            <div class="panel-empty">Choose files (or click <em>Load sample</em>) and run the analysis, or draw a monitored repository below.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============= UNDER WATCH (D-9) =============
+           The nightly half. The bench above answers "what does this pile of
+           files look like"; this answers "what does the repo you are already
+           watching look like right now" — the question an alert email leaves
+           you holding. Drawing one re-reads its COMMITTED files through
+           GET /api/monitors/:id/result/arch and renders through the same
+           explorer, so a nightly result and a hand-run result cannot disagree
+           about what a finding looks like. -->
+      <section class="panel" id="panel-arch-watch">
+        <header class="panel-head">
+          <div class="panel-heading">
+            <span class="panel-tag">Nightly</span>
+            <h2>Repositories under watch</h2>
+            <p class="panel-desc">Drawn from the repository's committed files, as it stands now — with the findings that are new since the last sweep marked. Looking does not consume tomorrow's alert.</p>
+          </div>
+        </header>
+        <div class="panel-body">
+          <div id="arch-watch-body">
+            <div class="panel-empty">Loading your monitors…</div>
           </div>
         </div>
       </section>
@@ -1103,6 +1145,7 @@ permalink: /dashboard/
 <script src="{{ '/assets/js/dash-arch.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-estimate.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-optimizer.js' | relative_url }}" defer></script>
+<script src="{{ '/assets/js/dash-scanner.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-workspace.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-account.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-router.js' | relative_url }}" defer></script>

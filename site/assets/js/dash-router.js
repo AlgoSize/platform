@@ -89,6 +89,10 @@
     if (route.view === "optimizer" && window.DashOptimizer) window.DashOptimizer.load();
     if (route.view === "estimate"  && window.DashEstimate)  window.DashEstimate.load();
     if (route.view === "workspace" && window.DashWorkspace) window.DashWorkspace.load();
+    // The two tool pages whose nightly half arrived later (D-9). Both are
+    // idempotent, so re-entering the view costs one cached call.
+    if (route.view === "arch"      && window.DashArch)      window.DashArch.load();
+    if (route.view === "scanner"   && window.DashScanner)   window.DashScanner.load();
 
     // A fresh view starts at the top — otherwise switching tabs keeps the
     // previous tab's scroll depth, which reads as a broken page.

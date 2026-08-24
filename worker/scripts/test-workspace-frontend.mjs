@@ -21,6 +21,10 @@ const WORKER = join(__dirname, "..", "src");
 
 const html    = readFileSync(join(SITE, "dashboard.html"), "utf8");
 const wsJs    = readFileSync(join(SITE, "assets", "js", "dash-workspace.js"), "utf8");
+const archJs  = readFileSync(join(SITE, "assets", "js", "dash-arch.js"), "utf8");
+const scanJs  = readFileSync(join(SITE, "assets", "js", "dash-scanner.js"), "utf8");
+const optJs   = readFileSync(join(SITE, "assets", "js", "dash-optimizer.js"), "utf8");
+const estJs   = readFileSync(join(SITE, "assets", "js", "dash-estimate.js"), "utf8");
 const monJs   = readFileSync(join(SITE, "assets", "js", "dash-monitors.js"), "utf8");
 const dashJs  = readFileSync(join(SITE, "assets", "js", "dashboard.js"), "utf8");
 const router  = readFileSync(join(SITE, "assets", "js", "dash-router.js"), "utf8");
@@ -256,6 +260,60 @@ group("no innerHTML anywhere in the new modules");
 {
   expect(!/innerHTML/.test(wsJs), "dash-workspace.js never touches innerHTML");
   expect(!/innerHTML/.test(monJs), "dash-monitors.js never touches innerHTML");
+}
+
+// ===========================================================================
+group("every tool page has a monitored half, not just a manual bench");
+// ===========================================================================
+{
+  // The gap this closes: an alert saying "3 new findings" used to lead to a
+  // page whose only option was to re-upload your own codebase by hand.
+  const PAGES = [
+    ["Architecture X-ray",  "arch-watch-body", archJs, "arch"],
+    ["Vulnerability scanner", "vuln-watch-body", scanJs, "vuln"],
+    ["Algorithm optimizer", "opt-night-body",  optJs,  "algo"],
+    ["Cost estimator",      "est-watch-body",  estJs,  "estimate"],
+  ];
+  for (const [label, containerId, src, analyzer] of PAGES) {
+    expect(html.includes(`id="${containerId}"`),
+      `${label} has a monitored section (#${containerId})`);
+    expect(src.includes(`/result/${analyzer}`),
+      `…and can open one through /api/monitors/:id/result/${analyzer}`);
+  }
+
+  // The whole point of routing through the same endpoint: a nightly result
+  // and a hand-run result must be drawn by ONE renderer, or the two can
+  // disagree about what a finding looks like.
+  expect(/renderVuln:\s*function/.test(dashJs) && /renderAlgo:\s*function/.test(dashJs),
+    "dashboard.js exposes its manual renderers so the monitored half reuses them");
+  expect(/core\.renderVuln\(payload\.result\)/.test(scanJs),
+    "the scanner's monitored result goes through the manual vuln renderer");
+  expect(/render\(payload\.result\)/.test(estJs),
+    "the estimator's monitored result goes through the manual estimate renderer");
+  expect(/state\.result = payload\.result/.test(archJs),
+    "the X-ray's monitored result drives the same explorer state the bench does");
+
+  // Both new loaders have to be reachable from the router or the section
+  // renders its loading placeholder forever.
+  expect(/window\.DashArch\)\s+window\.DashArch\.load\(\)/.test(router),
+    "entering #/arch loads its monitored section");
+  expect(/window\.DashScanner\)\s+window\.DashScanner\.load\(\)/.test(router),
+    "entering #/scanner loads its monitored section");
+  expect(/dash-scanner\.js/.test(html), "dash-scanner.js is loaded by the page");
+  expect(/window\.DashArch = \{ load/.test(archJs),
+    "DashArch actually exports load() — it used to be an empty object");
+
+  // An unreadable repo must not render as a clean one, on any page.
+  for (const [label, , src] of PAGES) {
+    expect(/payload\.status !== "ok"/.test(src),
+      `${label} checks the payload status before rendering anything`);
+  }
+
+  // The X-ray's diff markers depend on translating the Worker's key rule into
+  // this file's — they use different separators and fallbacks, so treating
+  // one as the other would mark the wrong boxes as new.
+  expect(/workerFindingKey/.test(archJs),
+    "the X-ray translates the Worker's finding keys rather than assuming they match its own");
 }
 
 console.log("");

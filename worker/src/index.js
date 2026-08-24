@@ -71,6 +71,7 @@ import {
   setMonitorScheduleHandler,
   runMonitorNowHandler,
   monitorRouteHandler,
+  monitorResultHandler,
 } from "./handlers/monitors.js";
 import { scorecardHandler } from "./handlers/scorecard.js";
 import { sweepDueMonitors, handleMonitorQueue } from "./monitors/run.js";
@@ -416,6 +417,12 @@ router.post(  "/api/monitors/:id/run",       requireAuth, runMonitorNowHandler);
 // Where the next alert actually goes. Served by the resolver the sweep
 // itself calls, so the card and the delivery cannot drift apart.
 router.get(   "/api/monitors/route",         requireAuth, monitorRouteHandler);
+// The full current result of one analyzer on one monitored repo, in the same
+// shape the analyzer's manual endpoint returns. This is the link between the
+// monitors and the tool pages: an alert saying "3 new findings" now leads to
+// a screen that can show them. Re-runs the analyzer against COMMITTED files
+// and never advances a baseline — see monitors/inspect.js.
+router.get(   "/api/monitors/:id/result/:analyzer", requireAuth, monitorResultHandler);
 
 // ---- Scorecard — every monitored repo, every analyzer, one grid ----------
 // Read entirely from stored monitor baselines; nothing is computed on demand

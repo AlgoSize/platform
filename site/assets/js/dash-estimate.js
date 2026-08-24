@@ -866,8 +866,55 @@
             ? " · priced " + new Date(m.lastEstimate.at * 1000).toISOString().slice(0, 10)
             : ""));
       row.appendChild(meta);
+
+      // Open the monitored repo's CURRENT price in the estimator above.
+      // Not offered when the last sweep found nothing to price — a button
+      // whose only outcome is "still no compose file" is a button that
+      // wastes a click. Paused monitors keep it: a paused watch still has a
+      // committed compose file worth pricing on demand.
+      if (m.lastEstimate === null || totals.length || m.paused) {
+        var actions = el("div", { class: "night-actions" });
+        var open = el("button", { type: "button", class: "btn btn-primary btn-sm" },
+          "Price it now \u2192");
+        open.addEventListener("click", function () { openMonitored(m, open); });
+        actions.appendChild(open);
+        row.appendChild(actions);
+      }
+
       wrap.appendChild(row);
     });
+  }
+
+  /**
+   * Load a monitored repository's current estimate into the panel above.
+   *
+   * Re-prices the repo's COMMITTED compose file through
+   * GET /api/monitors/:id/result/estimate and renders it with `render` — the
+   * same function the manual path uses, so a nightly price and a pasted-in
+   * price cannot disagree about what a provider row looks like. The endpoint
+   * never advances the baseline, so looking does not consume the change
+   * tomorrow's email would have reported.
+   */
+  function openMonitored(m, btn) {
+    setBusy(btn, true, "Pricing\u2026");
+    callApi("/api/monitors/" + encodeURIComponent(m.monitorId) + "/result/estimate", null, "GET")
+      .then(function (payload) {
+        if (payload.status !== "ok") {
+          var out = $("output-estimate");
+          if (out) {
+            clear(out);
+            out.appendChild(core.errorState(payload.message || "No estimate for this repository."));
+          }
+          return;
+        }
+        render(payload.result);
+        var panel = $("panel-estimate");
+        if (panel && typeof panel.scrollIntoView === "function") {
+          panel.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      })
+      .catch(function (e) { window.alert(e.message || "Could not price that repository"); })
+      .then(function () { setBusy(btn, false); });
   }
 
   if (document.readyState === "loading") {

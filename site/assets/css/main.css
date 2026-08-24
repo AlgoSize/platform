@@ -4390,3 +4390,43 @@ a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
 .route-text { flex: 1 1 24ch; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .route-target { font-size: 0.72rem; color: var(--text); overflow-wrap: anywhere; }
 .route-note   { font-size: 0.76rem; color: var(--text-muted); }
+
+/* --- Monitored results on the tool pages (D-9) ---
+   Every tool page now has a nightly half beside its manual bench: the repos
+   already under watch, each openable into the same renderer the manual path
+   uses. These are the row affordances that half adds. */
+.night-actions { display: flex; gap: var(--s-2); flex-wrap: wrap; margin-top: 4px; }
+
+/* The optimizer's monitored result is a TABLE, not a single measurement — a
+   watchlist is N functions against N ceilings, so it renders in place under
+   its row rather than replacing the one-function bench above. */
+.night-grades {
+  margin-top: var(--s-2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg);
+  overflow: hidden;
+}
+.night-grade-row {
+  display: flex;
+  gap: var(--s-3);
+  align-items: baseline;
+  flex-wrap: wrap;
+  padding: 0.45rem 0.7rem;
+  border-bottom: 1px solid var(--border-soft);
+}
+.night-grade-row:last-child { border-bottom: 0; }
+.night-grade-name {
+  flex: 1 1 16ch;
+  min-width: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.night-grade-value { font-size: 0.78rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.night-grade-ceiling { font-size: 0.7rem; color: var(--text-dim); }
+/* Over its ceiling is the only state that needs a colour — everything else
+   on this table is information, this one is a decision. */
+.night-grade-over .night-grade-value { color: #f3c4c4; }
+.night-grade-ok .night-grade-value   { color: var(--accent-2); }
+.night-grade-skip { font-size: 0.72rem; color: var(--accent-warm); overflow-wrap: anywhere; }

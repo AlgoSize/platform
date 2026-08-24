@@ -1472,5 +1472,155 @@
     attach();
   }
 
-  window.DashArch = {};
+  // -----------------------------------------------------------------------
+  // Monitored repositories — the nightly half of this page
+  // -----------------------------------------------------------------------
+  //
+  // The manual bench above answers "what does this pile of files look like".
+  // This answers "what does the repo you are already watching look like right
+  // now", which is the question an alert email leaves you holding. Before
+  // this, "3 new architecture findings" led to a page whose only option was
+  // to re-upload your own codebase by hand.
+  //
+  // Opening one calls GET /api/monitors/:id/result/arch, which RE-RUNS the
+  // X-ray over the repo's committed files. It is not the 03:00 snapshot: it
+  // is the repo as it stands now, with the stored baseline used only to mark
+  // which findings are the new ones. That endpoint never advances a baseline,
+  // so looking does not consume the delta tomorrow's email will report.
+
+  var watch = { loaded: false, monitors: [] };
+
+  function archShortRepo(url) {
+    return String(url || "").replace(/^https?:\/\/(www\.)?github\.com\//, "");
+  }
+
+  /** The Worker's finding-key rule (monitors/analyzers.js archFindingKey).
+   *  Deliberately NOT this file's findingKey: the two use different
+   *  separators and different fallbacks, and silently treating one as the
+   *  other would mark the wrong findings as new. */
+  function workerFindingKey(f) {
+    if (!f || typeof f !== "object") return null;
+    return [f.target || "unknown", f.lens || "unknown", f.rule || "unknown"].join("|");
+  }
+
+  function loadWatch(force) {
+    if (watch.loaded && !force) return Promise.resolve();
+    watch.loaded = true;
+    return callApi("/api/monitors", null, "GET")
+      .then(function (data) {
+        watch.monitors = (data && data.monitors) || [];
+        renderWatch();
+      })
+      .catch(function () {
+        var body = document.getElementById("arch-watch-body");
+        if (!body) return;
+        while (body.firstChild) body.removeChild(body.firstChild);
+        body.appendChild(core.errorState("Could not load your monitors."));
+      });
+  }
+
+  function renderWatch() {
+    var body = document.getElementById("arch-watch-body");
+    if (!body) return;
+    while (body.firstChild) body.removeChild(body.firstChild);
+
+    var watching = watch.monitors.filter(function (m) {
+      return (m.analyzers || []).indexOf("arch") !== -1;
+    });
+
+    if (!watching.length) {
+      var off = el("div", { class: "night-off" });
+      off.appendChild(el("p", null,
+        "A repo monitor can re-draw this map every night and email you only when a new coupling appears. " +
+        "Committed files only — no credentials, the same boundary as the bench above."));
+      off.appendChild(el("a", { class: "btn btn-ghost btn-sm", href: "#/monitors" },
+        "Enable on a repo monitor \u2192"));
+      body.appendChild(off);
+      return;
+    }
+
+    watching.forEach(function (m) {
+      var row = el("div", { class: "night-row" });
+
+      var top = el("div", { class: "night-row-top" });
+      top.appendChild(el("strong", { class: "mono" }, archShortRepo(m.repoUrl)));
+
+      // Null count means no sweep has recorded a baseline — rendered as
+      // "first run pending", never as zero findings.
+      if (m.paused) {
+        top.appendChild(el("span", { class: "chip chip-muted" }, "paused"));
+      } else if (m.archFindingCount === null || m.archFindingCount === undefined) {
+        top.appendChild(el("span", { class: "chip chip-muted" }, "first run pending"));
+      } else if (m.archFindingCount === 0) {
+        top.appendChild(el("span", { class: "chip chip-ok" }, "\u2713 no findings"));
+      } else {
+        top.appendChild(el("span", { class: "chip chip-warn" },
+          m.archFindingCount + " finding" + (m.archFindingCount === 1 ? "" : "s")));
+      }
+      row.appendChild(top);
+
+      row.appendChild(el("p", { class: "night-meta mono" },
+        (m.branch || "default branch") + " \u00b7 " +
+        (m.lastRunAt ? "swept " + core.formatRelativeTime(m.lastRunAt * 1000)
+                     : "not swept yet")));
+
+      var actions = el("div", { class: "night-actions" });
+      var open = el("button", { type: "button", class: "btn btn-primary btn-sm" }, "Draw the map \u2192");
+      open.addEventListener("click", function () { openMonitored(m, open); });
+      actions.appendChild(open);
+      row.appendChild(actions);
+
+      body.appendChild(row);
+    });
+  }
+
+  function openMonitored(m, btn) {
+    setBusy(btn, true, "Reading the repo\u2026");
+    callApi("/api/monitors/" + encodeURIComponent(m.monitorId) + "/result/arch", null, "GET")
+      .then(function (payload) {
+        var out = document.getElementById("output-arch");
+
+        if (payload.status !== "ok") {
+          // A repo we could not read is a real answer about the repo. Shown
+          // with its reason rather than as an empty map, because an empty
+          // graph and "no manifests found" look identical and mean opposite
+          // things.
+          if (out) {
+            while (out.firstChild) out.removeChild(out.firstChild);
+            out.appendChild(core.errorState(payload.message || "No result for this repository."));
+          }
+          return;
+        }
+
+        state.result = payload.result;
+        state.runId = null;      // not a stored run — recomputed just now
+        resetView();
+
+        // Translate the Worker's keys into this file's, so the "New" markers
+        // land on the right boxes. See workerFindingKey.
+        var fresh = {};
+        var newSet = {};
+        (payload.delta && payload.delta.newKeys || []).forEach(function (k) { newSet[k] = true; });
+        (state.result.findings || []).forEach(function (f) {
+          if (newSet[workerFindingKey(f)]) fresh[findingKey(f)] = true;
+        });
+        // A baseline sweep has nothing to compare against, so it gets NO diff
+        // affordance rather than one claiming every finding is new.
+        state.newKeys = (payload.baseline && payload.baseline.isBaseline) ? null : fresh;
+        state.resolvedItems = state.newKeys === null ? null : [];
+        state.prevRunAt = (payload.baseline && payload.baseline.at)
+          ? payload.baseline.at * 1000 : null;
+
+        render();
+
+        var panel = document.getElementById("panel-arch");
+        if (panel && typeof panel.scrollIntoView === "function") {
+          panel.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      })
+      .catch(function (e) { window.alert(e.message || "Could not read that repository"); })
+      .then(function () { setBusy(btn, false); });
+  }
+
+  window.DashArch = { load: loadWatch };
 })();
