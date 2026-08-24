@@ -1990,16 +1990,27 @@ code, .mono {
    desktop the strip is narrower than --content and never needs to scroll;
    on narrow viewports it does — no fade mask, since one would sit there
    permanently faded on the (common) desktop case where nothing overflows. */
+/* Two tabs, so the strip sits inline with the brand again (D-8).
+   It was forced onto its own full-width row when there were five tabs plus
+   four action buttons and nothing fit at 1120px. Two fit — and the segmented
+   frame around them reads as a control rather than a row of links. Below
+   680px it still drops to its own row, where the actions cluster needs the
+   whole width. */
 .dash-tabs {
   display: flex;
-  gap: var(--s-1);
+  gap: 3px;
   align-items: center;
   flex-wrap: nowrap;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
-  order: 3;
-  width: 100%;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+@media (max-width: 680px) {
+  .dash-tabs { order: 3; width: 100%; }
 }
 .dash-tabs::-webkit-scrollbar { display: none; }
 .dash-tab {
@@ -2015,9 +2026,11 @@ code, .mono {
 .dash-tab:hover { color: var(--text); }
 .dash-tab[aria-current="page"] {
   color: var(--text);
-  background: var(--bg-card);
-  border-color: var(--border);
+  background: var(--border);
+  border-color: transparent;
 }
+.dash-tab-glyph { font-size: 0.7rem; color: var(--text-dim); }
+.dash-tab[aria-current="page"] .dash-tab-glyph { color: var(--accent); }
 .dash-view[hidden] { display: none !important; }
 .dash-view-title {
   font-size: clamp(1.5rem, 2.5vw + 0.5rem, var(--fs-xl));
@@ -4057,3 +4070,323 @@ input.acct-input, select.acct-input { min-height: 44px; }
 .acct-btn-warn { color: #d8bcc4; border-color: #6b4550; }
 .acct-btn-warn:hover { color: #e08a9a; border-color: #b15a5a; background: color-mix(in srgb, var(--danger) 10%, transparent); }
 .acct-danger-delete { display: flex; flex-direction: column; gap: 0; }
+
+/* ==========================================================================
+   Workspace & Monitors, redesigned (D-8)
+   ==========================================================================
+   The tab strip collapsed from five entries to two, so the Workspace has to
+   carry what the other tabs used to advertise: a pulse strip, a scorecard
+   across every watched repository, and a card per tool. Everything below is
+   in service of one rule — a thing that was never measured has to LOOK
+   unmeasured, never like a zero and never like a pass. */
+
+/* --- Account control in the header --- */
+.dash-account {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 4px 10px 4px 5px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  min-height: 34px;
+}
+.dash-account:hover { border-color: var(--text-muted); color: var(--text); }
+.dash-account[aria-current="page"] { border-color: var(--accent); }
+.dash-avatar {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #1c5f4a;
+  color: var(--text);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  overflow: hidden;
+}
+/* An uploaded image replaces the initials entirely — the teal disc behind
+   them would otherwise show as a ring around a non-square photo. */
+.dash-avatar.has-image { background: var(--border); }
+.dash-avatar-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+@media (max-width: 520px) {
+  .dash-account-word { display: none; }
+  .dash-account { padding: 4px; }
+}
+
+/* --- Split page head: title left, one link right --- */
+.dash-head-split {
+  display: flex;
+  gap: var(--s-4);
+  justify-content: space-between;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+.dash-head-aside {
+  flex: 0 0 auto;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  border-bottom: 1px solid rgba(94, 234, 212, 0.4);
+  padding-bottom: 2px;
+}
+.dash-crumb {
+  display: inline-block;
+  margin-bottom: var(--s-2);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.dash-crumb:hover { color: var(--accent); }
+
+/* --- Pulse strip --- */
+.ws-pulse {
+  display: flex;
+  flex-wrap: wrap;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  overflow: hidden;
+  margin-bottom: var(--s-5);
+}
+.ws-pulse[hidden] { display: none !important; }
+.ws-pulse-item {
+  flex: 1 1 148px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 0.7rem 0.9rem;
+  border-right: 1px solid var(--border);
+  color: var(--text);
+}
+a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
+.ws-pulse-label {
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ws-pulse-value {
+  font-size: 1.15rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+.ws-pulse-ok   { color: var(--accent-2); }
+.ws-pulse-warn { color: var(--accent-warm); }
+.ws-pulse-bad  { color: #f3c4c4; }
+.ws-pulse-note {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --- Service scorecard --- */
+.scorecard-scroll { overflow-x: auto; }
+.scorecard { min-width: 720px; }
+.scorecard-row {
+  display: flex;
+  gap: var(--s-3);
+  padding: 0.55rem var(--s-4);
+  border-bottom: 1px solid var(--border);
+}
+.scorecard-row:last-child { border-bottom: 0; }
+.scorecard-head {
+  background: var(--bg);
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.scorecard-repo { flex: 1 1 190px; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.scorecard-repo-name {
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scorecard-repo-meta {
+  font-size: 0.63rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scorecard-cell { flex: 1 1 128px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.scorecard-value-row { display: flex; gap: var(--s-2); align-items: baseline; flex-wrap: wrap; }
+.scorecard-value {
+  font-size: 0.86rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* The four cell kinds, in descending confidence. A graded cell is the plain
+   state and needs no modifier beyond full contrast; the other three each pull
+   back in a way that matches how much less they are claiming. */
+.scorecard-cell-grade   .scorecard-value { color: var(--text); }
+.scorecard-cell-pending { opacity: 0.9; }
+.scorecard-cell-off     { opacity: 0.7; }
+/* A stale value is real but old, so it keeps its number and loses its
+   colour — greying it is the honest middle between showing it as current
+   and hiding it, which would lose the only reading anyone has. */
+.scorecard-cell-stale .scorecard-value { color: var(--text-muted); }
+.scorecard-cell-stale .scorecard-note  { color: var(--accent-warm); }
+.scorecard-note {
+  font-size: 0.63rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scorecard-pending { font-size: 0.72rem; font-weight: 600; color: var(--accent); white-space: nowrap; }
+.scorecard-off     { font-size: 0.72rem; font-weight: 600; color: var(--text-dim); white-space: nowrap; }
+.scorecard-enable  {
+  font-size: 0.63rem;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  align-self: flex-start;
+  white-space: nowrap;
+}
+.scorecard-enable:hover { color: var(--accent); }
+.scorecard-legend {
+  margin: var(--s-3) 0 0;
+  font-size: 0.66rem;
+  color: var(--text-muted);
+}
+.panel-empty-rich {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  align-items: flex-start;
+  padding: var(--s-4) 0;
+}
+.panel-empty-rich p { margin: 0; color: var(--text-muted); max-width: 60ch; }
+
+/* --- Tool grid --- */
+.ws-tools-section { display: flex; flex-direction: column; gap: var(--s-3); margin: var(--s-6) 0; }
+.ws-tools-head { display: flex; gap: var(--s-3); justify-content: space-between; align-items: baseline; flex-wrap: wrap; }
+.ws-tools-head h2 { margin: 0; font-size: 1.05rem; letter-spacing: -0.01em; }
+.ws-tools-head .lede { margin: 0; font-size: var(--fs-sm); }
+.ws-tools {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(268px, 1fr));
+  gap: var(--s-3);
+}
+.ws-tool {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: var(--bg-card);
+  overflow: hidden;
+}
+.ws-tool-head {
+  display: flex;
+  gap: var(--s-3);
+  align-items: flex-start;
+  padding: 0.75rem 0.85rem;
+  border-bottom: 1px solid var(--border);
+}
+.ws-tool-glyph {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 29px;
+  height: 29px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+.ws-tool-heading { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ws-tool-heading h3 { margin: 0; font-size: 0.9rem; font-weight: 600; letter-spacing: -0.01em; }
+.ws-tool-heading p  { margin: 0; font-size: 0.78rem; color: var(--text-muted); }
+.ws-tool-result {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.8rem 0.85rem;
+  border-bottom: 1px solid var(--border);
+}
+.ws-tool-label {
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.ws-tool-headline-row { display: flex; gap: var(--s-2); align-items: baseline; flex-wrap: wrap; }
+.ws-tool-headline {
+  font-size: 1.25rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+.ws-tool-note  { margin: 0; font-size: 0.78rem; color: var(--text-muted); }
+.ws-tool-empty { margin: 0; font-size: 0.8rem; color: var(--text-muted); }
+.ws-tool-meta  {
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ws-tool-foot { padding: 0.7rem 0.85rem; }
+.ws-tool-open {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  min-height: 38px;
+}
+.ws-tool-open:hover { border-color: var(--text-muted); background: var(--bg); color: var(--text); }
+
+/* --- Monitor health reason + alert routing --- */
+.monitor-why {
+  margin: var(--s-1) 0 0;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  max-width: 70ch;
+}
+.route-summary { margin: 0 0 var(--s-3); font-size: var(--fs-sm); color: var(--text-muted); }
+/* Muted delivery is the one state on this card that needs acting on today,
+   so it is the only one that gets a colour. */
+.route-summary-bad { color: #f3c4c4; font-weight: 600; }
+.route-row {
+  display: flex;
+  gap: var(--s-3);
+  align-items: flex-start;
+  flex-wrap: wrap;
+  padding: 0.75rem 0.8rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  margin-bottom: var(--s-2);
+}
+/* A delivering channel gets the accent edge; one that delivers nowhere goes
+   dashed, which reads as unfinished rather than as broken. */
+.route-row-on  { border-color: color-mix(in srgb, var(--accent-2) 30%, transparent); }
+.route-row-off { border-style: dashed; }
+.route-text { flex: 1 1 24ch; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.route-target { font-size: 0.72rem; color: var(--text); overflow-wrap: anywhere; }
+.route-note   { font-size: 0.76rem; color: var(--text-muted); }

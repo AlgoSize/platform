@@ -74,12 +74,17 @@ test.describe("dashboard happy path", () => {
     expect(meBody.email).toBe(E2E_EMAIL);
     expect(meBody.subStatus).toBe("active");
 
-    await expect(page.locator("h1")).toHaveText(/Audit, monitor, hand over the report\./);
-    await expect(page.locator("#panel-cost")).toBeVisible();
-    await expect(page.locator("#panel-vuln")).toBeVisible();
-    // The Algorithm Optimizer graduated to its own tab (#/optimizer) — on the
-    // workspace it is reachable, not visible.
-    await expect(page.locator('a[data-view="optimizer"]')).toBeVisible();
+    // The tab strip is down to two entries (D-8). Every tool kept its hash
+    // route and moved to its own view, reached from the Workspace tool grid.
+    await expect(page.locator("#view-workspace h1")).toHaveText(/What your code is, right now\./);
+    await expect(page.locator('a[data-view="workspace"]')).toBeVisible();
+    await expect(page.locator('a[data-view="monitors"]')).toBeVisible();
+    await expect(page.locator(".dash-tab")).toHaveCount(2);
+    await expect(page.locator("#ws-tools")).toBeVisible();
+    await expect(page.locator("#panel-scorecard")).toBeVisible();
+    // The Account control shows the avatar; the initials are the fallback
+    // when no image is stored, which is the seeded account's case.
+    await expect(page.locator("#dash-avatar")).toBeVisible();
     await expect(page.locator("#logout-btn")).toBeVisible();
 
     // Header was hydrated with the seeded email + the active pill.
@@ -97,6 +102,8 @@ test.describe("dashboard happy path", () => {
     //    coverage that the worker's `worker/scripts/test-cost.mjs` unit
     //    suite doesn't already provide.
     // ----------------------------------------------------------------
+    await page.goto("/dashboard/#/cost", { waitUntil: "commit" });
+    await expect(page.locator("#panel-cost")).toBeVisible();
     await page.locator('button[data-action="sample"][data-target="cost"]').click();
     await expect(page.locator("#input-cost-name")).toContainText(/sample-cur\.csv/i);
 
@@ -107,6 +114,8 @@ test.describe("dashboard happy path", () => {
     //    worker's `worker/scripts/test-vuln.mjs` unit suite covers the
     //    rule engine. We just verify the panel is wired.
     // ----------------------------------------------------------------
+    await page.goto("/dashboard/#/scanner", { waitUntil: "commit" });
+    await expect(page.locator("#panel-vuln")).toBeVisible();
     await page.locator('button[data-action="sample"][data-target="vuln"]').click();
     await expect(page.locator("#input-vuln")).toHaveValue(/github\.com\//);
 
@@ -119,7 +128,7 @@ test.describe("dashboard happy path", () => {
     //    `sandbox_bad_response`. The unit-suite
     //    `worker/scripts/test-algo.mjs` covers the analyzer end-to-end.
     // ----------------------------------------------------------------
-    await page.locator('a[data-view="optimizer"]').click();
+    await page.goto("/dashboard/#/optimizer", { waitUntil: "commit" });
     await expect(page.locator("#panel-algo")).toBeVisible();
     await page.locator('button[data-action="sample"][data-target="algo"]').click();
     await expect(page.locator("#input-algo")).toHaveValue(/findDuplicates/);
@@ -127,7 +136,7 @@ test.describe("dashboard happy path", () => {
 
     // The estimator tab renders its page too — panel plus the nightly
     // watch card that pairs it with the repo monitors.
-    await page.locator('a[data-view="estimate"]').click();
+    await page.goto("/dashboard/#/estimate", { waitUntil: "commit" });
     await expect(page.locator("#panel-estimate")).toBeVisible();
     await expect(page.locator("#panel-est-watch")).toBeVisible();
 
@@ -166,7 +175,7 @@ test.describe("dashboard happy path", () => {
     // a Run click. If the hydrate redirect already fired, the click is a
     // no-op against a different page.
     try {
-      await page.locator('button[data-action="run"][data-target="cost"]')
+      await page.locator('button[data-action="run"][data-target="vuln"]')
         .click({ timeout: 2_000, trial: false });
     } catch {
       /* dashboard already navigated away — that's the desired outcome */

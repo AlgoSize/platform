@@ -1,11 +1,21 @@
 // Dashboard view router — hash-based, no framework.
 //
-//   #/               workspace (analyzers + runs feed)   — the default
+//   #/               workspace (scorecard, tools, runs feed)  — the default
+//   #/scanner        the vulnerability scanner's own bench
+//   #/cost           the cloud cost analyzer's own bench
+//   #/arch           the architecture X-ray's own bench
+//   #/optimizer      the algorithm optimizer (D-6)
+//   #/estimate       the infrastructure cost estimator (D-7)
 //   #/monitors       monitors + CI setup (D-3)
 //   #/team           organisation, members, keys, branding (D-2)
 //   #/report/<id>    the report viewer for one run (D-4)
 //   #/account        settings — profile, billing, branding, referrals…
 //   #/account/<sec>  …deep-linked straight to one of its sections
+//
+// The tab strip is down to two entries (D-8), but every route above still
+// resolves: the tools that left the strip are reached from their card on the
+// Workspace, and a bookmark saved before the change still lands where it
+// always did.
 //
 // Hash routing so deep links work, the back button works, and a "View
 // report" link in the runs feed is just an <a>. Each view loads its data
@@ -18,7 +28,8 @@
   var core = window.DashCore;
   if (!core) return;
 
-  var VIEWS = ["workspace", "optimizer", "estimate", "monitors", "team", "report", "account"];
+  var VIEWS = ["workspace", "scanner", "cost", "arch", "optimizer", "estimate",
+               "monitors", "team", "report", "account"];
 
   function parseHash() {
     var h = window.location.hash || "";
@@ -39,6 +50,9 @@
     if (h === "#/team")      return { view: "team" };
     if (h === "#/optimizer") return { view: "optimizer" };
     if (h === "#/estimate")  return { view: "estimate" };
+    if (h === "#/scanner")   return { view: "scanner" };
+    if (h === "#/cost")      return { view: "cost" };
+    if (h === "#/arch")      return { view: "arch" };
     return { view: "workspace" };
   }
 
@@ -55,9 +69,14 @@
       if (route.view === "account") acctLink.setAttribute("aria-current", "page");
       else acctLink.removeAttribute("aria-current");
     }
+    // Views that left the tab strip still belong to the Workspace as far as
+    // the strip is concerned: a tool page reached from a Workspace card is
+    // somewhere inside Workspace, and marking neither tab current there
+    // would read as "you are nowhere".
+    var UNDER_WORKSPACE = ["report", "scanner", "cost", "arch", "optimizer", "estimate"];
     document.querySelectorAll(".dash-tab").forEach(function (tab) {
       var current = tab.dataset.view === route.view ||
-        (route.view === "report" && tab.dataset.view === "workspace");
+        (UNDER_WORKSPACE.indexOf(route.view) !== -1 && tab.dataset.view === "workspace");
       if (current) tab.setAttribute("aria-current", "page");
       else tab.removeAttribute("aria-current");
     });
@@ -69,6 +88,7 @@
     if (route.view === "account"   && window.DashAccount)   window.DashAccount.open(route.section);
     if (route.view === "optimizer" && window.DashOptimizer) window.DashOptimizer.load();
     if (route.view === "estimate"  && window.DashEstimate)  window.DashEstimate.load();
+    if (route.view === "workspace" && window.DashWorkspace) window.DashWorkspace.load();
 
     // A fresh view starts at the top — otherwise switching tabs keeps the
     // previous tab's scroll depth, which reads as a broken page.

@@ -92,8 +92,17 @@ binding = "AI"
 # runtime the sweep refuses to run monitors inline and captures instead — see
 # sweepDueMonitors — so a half-provisioned deploy is loud rather than
 # silently serialising every scan into one cron invocation.
+#
+# HOURLY, not daily (D-8). The tick is the clock a monitor's time-of-day
+# setting is read against — with a single 03:00 trigger, a monitor asking for
+# 14:00 would simply never come due. An hourly tick costs one
+# listMonitorsDue query per hour and enqueues nothing the other 23 times:
+# isDue holds a monitor to its own hour, and a monitor that never chose one
+# falls back to DEFAULT_SWEEP_HOUR — 03:00, the hour every existing monitor
+# already ran at. So this change gives new monitors a real choice without
+# moving anybody's existing delivery time.
 [triggers]
-crons = ["0 3 * * *"]
+crons = ["0 * * * *"]
 
 [[queues.producers]]
 binding = "SCAN_QUEUE"
@@ -315,7 +324,7 @@ new_sqlite_classes  = ["UsageCounter"]
 # Per-environment blocks do NOT inherit the top-level ones, so these have to
 # be repeated rather than assumed.
 [env.production.triggers]
-crons = ["0 3 * * *"]
+crons = ["0 * * * *"]
 
 [[env.production.queues.producers]]
 binding = "SCAN_QUEUE"
@@ -420,9 +429,10 @@ tag                 = "v1"
 new_sqlite_classes  = ["UsageCounter"]
 
 # Staging monitors run on their own queue so a staging sweep can never send
-# mail about a production org's repositories. Same 03:00 UTC cadence.
+# mail about a production org's repositories. Same hourly cadence, so a
+# time-of-day setting behaves in staging exactly as it will in production.
 [env.staging.triggers]
-crons = ["0 3 * * *"]
+crons = ["0 * * * *"]
 
 [[env.staging.queues.producers]]
 binding = "SCAN_QUEUE"

@@ -45,6 +45,34 @@
   };
   var ANALYZER_SHORT = { arch: "x-ray", estimate: "cost", algo: "algo" };
 
+  /**
+   * How a monitor's hour renders.
+   *
+   * A monitor with no stored hour runs in whatever sweep reaches it, which
+   * today is the 03:00 UTC cron — so that is what it says, rather than the
+   * vaguer "daily". A stored hour is shown in UTC with the viewer's local
+   * equivalent beside it, because the whole reason to set one is landing the
+   * alert at a particular time WHERE YOU ARE, and making someone do the
+   * offset arithmetic is how they set the wrong hour.
+   */
+  function hourLabel(h) {
+    if (h === null || h === undefined) return "03:00 UTC";
+    var utc = pad2(h) + ":00 UTC";
+    var local = localHourFor(h);
+    return local === null ? utc : utc + " · " + pad2(local) + ":00 local";
+  }
+
+  function pad2(n) { return (n < 10 ? "0" : "") + n; }
+
+  /** The local hour that matches an hour-of-day in UTC, today. */
+  function localHourFor(utcHour) {
+    var now = new Date();
+    var d = new Date(Date.UTC(
+      now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), utcHour, 0, 0));
+    var h = d.getHours();
+    return typeof h === "number" ? h : null;
+  }
+
   function shortRepo(url) {
     var m = REPO_RE.exec(url || "");
     return m ? m[1] + "/" + m[2] : url;
@@ -120,6 +148,8 @@
       var top = el("div", { class: "monitor-top" });
       top.appendChild(el("strong", { class: "mono" }, shortRepo(m.repoUrl)));
       top.appendChild(el("span", { class: "mono monitor-branch" }, m.branch || "default branch"));
+      var health = healthBadge(m);
+      if (health) top.appendChild(health);
       var badge = statusBadge(m);
       if (badge) top.appendChild(badge);
       // What changed since the previous sweep, beside the standing total. The
@@ -132,15 +162,44 @@
 
       var meta = el("div", { class: "monitor-meta mono" });
       meta.appendChild(el("span", null, (m.paused ? "Paused · " : "") +
-        (m.schedule === "weekly" ? "Weekly" : "Daily") + " · 03:00 UTC"));
+        (m.schedule === "weekly" ? "Weekly" : "Daily") + " · " + hourLabel(m.runAtHour)));
       meta.appendChild(el("span", null,
         m.lastRunAt ? "last ran " + core.formatRelativeTime(m.lastRunAt * 1000) : "first run pending"));
       info.appendChild(meta);
+      var why = healthReason(m);
+      if (why) info.appendChild(el("p", { class: "monitor-why" }, why));
       var az = analyzerRow(m);
       if (az) info.appendChild(az);
       li.appendChild(info);
 
       var actions = el("div", { class: "monitor-actions" });
+
+      // Run now. Not offered on a paused monitor: running it would advance
+      // the baseline, so resuming later would compare against a sweep the
+      // owner had already decided not to take — and the first real run would
+      // report nothing new when plenty had changed. The API refuses it too;
+      // this just doesn't render a button whose only outcome is a 409.
+      if (!m.paused) {
+        var runBtn = el("button", { type: "button", class: "btn btn-ghost btn-sm" }, "Run now");
+        runBtn.addEventListener("click", function () {
+          setBusy(runBtn, true, "Queuing…");
+          callApi("/api/monitors/" + encodeURIComponent(m.monitorId) + "/run", {})
+            .then(function () {
+              // 202, not 200: the run is queued, not finished. Saying
+              // "queued" rather than "done" is the difference between a
+              // truthful control and one that lies for a nicer moment.
+              setBusy(runBtn, false);
+              runBtn.textContent = "Queued ✓";
+              runBtn.disabled = true;
+            })
+            .catch(function (e) {
+              setBusy(runBtn, false);
+              window.alert(e.message || "Could not queue the run");
+            });
+        });
+        actions.appendChild(runBtn);
+      }
+
       var pauseBtn = el("button", { type: "button", class: "btn btn-ghost btn-sm" },
         m.paused ? "Resume" : "Pause");
       pauseBtn.addEventListener("click", function () {
@@ -169,17 +228,66 @@
     wrap.appendChild(ul);
   }
 
+  /**
+   * The monitor's health, which is a different question from its findings.
+   *
+   * Health comes first because a monitor that cannot run has no findings
+   * worth reading. Before migrations/0017 there was nothing to read here:
+   * a monitor whose repo has no supported lockfile failed every night,
+   * recorded nothing, and rendered "baseline pending" forever — exactly what
+   * a healthy monitor shows on its first day. Those two now differ.
+   *
+   *   failed   ran, and will keep failing until the configuration changes
+   *   skipped  transient upstream failure; the baseline was deliberately
+   *            left alone, so the next successful sweep still diffs honestly
+   *   null     genuinely never attempted — the only honest "pending"
+   */
+  function healthBadge(m) {
+    if (m.paused) return el("span", { class: "chip chip-muted" }, "paused");
+    if (m.lastStatus === "failed") {
+      return el("span", { class: "chip chip-danger", title: m.lastError || "" }, "× misconfigured");
+    }
+    if (m.lastStatus === "skipped") {
+      return el("span", { class: "chip chip-warn", title: m.lastError || "" }, "◷ stale");
+    }
+    if (!m.lastStatus && m.lastRunAt === null) {
+      return el("span", { class: "chip chip-muted" }, "◷ baseline pending");
+    }
+    return null;
+  }
+
   // What the last run saw: the standing total.
   function statusBadge(m) {
-    if (m.paused) return el("span", { class: "chip chip-muted" }, "paused");
+    if (m.paused) return null;   // the health badge already says paused
     if (m.knownAdvisoryCount === null || m.knownAdvisoryCount === undefined) {
-      return el("span", { class: "chip chip-muted" }, "baseline pending");
+      return m.lastStatus ? null : el("span", { class: "chip chip-muted" }, "baseline pending");
     }
     if (m.knownAdvisoryCount === 0) {
       return el("span", { class: "chip chip-ok" }, "✓ clean");
     }
     return el("span", { class: "chip chip-warn" },
       m.knownAdvisoryCount + " known advisor" + (m.knownAdvisoryCount === 1 ? "y" : "ies"));
+  }
+
+  /**
+   * Why the row looks the way it does, in one sentence.
+   *
+   * Rendered under the badges because a state without a reason is a state
+   * someone has to open a support ticket about. `lastError` is the code the
+   * sweep stored; it is shown verbatim rather than mapped to friendlier
+   * prose, so what the screen says and what the logs say are the same string.
+   */
+  function healthReason(m) {
+    if (m.paused) return "Paused. The slot is still counted — remove the monitor to free it.";
+    if (m.lastStatus === "failed") {
+      return "The last sweep failed" + (m.lastError ? " (" + m.lastError + ")" : "") +
+        ". Retrying nightly will not fix this on its own.";
+    }
+    if (m.lastStatus === "skipped") {
+      return "The last sweep was skipped" + (m.lastError ? " (" + m.lastError + ")" : "") +
+        ". Baselines were left untouched, so the next successful run still reports only what is new.";
+    }
+    return null;
   }
 
   var DELTA_ORDER = ["critical", "high", "medium", "low", "unknown"];
@@ -396,7 +504,10 @@
     var branch = branchInput && branchInput.value.trim() ? branchInput.value.trim() : undefined;
 
     setBusy(submit, true, "Creating…");
-    callApi("/api/monitors", { repoUrl: repoUrl, branch: branch, schedule: state.schedule, analyzers: formAnalyzers() })
+    callApi("/api/monitors", {
+      repoUrl: repoUrl, branch: branch, schedule: state.schedule,
+      analyzers: formAnalyzers(), runAtHour: formHour(),
+    })
       .then(function () {
         toggleForm(false);
         return load(true);
@@ -407,6 +518,9 @@
           setFieldMsg("monitor-repo", "monitor-repo-msg", false, "▲ " + e.message);
         } else if (e.code === "invalid_branch") {
           setFieldMsg("monitor-branch", "monitor-branch-msg", false, "▲ " + e.message);
+        } else if (e.code === "invalid_hour") {
+          var note = document.getElementById("monitor-hour-note");
+          if (note) note.textContent = "▲ " + e.message;
         } else if (e.code === "monitor_exists") {
           setFieldMsg("monitor-repo", "monitor-repo-msg", false, "▲ " + e.message);
         } else if (formError) {
@@ -429,6 +543,7 @@
       setFieldMsg("monitor-repo", "monitor-repo-msg", true, "");
       setFieldMsg("monitor-branch", "monitor-branch-msg", true, "");
       SECONDARY_ANALYZERS.forEach(function (k) { setFormAnalyzer(k, false); });
+      updateHourNote();
       var formError = document.getElementById("monitor-form-error");
       if (formError) formError.hidden = true;
     }
@@ -496,12 +611,167 @@
 
   // ---------------------------------------------------------------------
 
+  // ---------------------------------------------------------------------
+  // Pulse strip — four facts about the automation itself
+  // ---------------------------------------------------------------------
+  //
+  // Deliberately about the SWEEP, not about findings. The Workspace already
+  // shows what the analyzers found; repeating it here would make two screens
+  // that disagree the moment one of them is stale. What this page owns is
+  // whether the machinery is running at all.
+
+  function renderPulse(data) {
+    var wrap = document.getElementById("monitors-pulse");
+    if (!wrap) return;
+    var monitors = (data && data.monitors) || [];
+    if (!monitors.length) { wrap.hidden = true; return; }
+
+    var active = 0, unhealthy = 0, pending = 0, lastRun = null;
+    monitors.forEach(function (m) {
+      if (m.paused) return;
+      active++;
+      if (m.lastStatus === "failed" || m.lastStatus === "skipped") unhealthy++;
+      if (!m.lastStatus && m.lastRunAt === null) pending++;
+      if (m.lastRunAt && (!lastRun || m.lastRunAt > lastRun)) lastRun = m.lastRunAt;
+    });
+
+    var items = [
+      { label: "Watching", value: String(active),
+        note: monitors.length > active
+          ? (monitors.length - active) + " paused"
+          : (active === 1 ? "repository" : "repositories") },
+      { label: "Healthy", value: String(Math.max(0, active - unhealthy - pending)),
+        note: unhealthy ? unhealthy + " need attention" : "all sweeping cleanly",
+        tone: unhealthy ? "bad" : "ok" },
+      { label: "Awaiting first sweep", value: String(pending),
+        note: pending ? "no baseline yet" : "every monitor has a baseline",
+        tone: pending ? "warn" : null },
+      { label: "Last sweep", value: lastRun ? core.formatRelativeTime(lastRun * 1000) : "never",
+        note: lastRun ? "most recent result" : "nothing has run yet",
+        tone: lastRun ? null : "warn" },
+    ];
+
+    wrap.textContent = "";
+    items.forEach(function (it) {
+      var box = el("div", { class: "ws-pulse-item" });
+      box.appendChild(el("span", { class: "ws-pulse-label mono" }, it.label));
+      box.appendChild(el("span", {
+        class: "ws-pulse-value mono" + (it.tone ? " ws-pulse-" + it.tone : ""),
+      }, it.value));
+      box.appendChild(el("span", { class: "ws-pulse-note" }, it.note));
+      wrap.appendChild(box);
+    });
+    wrap.hidden = false;
+  }
+
+  // ---------------------------------------------------------------------
+  // Where the next alert goes
+  // ---------------------------------------------------------------------
+  //
+  // Served by GET /api/monitors/route, which is the SAME resolver the sweep
+  // calls before it sends anything. That is the point of the card: this is
+  // not a second rendering of the notification settings, it is the delivery
+  // path's own answer, so a channel that reads as wired here is a channel
+  // that will actually be posted to.
+
+  function loadAlertRoute() {
+    var body = document.getElementById("alert-route-body");
+    if (!body) return Promise.resolve();
+    return callApi("/api/monitors/route", null, "GET")
+      .then(function (route) { renderAlertRoute(body, route); })
+      .catch(function (e) {
+        body.textContent = "";
+        body.appendChild(core.errorState(
+          e.message || "The delivery route could not be read."));
+      });
+  }
+
+  function renderAlertRoute(body, route) {
+    body.textContent = "";
+
+    // Said first and said plainly, because "nothing will be delivered" is
+    // the one state on this page that someone has to act on today.
+    var summary = el("p", {
+      class: "route-summary" + (route.muted ? " route-summary-bad" : ""),
+    }, route.summary);
+    body.appendChild(summary);
+
+    (route.channels || []).forEach(function (c) {
+      var row = el("div", { class: "route-row route-row-" + (c.wired ? "on" : "off") });
+
+      var pill = el("span", { class: "chip " + (c.wired ? "chip-ok" : "chip-muted") },
+        c.wired ? "wired" : "not delivering");
+      row.appendChild(pill);
+
+      var textWrap = el("div", { class: "route-text" });
+      textWrap.appendChild(el("strong", null, c.label));
+      if (c.detail && c.detail.length) {
+        textWrap.appendChild(el("span", { class: "route-target mono" }, c.detail.join(", ")));
+      }
+      if (c.note) textWrap.appendChild(el("span", { class: "route-note" }, c.note));
+      row.appendChild(textWrap);
+
+      // The fix lives on the Account screen for both channels — notification
+      // preferences for email, the org's webhook for Slack — so an unwired
+      // channel links there rather than explaining where to look.
+      if (!c.wired) {
+        row.appendChild(el("a", { class: "btn btn-ghost btn-sm", href: "#/account/notifications" },
+          c.id === "slack" ? "Set up Slack →" : "Notification settings →"));
+      }
+      body.appendChild(row);
+    });
+  }
+
+  // ---------------------------------------------------------------------
+  // Hour-of-day select
+  // ---------------------------------------------------------------------
+
+  /**
+   * Fill the schedule-hour select with all 24 UTC hours, each labelled with
+   * the local time it lands at.
+   *
+   * Built in JS rather than in the markup because the local half depends on
+   * the viewer's timezone, and a hardcoded list would be wrong for everyone
+   * outside whichever zone it was written in.
+   */
+  function fillHourSelect() {
+    var sel = document.getElementById("monitor-hour");
+    if (!sel || sel.dataset.filled === "true") return;
+    for (var h = 0; h < 24; h++) {
+      var local = localHourFor(h);
+      sel.appendChild(el("option", { value: String(h) },
+        pad2(h) + ":00 UTC" + (local === null ? "" : " · " + pad2(local) + ":00 your time")));
+    }
+    sel.dataset.filled = "true";
+    sel.addEventListener("change", updateHourNote);
+    updateHourNote();
+  }
+
+  function updateHourNote() {
+    var sel  = document.getElementById("monitor-hour");
+    var note = document.getElementById("monitor-hour-note");
+    if (!sel || !note) return;
+    note.textContent = sel.value === ""
+      ? "Runs at 03:00 UTC, the hour every monitor has always used."
+      : "Held back until this hour, so the alert lands when you are there to read it.";
+  }
+
+  function formHour() {
+    var sel = document.getElementById("monitor-hour");
+    if (!sel || sel.value === "") return undefined;
+    var n = parseInt(sel.value, 10);
+    return isNaN(n) ? undefined : n;
+  }
+
   function load(force) {
     if (state.loaded && !force) return Promise.resolve();
     var first = !state.loaded;
     state.loaded = true;
     var jobs = [
-      callApi("/api/monitors", null, "GET").then(renderMonitors).catch(function (e) {
+      callApi("/api/monitors", null, "GET").then(function (data) {
+        renderMonitors(data);
+        renderPulse(data);
+      }).catch(function (e) {
         var wrap = document.getElementById("monitors-list");
         if (wrap) {
           while (wrap.firstChild) wrap.removeChild(wrap.firstChild);
@@ -509,6 +779,7 @@
         }
       }),
       checkFirstRun(),
+      loadAlertRoute(),
     ];
     if (first) jobs.push(loadSnippet(), loadOptimizerSnippet());
     return Promise.all(jobs);
@@ -547,6 +818,7 @@
     }
 
     setSchedule("daily");
+    fillHourSelect();
   }
 
   if (document.readyState === "loading") {

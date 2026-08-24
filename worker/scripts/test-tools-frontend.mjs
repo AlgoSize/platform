@@ -23,6 +23,7 @@ const optJs  = readFileSync(join(SITE, "assets", "js", "dash-optimizer.js"), "ut
 const estJs  = readFileSync(join(SITE, "assets", "js", "dash-estimate.js"), "utf8");
 const dashJs = readFileSync(join(SITE, "assets", "js", "dashboard.js"), "utf8");
 const router = readFileSync(join(SITE, "assets", "js", "dash-router.js"), "utf8");
+const wsJs   = readFileSync(join(SITE, "assets", "js", "dash-workspace.js"), "utf8");
 const css    = readFileSync(join(SITE, "assets", "css", "main.css"), "utf8");
 const worker = readFileSync(join(__dirname, "..", "src", "index.js"), "utf8");
 
@@ -47,8 +48,15 @@ group("the views exist, are routed, and own their panels");
   expect(/window\.DashOptimizer\) window\.DashOptimizer\.load\(\)/.test(router) &&
          /window\.DashEstimate\)\s+window\.DashEstimate\.load\(\)/.test(router),
     "entering each view calls its module's load()");
-  expect(/data-view="optimizer"/.test(html) && /data-view="estimate"/.test(html),
-    "both views have tabs in the nav strip");
+  // Neither has a tab any more (D-8): the strip is Workspace + Monitors & CI,
+  // and these two are reached from their card on the Workspace grid. The
+  // routes still resolve, so a bookmark saved before the change still lands.
+  expect(!/data-view="optimizer"/.test(html) && !/data-view="estimate"/.test(html),
+    "neither tool holds a nav tab any more — the strip is down to two");
+  expect(/route: "#\/optimizer"/.test(wsJs) && /route: "#\/estimate"/.test(wsJs),
+    "both are reachable from the Workspace tool grid instead");
+  expect(/UNDER_WORKSPACE\s*=\s*\[[^\]]*"optimizer"[^\]]*"estimate"/.test(router),
+    "and the tab strip marks Workspace current while you are on one of them");
 
   // The panels moved WITH their ids, so dashboard.js and dash-estimate.js
   // keep driving them unmodified.

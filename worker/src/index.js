@@ -478,7 +478,7 @@ export default {
    */
   async scheduled(event, env, ctx) {
     try {
-      const summary = await sweepDueMonitors(env, ctx);
+      const summary = await sweepDueMonitors(env, ctx, { cron: event && event.cron });
       console.log("monitors: sweep", JSON.stringify({ cron: event && event.cron, ...summary }));
     } catch (err) {
       // A cron handler that throws is a sweep that silently didn't happen —

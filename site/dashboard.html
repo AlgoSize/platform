@@ -11,17 +11,22 @@ permalink: /dashboard/
       <span class="brand-mark" aria-hidden="true">[as]</span>
       <span class="brand-word">Algosize</span>
     </a>
-    <!-- Section tabs (D-2/D-3): hash-routed so deep links and the back button
-         work without a framework. dash-router.js toggles the views. -->
+    <!-- Two tabs, and that is the whole strip.
+         There were five, plus four action buttons, and they never fit inside
+         1120px at any viewport — the strip wrapped on a laptop. The fix is
+         structural rather than responsive: Workspace holds every tool and
+         every result, Monitors & CI holds everything that runs without you,
+         and Team moved into Account where the rest of the org settings
+         already live. The individual tools keep their hash routes and are
+         reached from their card on the Workspace, so every existing deep
+         link still resolves. -->
     <nav class="dash-tabs" aria-label="Dashboard sections">
-      <a href="#/" class="dash-tab" data-view="workspace" aria-current="page">Workspace</a>
-      <a href="#/optimizer" class="dash-tab" data-view="optimizer">Optimizer</a>
-      <a href="#/estimate" class="dash-tab" data-view="estimate">Estimator</a>
-      <a href="#/monitors" class="dash-tab" data-view="monitors">Monitors &amp; CI</a>
-      <a href="#/team" class="dash-tab" data-view="team">Team</a>
+      <a href="#/" class="dash-tab" data-view="workspace" aria-current="page">
+        <span class="dash-tab-glyph mono" aria-hidden="true">▣</span>Workspace</a>
+      <a href="#/monitors" class="dash-tab" data-view="monitors">
+        <span class="dash-tab-glyph mono" aria-hidden="true">◷</span>Monitors &amp; CI</a>
     </nav>
     <div class="dash-nav-actions">
-      <span class="dash-user-email mono" id="dash-user-email" hidden></span>
       <!-- Quota pill (Task #19 → D-1): "X / 5" with a segment meter whenever
            entitlement is not active. Hidden until /api/me answers so we never
            flash "X / 5" at a paid customer. -->
@@ -37,17 +42,23 @@ permalink: /dashboard/
         <span class="dash-status-dot" aria-hidden="true"></span>
         <span id="dash-status-text">Subscription active</span>
       </span>
+      <!-- Account: avatar first, then the word. The avatar is an <img> when
+           /api/me returns an avatarUrl and initials otherwise — never a
+           generic silhouette, which tells you nothing about which account
+           you are signed in to. Below 420px the word is hidden by CSS and
+           the avatar alone is the control, which is why the accessible name
+           lives on the link rather than in the visible text. -->
+      <a id="account-link" href="#/account" class="dash-account" aria-label="Account settings">
+        <span class="dash-avatar mono" id="dash-avatar" aria-hidden="true">··</span>
+        <span class="dash-account-word">Account</span>
+      </a>
       <button id="billing-portal-btn" type="button" class="btn btn-ghost btn-sm" hidden>Manage billing</button>
       <!-- Shown only when /api/me reports isAdmin: true (dashboard.js). The
            /admin panel itself is gated server-side regardless — this link is
            discoverability, not the access control. -->
-      <!-- Settings, not a workspace tab. The account area is a different kind
-           of place from Workspace/Monitors/Team — you go there deliberately,
-           change something, and come back — so it sits with the signed-in
-           widgets rather than in the section strip. -->
-      <a id="account-link" href="#/account" class="btn btn-ghost btn-sm">Account</a>
       <a id="admin-link" href="/admin" class="btn btn-ghost btn-sm" hidden>Admin</a>
       <button id="logout-btn" type="button" class="btn btn-ghost btn-sm">Sign out</button>
+      <span class="dash-user-email mono" id="dash-user-email" hidden></span>
     </div>
   </div>
 </header>
@@ -58,14 +69,16 @@ permalink: /dashboard/
     <!-- ================= WORKSPACE (default view) ================= -->
     <div id="view-workspace" class="dash-view">
 
-      <div class="dash-head">
-        <span class="eyebrow">Workspace</span>
-        <h1>Audit, monitor, hand over the report.</h1>
-        <p class="lede">
-          Run the analyzers below, keep repositories under continuous watch from
-          the Monitors tab, and turn any dependency audit into a client-ready
-          report. Your last 90 days of runs are kept under your organisation.
-        </p>
+      <div class="dash-head dash-head-split">
+        <div>
+          <span class="eyebrow">Workspace</span>
+          <h1>What your code is, right now.</h1>
+          <p class="lede">
+            Every tool, and everything they have produced. What runs on a
+            schedule without you lives one tab over.
+          </p>
+        </div>
+        <a href="#/monitors" class="dash-head-aside">What runs without you →</a>
       </div>
 
       <!-- Billing state banner (D-1): one slot, one banner at a time, filled
@@ -86,6 +99,51 @@ permalink: /dashboard/
         </div>
       </div>
 
+
+      <!-- ============= PULSE (D-8) =============
+           Five numbers across the top, each a link into the thing it counts.
+           Rendered by dash-workspace.js from data the dashboard already
+           fetches — there is no pulse endpoint, because a summary computed
+           server-side would be a second source of truth for numbers that are
+           already on the page. -->
+      <nav class="ws-pulse" id="ws-pulse" aria-label="Workspace summary" hidden></nav>
+
+      <!-- ============= SERVICE SCORECARD (D-8) =============
+           One row per watched repo, one column per analyzer, read from
+           GET /api/scorecard — which reads stored monitor baselines and
+           nothing else. Cells are graded / stale / pending / off, and the
+           difference matters: a blank that reads as a pass would turn "we
+           never looked" into "we looked and it was fine". -->
+      <section class="panel" id="panel-scorecard">
+        <header class="panel-head">
+          <div class="panel-heading">
+            <span class="panel-glyph mono" aria-hidden="true">▦</span>
+            <h2>Service scorecard</h2>
+            <p class="panel-sub">One row per watched repository, one column per analyzer. Graded on the last nightly sweep.</p>
+          </div>
+          <div class="panel-actions">
+            <span class="field-label" id="scorecard-sort-label">Sort</span>
+            <div class="seg-group" role="group" aria-labelledby="scorecard-sort-label" id="scorecard-sort"></div>
+          </div>
+        </header>
+        <div class="panel-body">
+          <div id="scorecard-body">
+            <div class="panel-empty">Loading the scorecard…</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============= TOOLS (D-8) =============
+           Every analyzer as a card: what it answers, what it last found, and
+           one control to start a run. The full bench for each lives on its
+           own view — the card is the doorway, not a second copy of it. -->
+      <section class="ws-tools-section">
+        <div class="ws-tools-head">
+          <h2>Tools</h2>
+          <p class="lede">Start a run here; open a tool for the full bench.</p>
+        </div>
+        <div class="ws-tools" id="ws-tools"></div>
+      </section>
       <!-- ============= RECENT RUNS (Task #17 → D-3 feed) ============= -->
       <section class="panel" id="panel-runs">
         <header class="panel-head">
@@ -110,45 +168,19 @@ permalink: /dashboard/
         </div>
       </section>
 
-      <!-- ============= COST ANALYZER ============= -->
-      <section class="panel" id="panel-cost">
-        <header class="panel-head">
-          <div class="panel-heading">
-            <span class="panel-tag">Cost</span>
-            <h2>Cloud cost analyzer</h2>
-            <p class="panel-desc">Upload your AWS Cost &amp; Usage Report (CSV). We surface the top spenders and three biggest savings wins.</p>
-          </div>
-          <div class="panel-actions">
-            <button type="button" class="btn btn-ghost btn-sm" data-action="sample" data-target="cost">Load sample</button>
-            <button type="button" class="btn btn-primary btn-sm" data-action="run" data-target="cost">Run analysis →</button>
-          </div>
-        </header>
-        <div class="panel-body">
-          <label class="panel-input-label" for="input-cost-file">Input · AWS Cost &amp; Usage Report (CSV)</label>
-          <div class="file-picker">
-            <input type="file" id="input-cost-file" accept=".csv,text/csv" hidden>
-            <button type="button" class="btn btn-ghost" id="input-cost-btn">Choose CUR file…</button>
-            <span class="file-picker-name mono" id="input-cost-name">No file selected.</span>
-          </div>
-          <p class="panel-input-help">
-            Don't have one yet? Export from the AWS Billing console (Reports → Cost &amp; usage reports).
-            <a href="https://docs.aws.amazon.com/cur/latest/userguide/cur-create.html" target="_blank" rel="noopener">How →</a>
-          </p>
+    </div><!-- /view-workspace -->
 
-          <label class="panel-input-label" for="output-cost">Results</label>
-          <div id="output-cost" class="panel-output">
-            <div class="panel-empty">Choose a CUR file (or click <em>Load sample</em>) and run an analysis.</div>
-          </div>
-
-          <div id="chart-cost-wrap" class="panel-chart-wrap" hidden>
-            <h3 class="panel-chart-title">Top suggested savings (USD / mo)</h3>
-            <div class="panel-chart-canvas">
-              <canvas id="chart-cost"></canvas>
-            </div>
-          </div>
-        </div>
-      </section>
-
+    <!-- ================= VULNERABILITY SCANNER =================
+         Promoted out of the Workspace when the tab strip collapsed to two.
+         The Workspace card for this tool links here; the hash route is
+         unchanged, so existing deep links still resolve. -->
+    <div id="view-scanner" class="dash-view" hidden>
+      <div class="dash-head">
+        <a href="#/" class="dash-crumb">← Workspace</a>
+        <span class="eyebrow">Vulnerability scanner</span>
+        <h1>Known advisories in your dependencies.</h1>
+        <p class="lede">Paste a lockfile or point at a public repository. Every advisory is matched against OSV, graded, and kept for 90 days under your organisation.</p>
+      </div>
       <!-- ============= VULNERABILITY SCANNER ============= -->
       <section class="panel" id="panel-vuln">
         <header class="panel-head">
@@ -188,7 +220,70 @@ permalink: /dashboard/
       <!-- The Algorithm Optimizer and the Infrastructure Cost Estimator have
            graduated to their own tabs (#/optimizer, #/estimate) — full pages
            that pair the interactive tool with its CI and nightly automation. -->
+    </div><!-- /view-scanner -->
 
+    <!-- ================= CLOUD COST ANALYZER =================
+         Promoted out of the Workspace when the tab strip collapsed to two.
+         The Workspace card for this tool links here; the hash route is
+         unchanged, so existing deep links still resolve. -->
+    <div id="view-cost" class="dash-view" hidden>
+      <div class="dash-head">
+        <a href="#/" class="dash-crumb">← Workspace</a>
+        <span class="eyebrow">Cloud cost analyzer</span>
+        <h1>Where the bill actually goes.</h1>
+        <p class="lede">Upload an AWS Cost and Usage Report and get the savings ranked by what they are worth. The file is parsed in the request and never stored.</p>
+      </div>
+      <!-- ============= COST ANALYZER ============= -->
+      <section class="panel" id="panel-cost">
+        <header class="panel-head">
+          <div class="panel-heading">
+            <span class="panel-tag">Cost</span>
+            <h2>Cloud cost analyzer</h2>
+            <p class="panel-desc">Upload your AWS Cost &amp; Usage Report (CSV). We surface the top spenders and three biggest savings wins.</p>
+          </div>
+          <div class="panel-actions">
+            <button type="button" class="btn btn-ghost btn-sm" data-action="sample" data-target="cost">Load sample</button>
+            <button type="button" class="btn btn-primary btn-sm" data-action="run" data-target="cost">Run analysis →</button>
+          </div>
+        </header>
+        <div class="panel-body">
+          <label class="panel-input-label" for="input-cost-file">Input · AWS Cost &amp; Usage Report (CSV)</label>
+          <div class="file-picker">
+            <input type="file" id="input-cost-file" accept=".csv,text/csv" hidden>
+            <button type="button" class="btn btn-ghost" id="input-cost-btn">Choose CUR file…</button>
+            <span class="file-picker-name mono" id="input-cost-name">No file selected.</span>
+          </div>
+          <p class="panel-input-help">
+            Don't have one yet? Export from the AWS Billing console (Reports → Cost &amp; usage reports).
+            <a href="https://docs.aws.amazon.com/cur/latest/userguide/cur-create.html" target="_blank" rel="noopener">How →</a>
+          </p>
+
+          <label class="panel-input-label" for="output-cost">Results</label>
+          <div id="output-cost" class="panel-output">
+            <div class="panel-empty">Choose a CUR file (or click <em>Load sample</em>) and run an analysis.</div>
+          </div>
+
+          <div id="chart-cost-wrap" class="panel-chart-wrap" hidden>
+            <h3 class="panel-chart-title">Top suggested savings (USD / mo)</h3>
+            <div class="panel-chart-canvas">
+              <canvas id="chart-cost"></canvas>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div><!-- /view-cost -->
+
+    <!-- ================= ARCHITECTURE X-RAY =================
+         Promoted out of the Workspace when the tab strip collapsed to two.
+         The Workspace card for this tool links here; the hash route is
+         unchanged, so existing deep links still resolve. -->
+    <div id="view-arch" class="dash-view" hidden>
+      <div class="dash-head">
+        <a href="#/" class="dash-crumb">← Workspace</a>
+        <span class="eyebrow">Architecture X-ray</span>
+        <h1>The shape of the codebase, drawn.</h1>
+        <p class="lede">Modules, clusters and the edges between them — with the couplings that will hurt first called out by name.</p>
+      </div>
       <!-- ============= ARCHITECTURE X-RAY (P-10 → D-5) ============= -->
       <section class="panel" id="panel-arch">
         <header class="panel-head">
@@ -221,8 +316,8 @@ permalink: /dashboard/
           </div>
         </div>
       </section>
+    </div><!-- /view-arch -->
 
-    </div><!-- /view-workspace -->
 
     <!-- ================= ALGORITHM OPTIMIZER (D-6) ================= -->
     <div id="view-optimizer" class="dash-view" hidden>
@@ -489,6 +584,14 @@ permalink: /dashboard/
         </p>
       </div>
 
+      <!-- ============= PULSE (D-8) =============
+           Four numbers about the automation itself — how many repos are
+           watched, how many are healthy, when the last sweep ran, where the
+           next alert goes. Filled by dash-monitors.js from the monitor list
+           and GET /api/monitors/route; nothing here is a second copy of a
+           result the Workspace already shows. -->
+      <div class="ws-pulse" id="monitors-pulse" hidden></div>
+
       <section class="panel" id="panel-monitors">
         <header class="panel-head">
           <div class="panel-heading">
@@ -531,6 +634,20 @@ permalink: /dashboard/
               </button>
             </div>
 
+            <!-- Hour of day (migrations/0017). Left unset, the monitor runs at
+                 03:00 UTC — the hour every monitor used before the column
+                 existed, so nothing moves for anyone who ignores this. The
+                 reason to set one is landing the alert before standup in your
+                 own timezone rather than overnight, so each option spells out
+                 its local equivalent (filled in by dash-monitors.js, since the
+                 offset is the viewer's) rather than leaving UTC arithmetic to
+                 the reader. -->
+            <label class="panel-input-label" for="monitor-hour">Time of day <span class="field-optional">optional</span></label>
+            <select id="monitor-hour" class="panel-input mono">
+              <option value="">Default — 03:00 UTC</option>
+            </select>
+            <p class="field-msg" id="monitor-hour-note"></p>
+
             <!-- Which analyzers the sweep runs. The dependency audit is what a
                  monitor IS, so it renders as a locked fact, not a control; the
                  other three are opt-in and each reads only committed files. -->
@@ -562,6 +679,28 @@ permalink: /dashboard/
             </div>
             <p class="field-msg field-msg-error" id="monitor-form-error" hidden></p>
           </form>
+        </div>
+      </section>
+
+      <!-- ============= WHERE THE NEXT ALERT GOES (D-8) =============
+           Not a restatement of the notification settings. The rows are
+           rendered from GET /api/monitors/route, which is served by the same
+           resolver the sweep itself calls — so a channel shown as wired here
+           is a channel that will actually be posted to, and a channel the
+           settings screen shows as "on" but that has nowhere to deliver says
+           so in the words of the thing that would have delivered it. -->
+      <section class="panel" id="panel-alert-route">
+        <header class="panel-head">
+          <div class="panel-heading">
+            <span class="panel-tag">Alerts</span>
+            <h2>Where the next alert goes</h2>
+            <p class="panel-desc">Not what is configured — what will actually be delivered.</p>
+          </div>
+        </header>
+        <div class="panel-body">
+          <div id="alert-route-body">
+            <div class="panel-empty">Checking the delivery route…</div>
+          </div>
         </div>
       </section>
 
@@ -964,5 +1103,6 @@ permalink: /dashboard/
 <script src="{{ '/assets/js/dash-arch.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-estimate.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-optimizer.js' | relative_url }}" defer></script>
+<script src="{{ '/assets/js/dash-workspace.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-account.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-router.js' | relative_url }}" defer></script>

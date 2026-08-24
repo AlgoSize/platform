@@ -20,7 +20,7 @@
 // are different problems with different fixes, and a single grey dash for
 // both would hide the second one forever.
 
-import { resolveEntitlement } from "../entitlement.js";
+import { requireOrgContext } from "./monitors.js";
 import { listMonitors } from "../monitors/_store.js";
 import { gradeForScore, scoreForCounts, worstSeverity } from "../analyzers/audit.js";
 import { formatMicroUsd, bigORank } from "../monitors/analyzers.js";
@@ -40,15 +40,14 @@ function jsonResponse(body, status = 200) {
 }
 
 export async function scorecardHandler(request, env) {
-  const entitlement = await resolveEntitlement(env, null, { request });
-  if (!entitlement || !entitlement.org) {
-    return jsonResponse(
-      { error: "no_organisation", message: "This account is not a member of any organisation." },
-      404,
-    );
-  }
+  // The same resolver the monitor endpoints use, so an API key that can read
+  // monitors can read their grades — the scorecard is a view of exactly the
+  // rows /api/monitors returns, and gating it differently would be a
+  // permission surprise with no reason behind it.
+  const ctxOrg = await requireOrgContext(request, env);
+  if (ctxOrg.error) return ctxOrg.error;
 
-  const monitors = await listMonitors(env, entitlement.org.orgId);
+  const monitors = await listMonitors(env, ctxOrg.orgId);
   return jsonResponse({
     columns: SCORECARD_COLUMNS.map((c) => ({ id: c.id, label: c.label })),
     rows: monitors.map(scorecardRow),

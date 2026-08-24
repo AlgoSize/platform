@@ -408,14 +408,14 @@ function parseDelta(raw) {
  * Oldest-run-first so that if the sweep ever has to be capped, the monitors
  * that have gone longest without a check are the ones that get in.
  */
-export async function listMonitorsDue(env, nowSec, limit = 1000) {
+export async function listMonitorsDue(env, nowSec, limit = 1000, opts = {}) {
   const { results } = await env.DB.prepare(
     `SELECT * FROM monitors
       WHERE paused_at IS NULL
       ORDER BY IFNULL(last_run_at, 0) ASC
       LIMIT ?`,
   ).bind(limit).all();
-  return (results || []).map(rowToMonitor).filter((m) => isDue(m, nowSec));
+  return (results || []).map(rowToMonitor).filter((m) => isDue(m, nowSec, opts));
 }
 
 const WEEK_SECONDS = 7 * 86_400;
@@ -426,29 +426,74 @@ const WEEK_SECONDS = 7 * 86_400;
 const DAILY_MIN_GAP = 20 * 3600;
 
 /**
+ * The hour a monitor runs at when it has not asked for one.
+ *
+ * 03:00 UTC, because that is the hour the daily cron fired at before hourly
+ * sweeps existed. Pinning the default here is what stops an hourly sweep
+ * from silently changing every existing monitor's delivery time: with a
+ * 20-hour minimum gap and no hour to hold it to, a "daily" monitor on an
+ * hourly cron would run every 20 hours and walk right around the clock.
+ */
+export const DEFAULT_SWEEP_HOUR = 3;
+
+/**
  * Whether a monitor's cadence says it should run now.
  *
  * `runAtHour` (migrations/0017) holds a monitor back until its own UTC hour
- * has arrived. It is only consulted when the sweep is running at a DIFFERENT
- * hour than the one requested, and only for monitors that have run before —
- * a brand-new monitor is always due, because making someone wait a day to
- * find out their repo URL was wrong is the behaviour the Run-now button
- * exists to avoid, and holding the first sweep back would reintroduce it.
+ * has arrived. Only for monitors that have run before — a brand-new monitor
+ * is always due, because making someone wait a day to find out their repo
+ * URL was wrong is the behaviour the Run-now button exists to avoid, and
+ * holding the first sweep back would reintroduce it.
  *
- * null means "whenever the sweep runs", which is what every row created
- * before this column existed does, so the default costs nothing.
+ * `sweepsHourly` says whether the cron ticks more often than daily, and it
+ * changes what an unset hour means:
+ *
+ *   false  one sweep a day. The hour cannot be honoured by a clock that
+ *          ticks once, so an unset hour means "this sweep" and a SET hour is
+ *          still respected — a monitor asking for 14:00 on a 03:00-only cron
+ *          simply never comes due, which is why the deploy note pairs the
+ *          hour control with an hourly trigger.
+ *   true   the hour is the clock. An unset hour falls back to
+ *          DEFAULT_SWEEP_HOUR so every pre-0017 monitor keeps the 03:00 slot
+ *          it has always had.
+ *
+ * The flag is derived from the cron expression the scheduled handler was
+ * actually invoked with, not from a separate setting — so it cannot drift
+ * out of step with the trigger it describes.
  */
-export function isDue(monitor, nowSec) {
+export function isDue(monitor, nowSec, { sweepsHourly = false } = {}) {
   if (!monitor || monitor.pausedAt !== null) return false;
   if (monitor.lastRunAt === null) return true;      // never run — always due
   const elapsed = nowSec - monitor.lastRunAt;
-  if (typeof monitor.runAtHour === "number") {
+
+  const wanted = typeof monitor.runAtHour === "number"
+    ? monitor.runAtHour
+    : (sweepsHourly ? DEFAULT_SWEEP_HOUR : null);
+  if (wanted !== null) {
     // Compare against the sweep's own hour rather than a stored "next run"
     // timestamp: the cron is the clock, and a monitor whose hour has not come
     // around yet simply is not due on this tick.
     const hourNow = Math.floor(nowSec / 3600) % 24;
-    if (hourNow !== monitor.runAtHour) return false;
+    if (hourNow !== wanted) return false;
   }
+
   if (monitor.schedule === "weekly") return elapsed >= WEEK_SECONDS;
   return elapsed >= DAILY_MIN_GAP;
+}
+
+/**
+ * Does this cron expression fire more than once a day?
+ *
+ * Deliberately narrow: it answers the one question isDue needs, from the
+ * string Cloudflare hands the scheduled handler. Anything it cannot read
+ * confidently returns false, which is the conservative answer — a sweep that
+ * wrongly believes it is hourly would hold every monitor back to 03:00.
+ */
+export function cronSweepsHourly(cron) {
+  if (typeof cron !== "string") return false;
+  const fields = cron.trim().split(/\s+/);
+  if (fields.length < 2) return false;
+  const hour = fields[1];
+  return hour === "*" || hour.indexOf("/") !== -1 || hour.indexOf(",") !== -1 ||
+         hour.indexOf("-") !== -1;
 }

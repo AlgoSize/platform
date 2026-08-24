@@ -22,6 +22,7 @@ import { captureException } from "../observability.js";
 import { countBySeverity } from "../analyzers/audit.js";
 import {
   listMonitorsDue,
+  cronSweepsHourly,
   getMonitorById,
   recordMonitorRun,
   recordMonitorAttempt,
@@ -52,8 +53,12 @@ const MAX_MONITORS_PER_SWEEP = 1000;
  * Returns a small summary object so tests (and a future admin endpoint) can
  * assert what a sweep decided without reading logs.
  */
-export async function sweepDueMonitors(env, ctx, { now } = {}) {
+export async function sweepDueMonitors(env, ctx, { now, cron = null } = {}) {
   const nowSec = typeof now === "number" ? now : Math.floor(Date.now() / 1000);
+  // Read straight off the cron expression this invocation was fired with, so
+  // "does the sweep tick hourly" can never disagree with the trigger that
+  // asked the question. See isDue in monitors/_store.js for what it changes.
+  const sweepsHourly = cronSweepsHourly(cron);
 
   if (!env || !env.DB) {
     console.warn("monitors: no DB binding; skipping sweep");
@@ -62,7 +67,7 @@ export async function sweepDueMonitors(env, ctx, { now } = {}) {
 
   let due;
   try {
-    due = await listMonitorsDue(env, nowSec, MAX_MONITORS_PER_SWEEP);
+    due = await listMonitorsDue(env, nowSec, MAX_MONITORS_PER_SWEEP, { sweepsHourly });
   } catch (err) {
     await captureException(env, ctx, err, { tags: { source: "monitors", phase: "sweep_query" } });
     return { enqueued: 0, due: 0, skipped: "query_failed" };

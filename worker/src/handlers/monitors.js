@@ -49,7 +49,7 @@ function jsonResponse(body, status = 200) {
  * (request.user) or an API key (request.org). CI that can trigger scans
  * should be able to manage what gets scanned.
  */
-async function requireOrgContext(request, env) {
+export async function requireOrgContext(request, env) {
   if (request.org && request.org.orgId) {
     const entitlement = await resolveEntitlementForOrg(env, request.org.orgId, { request });
     if (!entitlement.org) {
