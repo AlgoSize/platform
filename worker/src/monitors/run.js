@@ -14,14 +14,18 @@
 // transient GitHub or OSV outage retries just the monitor it hit.
 
 import { runLockfileAudit } from "../handlers/analyze.js";
-import { getOrgBillingEmail } from "../handlers/_orgs.js";
+import { resolveMonitorRoute, monitorSlackText } from "./routing.js";
+import { postToSlack } from "../slack.js";
 import { sendTransactional as defaultSendTransactional } from "../email/transactional.js";
 import { monitorNewFindings } from "../email/templates.js";
 import { captureException } from "../observability.js";
+import { countBySeverity } from "../analyzers/audit.js";
 import {
   listMonitorsDue,
+  cronSweepsHourly,
   getMonitorById,
   recordMonitorRun,
+  recordMonitorAttempt,
 } from "./_store.js";
 import {
   diffAdvisories,
@@ -49,8 +53,12 @@ const MAX_MONITORS_PER_SWEEP = 1000;
  * Returns a small summary object so tests (and a future admin endpoint) can
  * assert what a sweep decided without reading logs.
  */
-export async function sweepDueMonitors(env, ctx, { now } = {}) {
+export async function sweepDueMonitors(env, ctx, { now, cron = null } = {}) {
   const nowSec = typeof now === "number" ? now : Math.floor(Date.now() / 1000);
+  // Read straight off the cron expression this invocation was fired with, so
+  // "does the sweep tick hourly" can never disagree with the trigger that
+  // asked the question. See isDue in monitors/_store.js for what it changes.
+  const sweepsHourly = cronSweepsHourly(cron);
 
   if (!env || !env.DB) {
     console.warn("monitors: no DB binding; skipping sweep");
@@ -59,7 +67,7 @@ export async function sweepDueMonitors(env, ctx, { now } = {}) {
 
   let due;
   try {
-    due = await listMonitorsDue(env, nowSec, MAX_MONITORS_PER_SWEEP);
+    due = await listMonitorsDue(env, nowSec, MAX_MONITORS_PER_SWEEP, { sweepsHourly });
   } catch (err) {
     await captureException(env, ctx, err, { tags: { source: "monitors", phase: "sweep_query" } });
     return { enqueued: 0, due: 0, skipped: "query_failed" };
@@ -134,6 +142,12 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
     // it must not be reported as a vulnerability change either. 5xx means
     // GitHub or OSV was unreachable, which is exactly what a retry is for.
     if (response.status >= 500) {
+      // Transient: baselines stay exactly where they are, but the attempt is
+      // recorded so the row can render "stale" rather than silently looking
+      // like it swept clean last night.
+      await recordMonitorAttempt(env, monitorId, {
+        status: "skipped", error: code, at: nowSec,
+      });
       const err = new Error(`monitor ${monitorId}: audit failed (${code})`);
       await captureException(env, ctx, err, {
         tags: { source: "monitors", phase: "audit", reason: code },
@@ -141,6 +155,12 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
       });
       throw err;   // let the Queue retry
     }
+    // Permanent: the monitor's own configuration is wrong, and retrying
+    // nightly will not fix it. Recorded so the screen can say so instead of
+    // showing "baseline pending" forever — the bug this replaces.
+    await recordMonitorAttempt(env, monitorId, {
+      status: "failed", error: code, at: nowSec,
+    });
     return { status: "audit_error", monitorId, code, retryable: false };
   }
 
@@ -223,6 +243,10 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
     ranAt:       nowSec,
     resultHash:  hashKeySet(diff.currentKeys),
     advisoryIds: diff.currentKeys,
+    // The severity mix behind that count (migrations/0017). Stored because
+    // the identity keys alone cannot be graded: six lows and one critical
+    // plus five lows are the same number and a very different repository.
+    severities:  countBySeverity(advisories),
     archKeys:    archBaseline,
     estimate:    estBaseline,
     algo:        algoBaseline,
@@ -258,14 +282,27 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
     };
   }
 
-  const to = await getOrgBillingEmail(env, monitor.orgId);
-  if (!to) {
-    return { status: "no_recipient", monitorId, newCount: diff.newAdvisories.length };
+  // Who actually hears about this. Not the billing owner by construction —
+  // every member who has monitor alerts switched on, plus the org's Slack
+  // channel if anyone subscribed it. See monitors/routing.js for why this
+  // moved out of here.
+  const route = await resolveMonitorRoute(env, monitor.orgId);
+  if (route.muted) {
+    // An org that has switched every channel off is not a failure — it is a
+    // choice, and it is reported as its own status so the run feed can say
+    // "found something, delivered nowhere" instead of implying an outage.
+    return {
+      status: "muted",
+      monitorId,
+      newCount: diff.newAdvisories.length,
+      reason: route.reason,
+      analyzersRun: analyzers,
+      skips,
+    };
   }
 
   const origin = (env.SITE_ORIGIN || "").replace(/\/$/, "");
-  const sent = await send(env, ctx, {
-    to,
+  const message = {
     ...monitorNewFindings({
       repoUrl:       monitor.repoUrl,
       branch:        monitor.branch,
@@ -293,14 +330,42 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
         skipped:      algoSkippedEntries,
       } : null,
     }),
-  });
+  };
 
-  await recordEmailSend(env, ctx, {
-    recipient: to,
-    template:  "monitor_new_findings",
-    orgId:     monitor.orgId,
-    result:    sent,
-  });
+  // One message, many addresses — sent individually rather than as a single
+  // multi-recipient mail so that one bad address cannot bounce the whole
+  // send, and so nobody learns their colleagues' addresses from a To: line.
+  const emailResults = [];
+  for (const recipient of route.emails) {
+    const sent = await send(env, ctx, { to: recipient.email, ...message });
+    emailResults.push(sent);
+    await recordEmailSend(env, ctx, {
+      recipient: recipient.email,
+      template:  "monitor_new_findings",
+      orgId:     monitor.orgId,
+      result:    sent,
+    });
+  }
+
+  // Slack is best-effort and posted after email. If it fails, the alert has
+  // still been delivered on the channel that is guaranteed to exist; the
+  // failure is captured for the operator and reported in the run result
+  // rather than retried, because a Queue retry here would re-send every
+  // email that already succeeded.
+  let slackResult = null;
+  if (route.slack.enabled) {
+    slackResult = await postToSlack(env, ctx, route.slack.url, {
+      text: monitorSlackText({
+        repoUrl:    monitor.repoUrl,
+        branch:     monitor.branch,
+        newCount:   diff.newAdvisories.length,
+        counts:     countBySeverityOrdered(diff.newAdvisories),
+        isBaseline: diff.isBaseline,
+        sections:   slackSections({ archDiff, estDiff, algoDiff }),
+        dashboardUrl: `${origin}/dashboard/`,
+      }),
+    }, fetchImpl);
+  }
 
   return {
     status:        "alerted",
@@ -308,7 +373,11 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
     newCount:      diff.newAdvisories.length,
     resolvedCount: diff.resolvedKeys.length,
     isBaseline:    diff.isBaseline,
-    emailed:       !!(sent && sent.sent),
+    emailed:       emailResults.some((r) => r && r.sent),
+    emailedCount:  emailResults.filter((r) => r && r.sent).length,
+    recipientCount: route.emails.length,
+    slacked:       !!(slackResult && slackResult.sent),
+    slackReason:   slackResult && !slackResult.sent ? slackResult.reason : null,
     analyzersRun:  analyzers,
     archNewCount:      archDiff ? archDiff.newFindings.length : 0,
     estimateChanged:   !!(estDiff && estDiff.shouldAlert),
@@ -342,4 +411,24 @@ export async function handleMonitorQueue(batch, env, ctx, opts = {}) {
       message.retry();
     }
   }
+}
+
+/**
+ * One line per secondary analyzer that alerted, for the Slack body.
+ *
+ * Kept beside the caller rather than in routing.js because it reads the diff
+ * shapes that only this module knows about.
+ */
+function slackSections({ archDiff, estDiff, algoDiff }) {
+  const out = [];
+  if (archDiff && archDiff.shouldAlert && archDiff.newFindings.length) {
+    out.push(`${archDiff.newFindings.length} new architecture finding${archDiff.newFindings.length === 1 ? "" : "s"}`);
+  }
+  if (estDiff && estDiff.shouldAlert && estDiff.changes && estDiff.changes.length) {
+    out.push(`${estDiff.changes.length} infrastructure cost change${estDiff.changes.length === 1 ? "" : "s"}`);
+  }
+  if (algoDiff && algoDiff.shouldAlert && algoDiff.regressions.length) {
+    out.push(`${algoDiff.regressions.length} complexity regression${algoDiff.regressions.length === 1 ? "" : "s"}`);
+  }
+  return out;
 }

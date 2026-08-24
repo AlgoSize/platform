@@ -1156,6 +1156,48 @@
   // most recent /api/me answer without a second request.
   var lastMe = null;
 
+  /**
+   * The Account control in the header: avatar, then the word.
+   *
+   * The avatar is an <img> when the account has one stored and the initials
+   * otherwise. Never a generic silhouette — the whole job of this element is
+   * to say WHICH account is signed in, and a silhouette says nothing. A URL
+   * that fails to load falls back to the initials rather than leaving a
+   * broken-image box, because the failure is invisible to the person who set
+   * it and they would have no idea anything was wrong.
+   *
+   * The accessible name carries the display name or email; the visible word
+   * is hidden by CSS on narrow screens, so it cannot be the only label.
+   */
+  function hydrateAccountControl(me) {
+    var link   = document.getElementById("account-link");
+    var avatar = document.getElementById("dash-avatar");
+    if (!link || !avatar || !me) return;
+
+    var who = me.displayName || me.email || null;
+    link.setAttribute("aria-label", who ? "Account settings for " + who : "Account settings");
+
+    avatar.textContent = "";
+    if (me.avatarUrl) {
+      var img = el("img", {
+        src: me.avatarUrl,
+        alt: "",
+        class: "dash-avatar-img",
+        loading: "lazy",
+        referrerpolicy: "no-referrer",
+      });
+      img.addEventListener("error", function () {
+        avatar.textContent = me.initials || "··";
+        avatar.classList.remove("has-image");
+      });
+      avatar.classList.add("has-image");
+      avatar.appendChild(img);
+      return;
+    }
+    avatar.classList.remove("has-image");
+    avatar.textContent = me.initials || "··";
+  }
+
   function hydrateHeader() {
     var emailEl   = document.getElementById("dash-user-email");
     var statusEl  = document.getElementById("dash-status");
@@ -1175,6 +1217,7 @@
         emailEl.textContent = me.email;
         emailEl.hidden = false;
       }
+      hydrateAccountControl(me);
 
       // Quota pill + segment meter: shown whenever entitlement is NOT
       // active. Never keyed off plan — plan stays "paid" through

@@ -22,11 +22,14 @@ import {
   deleteMonitor,
   setMonitorPaused,
   setMonitorAnalyzers,
+  setMonitorSchedule,
   normalizeAnalyzers,
+  normalizeHour,
   monitorLimitFor,
   SCHEDULES,
   MONITOR_ANALYZERS,
 } from "../monitors/_store.js";
+import { resolveMonitorRoute, describeRoute } from "../monitors/routing.js";
 import { auditFromRequest, AUDIT_ACTIONS } from "../audit.js";
 
 const MAX_URL_LEN    = 300;
@@ -46,7 +49,7 @@ function jsonResponse(body, status = 200) {
  * (request.user) or an API key (request.org). CI that can trigger scans
  * should be able to manage what gets scanned.
  */
-async function requireOrgContext(request, env) {
+export async function requireOrgContext(request, env) {
   if (request.org && request.org.orgId) {
     const entitlement = await resolveEntitlementForOrg(env, request.org.orgId, { request });
     if (!entitlement.org) {
@@ -111,6 +114,19 @@ function publicMonitor(m) {
     lastAlgo: m.lastAlgo
       ? { functions: Object.keys(m.lastAlgo.byName).length, at: m.lastAlgo.at }
       : null,
+    // Health of the last ATTEMPT, which is not the same fact as lastRunAt
+    // (migrations/0017). A monitor whose last three sweeps were skipped by a
+    // GitHub outage still reports a lastRunAt from a week ago and looks
+    // healthy; these three fields are what let the UI say "last produced a
+    // result 7 days ago, last tried 4 hours ago, and failed".
+    //
+    // null lastStatus means no sweep has attempted this monitor since the
+    // column existed — rendered as "pending", never as "ok".
+    lastStatus:     m.lastStatus,
+    lastAttemptAt:  m.lastAttemptAt,
+    lastError:      m.lastError,
+    // Hour-of-day in UTC this monitor prefers, or null for "any sweep".
+    runAtHour:      m.runAtHour,
   };
 }
 
@@ -164,6 +180,21 @@ export async function createMonitorHandler(request, env) {
     );
   }
 
+  // Optional hour-of-day in UTC (migrations/0017). An out-of-range value is
+  // refused rather than clamped: silently turning 25 into 23 would give
+  // someone an alert an hour before they expect it forever, with no sign
+  // anything was rejected.
+  let runAtHour = null;
+  if (body && body.runAtHour !== undefined && body.runAtHour !== null) {
+    runAtHour = normalizeHour(body.runAtHour);
+    if (runAtHour === null) {
+      return jsonResponse(
+        { error: "invalid_hour", message: "runAtHour must be a whole number from 0 to 23 (UTC), or null for any sweep." },
+        400,
+      );
+    }
+  }
+
   // Which analyzers to run (migrations/0016). Absent means vuln only — the
   // behaviour every monitor had before the column existed. Anything provided
   // must be an array drawn from the known set; "vuln" is forced in by
@@ -203,7 +234,7 @@ export async function createMonitorHandler(request, env) {
   try {
     monitor = await createMonitor(env, {
       orgId:     ctxOrg.orgId,
-      repoUrl, branch, schedule, analyzers,
+      repoUrl, branch, schedule, analyzers, runAtHour,
       createdBy: ctxOrg.userId,
     });
   } catch (err) {
@@ -344,4 +375,161 @@ export async function setMonitorAnalyzersHandler(request, env) {
   });
 
   return jsonResponse({ ok: true, monitor: publicMonitor(updated) });
+}
+
+
+// ---------------------------------------------------------------------------
+// POST /api/monitors/:id/schedule   body {schedule?, runAtHour?}
+// ---------------------------------------------------------------------------
+//
+// Split from the analyzers endpoint because they answer different questions
+// and fail differently: changing WHAT a monitor watches clears baselines,
+// changing WHEN it runs must not. Merging them into one PATCH would make it
+// possible to lose a baseline by editing a time.
+export async function setMonitorScheduleHandler(request, env) {
+  const ctxOrg = await requireOrgContext(request, env);
+  if (ctxOrg.error) return ctxOrg.error;
+
+  const monitorId = request.params && request.params.id;
+  if (!monitorId) return jsonResponse({ error: "invalid_request", message: "No monitor id supplied." }, 400);
+
+  const existing = await getMonitor(env, ctxOrg.orgId, monitorId);
+  if (!existing) {
+    return jsonResponse({ error: "not_found", message: "No monitor with that id on this organisation." }, 404);
+  }
+
+  let body;
+  try { body = await request.json(); }
+  catch { return jsonResponse({ error: "invalid_json", message: "Request body must be valid JSON." }, 400); }
+
+  const patch = {};
+  if (body && body.schedule !== undefined) {
+    if (!SCHEDULES.includes(body.schedule)) {
+      return jsonResponse(
+        { error: "invalid_schedule", message: `Schedule must be one of: ${SCHEDULES.join(", ")}.` },
+        400,
+      );
+    }
+    patch.schedule = body.schedule;
+  }
+  if (body && body.runAtHour !== undefined) {
+    // null is a real value here — it means "any sweep", the default.
+    if (body.runAtHour !== null && normalizeHour(body.runAtHour) === null) {
+      return jsonResponse(
+        { error: "invalid_hour", message: "runAtHour must be a whole number from 0 to 23 (UTC), or null for any sweep." },
+        400,
+      );
+    }
+    patch.runAtHour = body.runAtHour;
+  }
+  if (!Object.keys(patch).length) {
+    return jsonResponse({ error: "invalid_request", message: "Send schedule, runAtHour, or both." }, 400);
+  }
+
+  const updated = await setMonitorSchedule(env, ctxOrg.orgId, monitorId, patch);
+  if (!updated) {
+    return jsonResponse({ error: "not_found", message: "No monitor with that id on this organisation." }, 404);
+  }
+
+  await auditFromRequest(request, env, null, {
+    action:     AUDIT_ACTIONS.MONITOR_SCHEDULE_CHANGED,
+    targetType: "monitor",
+    targetId:   monitorId,
+    orgId:      ctxOrg.orgId,
+    metadata:   {
+      repoUrl: existing.repoUrl,
+      from: { schedule: existing.schedule, runAtHour: existing.runAtHour },
+      to:   { schedule: updated.schedule,  runAtHour: updated.runAtHour },
+    },
+  });
+
+  return jsonResponse({ ok: true, monitor: publicMonitor(updated) });
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/monitors/:id/run   — run this monitor now
+// ---------------------------------------------------------------------------
+//
+// Enqueues rather than running inline, and says so in the response. A monitor
+// check fetches manifests, queries OSV and may run three more analyzers; done
+// inside the request it would sit against one CPU budget with a browser
+// waiting on it, and a timeout would leave the caller unable to tell whether
+// the run happened. Putting it on the same queue the cron sweep uses means
+// the manual path and the scheduled path are the same code with the same
+// retry behaviour — so "it works when I click it but not overnight" cannot
+// happen.
+//
+// Returns 202: accepted, not completed. The UI polls the monitor list for the
+// new lastAttemptAt rather than being told a result that does not exist yet.
+export async function runMonitorNowHandler(request, env) {
+  const ctxOrg = await requireOrgContext(request, env);
+  if (ctxOrg.error) return ctxOrg.error;
+
+  const monitorId = request.params && request.params.id;
+  if (!monitorId) return jsonResponse({ error: "invalid_request", message: "No monitor id supplied." }, 400);
+
+  const monitor = await getMonitor(env, ctxOrg.orgId, monitorId);
+  if (!monitor) {
+    return jsonResponse({ error: "not_found", message: "No monitor with that id on this organisation." }, 404);
+  }
+
+  // A paused monitor stays paused. Running it on demand would advance the
+  // baseline, so resuming later would compare against a run the owner had
+  // already decided not to take — and the first real sweep would report
+  // nothing new when plenty had changed.
+  if (monitor.pausedAt !== null) {
+    return jsonResponse(
+      { error: "monitor_paused", message: "This monitor is paused. Resume it before running a check." },
+      409,
+    );
+  }
+
+  if (!env.SCAN_QUEUE) {
+    return jsonResponse(
+      { error: "queue_unavailable", message: "Scheduled scanning isn't available in this environment." },
+      503,
+    );
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  try {
+    await env.SCAN_QUEUE.send({ monitorId, enqueuedAt: now, manual: true });
+  } catch {
+    return jsonResponse(
+      { error: "enqueue_failed", message: "Could not queue the run. Try again in a moment." },
+      503,
+    );
+  }
+
+  await auditFromRequest(request, env, null, {
+    action:     AUDIT_ACTIONS.MONITOR_RUN_REQUESTED,
+    targetType: "monitor",
+    targetId:   monitorId,
+    orgId:      ctxOrg.orgId,
+    metadata:   { repoUrl: monitor.repoUrl, branch: monitor.branch },
+  });
+
+  return jsonResponse({
+    ok: true,
+    queued: true,
+    monitorId,
+    message: "Queued. The result appears on this monitor when the run finishes.",
+  }, 202);
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/monitors/route   — where the next alert actually goes
+// ---------------------------------------------------------------------------
+//
+// Not a restatement of the notification settings. This is the resolver the
+// sweep itself uses (monitors/routing.js), so what the card shows and what
+// gets delivered cannot drift apart — which is the entire point, given that
+// this whole path was previously mailing one hardcoded address while the
+// settings screen implied otherwise.
+export async function monitorRouteHandler(request, env) {
+  const ctxOrg = await requireOrgContext(request, env);
+  if (ctxOrg.error) return ctxOrg.error;
+
+  const route = await resolveMonitorRoute(env, ctxOrg.orgId);
+  return jsonResponse(describeRoute(route));
 }
