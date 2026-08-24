@@ -30,6 +30,7 @@ import {
   MONITOR_ANALYZERS,
 } from "../monitors/_store.js";
 import { resolveMonitorRoute, describeRoute } from "../monitors/routing.js";
+import { inspectMonitor, INSPECTABLE } from "../monitors/inspect.js";
 import { auditFromRequest, AUDIT_ACTIONS } from "../audit.js";
 
 const MAX_URL_LEN    = 300;
@@ -532,4 +533,115 @@ export async function monitorRouteHandler(request, env) {
 
   const route = await resolveMonitorRoute(env, ctxOrg.orgId);
   return jsonResponse(describeRoute(route));
+}
+
+
+// ---------------------------------------------------------------------------
+// GET /api/monitors/:id/result/:analyzer
+// ---------------------------------------------------------------------------
+//
+// The full current result of one analyzer on one monitored repository, in
+// exactly the shape that analyzer's manual endpoint returns — so the tool
+// page renders it with the renderer it already has rather than a second one
+// that could drift.
+//
+// This is what connects the monitors to the tools. Before it, an email saying
+// "3 new architecture findings" led to a page where the only way to see them
+// was to re-upload your own codebase by hand.
+//
+// It RE-RUNS the analyzer rather than reading a stored result, and it never
+// writes a baseline. Both of those are load-bearing — see the header of
+// monitors/inspect.js for why.
+export async function monitorResultHandler(request, env, ctx) {
+  const ctxOrg = await requireOrgContext(request, env);
+  if (ctxOrg.error) return ctxOrg.error;
+
+  const monitorId = request.params && request.params.id;
+  const analyzer  = request.params && request.params.analyzer;
+  if (!monitorId) {
+    return jsonResponse({ error: "invalid_request", message: "No monitor id supplied." }, 400);
+  }
+  if (!INSPECTABLE.includes(analyzer)) {
+    return jsonResponse({
+      error: "invalid_analyzer",
+      message: `Analyzer must be one of: ${INSPECTABLE.join(", ")}.`,
+    }, 400);
+  }
+
+  const monitor = await getMonitor(env, ctxOrg.orgId, monitorId);
+  if (!monitor) {
+    return jsonResponse({ error: "not_found", message: "No monitor with that id on this organisation." }, 404);
+  }
+
+  const fetchImpl = (env && env.FETCH) || globalThis.fetch;
+  let inspection;
+  try {
+    inspection = await inspectMonitor(env, ctx, monitor, analyzer, fetchImpl);
+  } catch (err) {
+    // An analyzer that throws here must not read as "your repo is clean".
+    return jsonResponse({
+      error: "inspect_failed",
+      message: "The analyzer could not be run against this repository just now.",
+      detail: String((err && err.message) || err).slice(0, 200),
+    }, 502);
+  }
+
+  if (inspection.status === "not_enabled") {
+    // 200, not an error: the monitor exists and is healthy, this analyzer is
+    // simply switched off for it. The page offers to turn it on.
+    return jsonResponse({
+      status:   "not_enabled",
+      analyzer,
+      monitorId,
+      repoUrl:  monitor.repoUrl,
+      branch:   monitor.branch,
+      message:  "This monitor does not run that analyzer. Switch it on and the next sweep will record a baseline.",
+    });
+  }
+
+  if (inspection.status !== "ok") {
+    // Also 200. "We could not read your repo" is a real answer about the
+    // repo, not a failure of this request — and an empty graph rendered as
+    // an error page loses the reason, which is the only actionable part.
+    return jsonResponse({
+      status:   "unavailable",
+      analyzer,
+      monitorId,
+      repoUrl:  monitor.repoUrl,
+      branch:   monitor.branch,
+      reason:   inspection.reason,
+      message:  explainUnavailable(inspection.reason),
+      baseline: inspection.baseline,
+    });
+  }
+
+  return jsonResponse({
+    status:     "ok",
+    analyzer,
+    monitorId,
+    repoUrl:    monitor.repoUrl,
+    branch:     monitor.branch,
+    // Recomputed now, from committed files — NOT the 03:00 snapshot. Said in
+    // the payload so the page can date what it is showing honestly.
+    computedAt: Math.floor(Date.now() / 1000),
+    result:     inspection.result,
+    baseline:   inspection.baseline,
+    delta:      inspection.delta,
+  });
+}
+
+/** A sentence for each way an analyzer can decline to produce a result. */
+function explainUnavailable(reason) {
+  const MAP = {
+    no_manifests:       "No manifests or config files were found in this repository, so there is nothing to map.",
+    no_compose:         "No compose file was found in this repository, so there is nothing to price.",
+    no_config:          "No optimizer.config.json was found at the repository root, so no function is being watched.",
+    config_invalid:     "optimizer.config.json is present but is not valid JSON.",
+    no_entries_ran:     "Every entry in optimizer.config.json was skipped — check the file and function names.",
+    github_throttled:   "GitHub rate-limited the request. This clears on its own; try again shortly.",
+    sandbox_unreachable:"The measurement sandbox is unreachable right now. The nightly sweep will retry.",
+    bad_repo_url:       "This monitor's repository URL could not be parsed.",
+    analyzer_failed:    "The analyzer could not process this repository's files.",
+  };
+  return MAP[reason] || "The analyzer could not produce a result for this repository just now.";
 }

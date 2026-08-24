@@ -1605,6 +1605,19 @@
     loadRuns: loadRuns,
     me: function () { return lastMe; },
     refreshMe: hydrateHeader,
+    // The three manual renderers, exposed so a result fetched from somewhere
+    // OTHER than this file's own run buttons can be drawn by the same code.
+    // The monitored half of each tool page uses these: a nightly result and
+    // a hand-run result are the same kind of thing and must never render
+    // through two implementations that can disagree about what a finding
+    // looks like. (rerunFromHistory already does exactly this internally —
+    // this just makes the same path reachable from another module.)
+    renderVuln: function (result) { showOutput("vuln", renderVuln(result)); },
+    renderCost: function (result) {
+      showOutput("cost", renderCost(result));
+      renderCostChart(result && result.suggestions);
+    },
+    renderAlgo: function (result) { showOutput("algo", renderAlgo(result)); },
   };
 
   if (document.readyState === "loading") {

@@ -374,8 +374,88 @@
         : "baseline " + (typeof m.lastAlgo.at === "number" ? core.formatRelativeTime(m.lastAlgo.at * 1000) : "recorded") +
           " · regressions email, improvements never do");
       row.appendChild(meta);
+
+      // Show the actual grades. Offered whenever the repo might have a
+      // config — not when the last sweep proved it has none, where the only
+      // possible outcome is "still no config".
+      if (!m.lastAlgo || m.lastAlgo.functions) {
+        var actions = el("div", { class: "night-actions" });
+        var open = el("button", { type: "button", class: "btn btn-ghost btn-sm" },
+          "Show the grades \u2192");
+        var slot = el("div");
+        open.addEventListener("click", function () { openMonitored(m, open, slot); });
+        actions.appendChild(open);
+        row.appendChild(actions);
+        row.appendChild(slot);
+      }
+
       wrap.appendChild(row);
     });
+  }
+
+  /**
+   * Load one monitored repo's current grades in place.
+   *
+   * Rendered as a TABLE under its own row rather than through the bench
+   * above, because they answer different questions: the bench measures one
+   * function you pasted, a watchlist is N committed functions against the N
+   * ceilings the repo asked for. Forcing the second into the first would
+   * throw away the ceilings, which are the only thing that makes a grade a
+   * verdict rather than a number.
+   *
+   * Re-measures from the repo's COMMITTED files via
+   * GET /api/monitors/:id/result/algo, which never advances the baseline.
+   */
+  function openMonitored(m, btn, slot) {
+    setBusy(btn, true, "Measuring\u2026");
+    callApi("/api/monitors/" + encodeURIComponent(m.monitorId) + "/result/algo", null, "GET")
+      .then(function (payload) {
+        while (slot.firstChild) slot.removeChild(slot.firstChild);
+
+        if (payload.status !== "ok") {
+          slot.appendChild(el("p", { class: "night-grade-skip" },
+            payload.message || "No grades for this repository."));
+          return;
+        }
+
+        var entries = (payload.result && payload.result.entries) || [];
+        var skipped = (payload.result && payload.result.skipped) || [];
+
+        if (!entries.length && !skipped.length) {
+          slot.appendChild(el("p", { class: "night-grade-skip" },
+            "The config lists no entries to measure."));
+          return;
+        }
+
+        var table = el("div", { class: "night-grades" });
+        entries.forEach(function (e) {
+          // No ceiling means the repo asked for a measurement, not a gate —
+          // so it can never be "over", and is not coloured as if it were.
+          var over = e.ceiling && e.grade &&
+            rank(e.grade) > rank(e.ceiling);
+          var r = el("div", {
+            class: "night-grade-row " + (!e.ceiling ? "" : over ? "night-grade-over" : "night-grade-ok"),
+          });
+          r.appendChild(el("span", { class: "night-grade-name mono" }, e.name));
+          r.appendChild(el("span", { class: "night-grade-value mono" },
+            e.grade ? pretty(e.grade) : "unmeasured"));
+          r.appendChild(el("span", { class: "night-grade-ceiling mono" },
+            e.ceiling ? "ceiling " + pretty(e.ceiling) : "no ceiling"));
+          table.appendChild(r);
+        });
+        // Entries the sweep could not measure are listed, not dropped: a
+        // watchlist that silently shrinks is one that stops covering things
+        // without ever saying so.
+        skipped.forEach(function (sk) {
+          var r = el("div", { class: "night-grade-row" });
+          r.appendChild(el("span", { class: "night-grade-name mono" }, sk.name || "unnamed"));
+          r.appendChild(el("span", { class: "night-grade-skip" }, sk.reason || "skipped"));
+          table.appendChild(r);
+        });
+        slot.appendChild(table);
+      })
+      .catch(function (e) { window.alert(e.message || "Could not measure that repository"); })
+      .then(function () { setBusy(btn, false); });
   }
 
   // -----------------------------------------------------------------------

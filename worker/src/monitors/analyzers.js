@@ -138,7 +138,12 @@ export async function runArchForMonitor(monitor, env, fetchImpl) {
 
   const findings = Array.isArray(result.findings) ? result.findings : [];
   const keys = [...new Set(findings.map(archFindingKey).filter(Boolean))].sort();
-  return { status: "ok", findings, keys };
+  // `result` is the WHOLE analyzer output — graph, clusters, findings — in
+  // exactly the shape POST /api/analyze/architecture returns. The sweep uses
+  // only findings and keys; it rides along so the inspect endpoint
+  // (monitors/inspect.js) can hand the X-ray a result it can draw without a
+  // second code path that could drift from this one.
+  return { status: "ok", findings, keys, result };
 }
 
 /** Diff arch findings against the stored baseline. Same contract as diffAdvisories. */
@@ -206,7 +211,10 @@ export async function runEstimateForMonitor(monitor, env, ctx, fetchImpl) {
       byProvider[p.providerId] = p.estimatedTotalMicroUsd;
     }
   }
-  return { status: "ok", byProvider, providers, disclaimer: body.disclaimer || null };
+  // Same reason as the arch pass: `body` is what POST /api/estimate returned,
+  // so the estimator page can render a monitored repo through its existing
+  // renderer instead of a parallel one.
+  return { status: "ok", byProvider, providers, disclaimer: body.disclaimer || null, result: body };
 }
 
 /**
@@ -357,7 +365,11 @@ export async function runAlgoForMonitor(monitor, env, fetchImpl) {
   if (!Object.keys(grades).length && skippedEntries.length) {
     return { status: "skipped", reason: "no_entries_ran" };
   }
-  return { status: "ok", grades, skippedEntries };
+  // `entries` is the committed optimizer.config.json, capped the same way the
+  // grades were. It rides along so the optimizer page can show each measured
+  // grade against the CEILING the repo asked for — a grade with no ceiling
+  // beside it is a number, not a verdict.
+  return { status: "ok", grades, skippedEntries, entries: capped };
 }
 
 /**
