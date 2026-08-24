@@ -43,6 +43,33 @@ export function gradeForScore(score) {
   return "F";
 }
 
+/**
+ * Score a severity tally, ceilings included.
+ *
+ * Exported because the scorecard (handlers/scorecard.js) grades a monitor's
+ * stored severity tally without re-running the audit, and two
+ * implementations of this would eventually disagree — putting a letter on
+ * the scorecard that the report it links to does not show.
+ *
+ * Severity caps. Pure arithmetic would give a repo with one leaked live AWS
+ * key a 75 — a "B" — because a single 25-point deduction leaves plenty of
+ * room. That is not how a security audit reads: one exposed credential or
+ * one remotely exploitable dependency is a failure regardless of how tidy
+ * everything else is. So the worst finding puts a ceiling on the grade, and
+ * additional findings can only push it lower.
+ */
+export function scoreForCounts(counts) {
+  let deductions = 0;
+  for (const [severity, n] of Object.entries(counts || {})) {
+    deductions += (SEVERITY_WEIGHT[severity] || 0) * n;
+  }
+  let score = Math.max(0, 100 - deductions);
+  if (counts.critical > 0)     score = Math.min(score, 39);   // F
+  else if (counts.high > 0)    score = Math.min(score, 59);   // D or worse
+  else if (counts.unknown > 0) score = Math.min(score, 74);   // C or worse
+  return score;
+}
+
 /** Highest severity present, or null when there's nothing at all. */
 export function worstSeverity(counts) {
   for (const s of SEVERITY_ORDER) {
@@ -151,21 +178,7 @@ export function buildAuditSummary({ findings = [], advisories = [], fixCommand =
   const all = [...findings, ...advisories];
   const counts = countBySeverity(all);
 
-  let deductions = 0;
-  for (const [severity, n] of Object.entries(counts)) {
-    deductions += (SEVERITY_WEIGHT[severity] || 0) * n;
-  }
-  let score = Math.max(0, 100 - deductions);
-
-  // Severity caps. Pure arithmetic would give a repo with one leaked live
-  // AWS key a 75 — a "B" — because a single 25-point deduction leaves
-  // plenty of room. That is not how a security audit reads: one exposed
-  // credential or one remotely exploitable dependency is a failure
-  // regardless of how tidy everything else is. So the worst finding puts a
-  // ceiling on the grade, and additional findings can only push it lower.
-  if (counts.critical > 0)  score = Math.min(score, 39);   // F
-  else if (counts.high > 0) score = Math.min(score, 59);   // D or worse
-  else if (counts.unknown > 0) score = Math.min(score, 74); // C or worse
+  const score = scoreForCounts(counts);
 
   const summary = {
     securityScore: score,

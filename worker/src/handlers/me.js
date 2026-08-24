@@ -20,6 +20,7 @@
 import { resolveEntitlement } from "../entitlement.js";
 import { peekUsage, FREE_MONTHLY_LIMIT } from "../quota.js";
 import { isAdmin } from "./admin.js";
+import { initialsFor } from "./account.js";
 
 export async function meHandler(request, env, ctx) {
   const sessionUser = request.user || {};
@@ -71,6 +72,20 @@ export async function meHandler(request, env, ctx) {
       // this wrong is a visibility bug, not a security one. Same allowlist
       // check admin.js uses, exported from there so there's one definition.
       isAdmin: isAdmin(env, email),
+      // Identity for the header's Account control. The avatar is rendered as
+      // an image when a URL is stored and as initials when it is not — never
+      // as a broken image, and never as a generic silhouette that gives no
+      // signal about which account is signed in.
+      //
+      // Both are already stored (migrations/0015) and were already editable
+      // on the Account screen; they simply were not returned here, so the
+      // header had nothing but an email address to work with.
+      displayName: (stored && stored.displayName) || null,
+      avatarUrl:   (stored && stored.avatarUrl)   || null,
+      // Computed server-side so the header and the Account screen show the
+      // same two letters. Deriving initials in two places is how "GL" in one
+      // corner and "gu" in another happens.
+      initials:    initialsFor({ displayName: stored && stored.displayName, email }),
     }),
     {
       status: 200,

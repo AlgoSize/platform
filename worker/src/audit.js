@@ -37,6 +37,8 @@ export const AUDIT_ACTIONS = Object.freeze({
   // Changing which analyzers a monitor runs changes what its owner is
   // relying on being watched — same reason a pause is logged.
   MONITOR_ANALYZERS_CHANGED: "monitor.analyzers_changed",
+  MONITOR_SCHEDULE_CHANGED:  "monitor.schedule_changed",
+  MONITOR_RUN_REQUESTED:     "monitor.run_requested",
   PLAN_CHANGED:      "billing.plan_changed",
   FLAG_UPDATED:      "flag.updated",
   SESSION_REVOKED:   "session.revoked",

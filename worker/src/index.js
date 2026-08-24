@@ -68,7 +68,11 @@ import {
   deleteMonitorHandler,
   pauseMonitorHandler,
   setMonitorAnalyzersHandler,
+  setMonitorScheduleHandler,
+  runMonitorNowHandler,
+  monitorRouteHandler,
 } from "./handlers/monitors.js";
+import { scorecardHandler } from "./handlers/scorecard.js";
 import { sweepDueMonitors, handleMonitorQueue } from "./monitors/run.js";
 import { logoutHandler } from "./handlers/logout.js";
 import { meHandler } from "./handlers/me.js";
@@ -402,6 +406,22 @@ router.post(  "/api/monitors/:id/pause", requireAuth, pauseMonitorHandler);
 // them read only committed repository files — see monitors/analyzers.js for
 // the rule that keeps them inside the no-credentials posture.
 router.post(  "/api/monitors/:id/analyzers", requireAuth, setMonitorAnalyzersHandler);
+// When a monitor runs (migrations/0017). Separate from /analyzers because
+// changing WHAT is watched clears baselines and changing WHEN must not.
+router.post(  "/api/monitors/:id/schedule",  requireAuth, setMonitorScheduleHandler);
+// Run one now. Enqueues onto the same queue the cron sweep uses and answers
+// 202 — the manual path and the scheduled path are the same code, so "works
+// when I click it, not overnight" cannot happen.
+router.post(  "/api/monitors/:id/run",       requireAuth, runMonitorNowHandler);
+// Where the next alert actually goes. Served by the resolver the sweep
+// itself calls, so the card and the delivery cannot drift apart.
+router.get(   "/api/monitors/route",         requireAuth, monitorRouteHandler);
+
+// ---- Scorecard — every monitored repo, every analyzer, one grid ----------
+// Read entirely from stored monitor baselines; nothing is computed on demand
+// and nothing is defaulted. A repo with no baseline reports "not measured",
+// never a passing grade. See handlers/scorecard.js.
+router.get(   "/api/scorecard",              requireAuth, scorecardHandler);
 
 // ---- Analytics noscript pixel (Task #26) ----------------------------------
 // Forwards a GET <img> request to Plausible's POST events API so visitors

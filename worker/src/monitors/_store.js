@@ -79,6 +79,20 @@ function rowToMonitor(row) {
     lastArchKeys:    parseIdList(row.last_arch_keys),
     lastEstimate:    parseEstimateBaseline(row.last_estimate_json),
     lastAlgo:        parseAlgoBaseline(row.last_algo_json),
+    // Per-severity tally of the last completed run's advisories
+    // (migrations/0017). null = never recorded; the scorecard renders that as
+    // "not graded" rather than inventing an A.
+    lastSeverities:  parseSeverities(row.last_severity_json),
+    // Health of the LAST attempt (migrations/0017). null = never attempted,
+    // which is the only honest "baseline pending" — every completed attempt
+    // writes one of 'ok' | 'failed' | 'skipped', so a repo that fails nightly
+    // can no longer masquerade as a monitor created this morning.
+    lastStatus:      typeof row.last_status === "string" ? row.last_status : null,
+    lastError:       typeof row.last_error === "string" ? row.last_error : null,
+    lastAttemptAt:   typeof row.last_attempt_at === "number" ? row.last_attempt_at : null,
+    // Hour of day (UTC, 0-23) this monitor wants to run at. null = whenever
+    // the sweep runs, which is what every pre-0017 row does.
+    runAtHour:       typeof row.run_at_hour === "number" ? row.run_at_hour : null,
     createdBy:       row.created_by || null,
     createdAt:       row.created_at,
     pausedAt:        typeof row.paused_at === "number" ? row.paused_at : null,
@@ -122,6 +136,25 @@ function parseAlgoBaseline(raw) {
       if (typeof v === "string" && v) byName[k] = v;
     }
     return { byName, at: typeof d.at === "number" ? d.at : null };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * {"critical":n,…} or null. Corrupt reads as null, which renders as "not
+ * graded" — never as a clean scorecard cell.
+ */
+function parseSeverities(raw) {
+  if (typeof raw !== "string" || !raw) return null;
+  try {
+    const d = JSON.parse(raw);
+    if (!d || typeof d !== "object") return null;
+    const out = {};
+    for (const k of ["critical", "high", "medium", "low", "unknown"]) {
+      out[k] = typeof d[k] === "number" && Number.isFinite(d[k]) ? d[k] : 0;
+    }
+    return out;
   } catch {
     return null;
   }
@@ -171,16 +204,54 @@ export async function countMonitors(env, orgId) {
 }
 
 export async function createMonitor(env, { orgId, repoUrl, branch = null, schedule = "daily",
-                                           createdBy = null, analyzers = null }) {
+                                           createdBy = null, analyzers = null, runAtHour = null }) {
   const now = Math.floor(Date.now() / 1000);
   const id  = newMonitorId();
   const set = normalizeAnalyzers(analyzers);
   await env.DB.prepare(
-    `INSERT INTO monitors (monitor_id, org_id, repo_url, branch, schedule, created_by, created_at, analyzers)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO monitors (monitor_id, org_id, repo_url, branch, schedule, created_by, created_at, analyzers, run_at_hour)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).bind(id, orgId, repoUrl, branch, schedule, createdBy, now,
-         set ? JSON.stringify(set) : null).run();
+         set ? JSON.stringify(set) : null, normalizeHour(runAtHour)).run();
   return getMonitorById(env, id);
+}
+
+/**
+ * An hour-of-day in UTC, or null for "whenever the sweep reaches it".
+ *
+ * Null is the historical behaviour and stays the default: the sweep runs at
+ * 03:00 UTC and every due monitor goes on the queue in that one pass. A
+ * stored hour narrows that to one sweep per day — useful for a team that
+ * wants the alert to land before standup in their own timezone rather than
+ * overnight, and the reason the column is an hour rather than a timestamp is
+ * that a monitor is a recurring intent, not an appointment.
+ */
+export function normalizeHour(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 0 || n > 23) return null;
+  return n;
+}
+
+/**
+ * Change when a monitor runs.
+ *
+ * Deliberately does NOT touch any baseline. Moving a monitor from 03:00 to
+ * 14:00 changes the delivery time of the next comparison, not what it is
+ * being compared against — clearing baselines here would turn a schedule
+ * edit into a silent "everything is new again" email.
+ */
+export async function setMonitorSchedule(env, orgId, monitorId, { schedule, runAtHour } = {}) {
+  const sets = [], binds = [];
+  if (schedule !== undefined) { sets.push("schedule = ?"); binds.push(schedule); }
+  if (runAtHour !== undefined) { sets.push("run_at_hour = ?"); binds.push(normalizeHour(runAtHour)); }
+  if (!sets.length) return getMonitor(env, orgId, monitorId);
+
+  const res = await env.DB.prepare(
+    `UPDATE monitors SET ${sets.join(", ")} WHERE monitor_id = ? AND org_id = ?`,
+  ).bind(...binds, monitorId, orgId).run();
+  if (!(res.meta && res.meta.changes)) return null;
+  return getMonitor(env, orgId, monitorId);
 }
 
 /**
@@ -241,9 +312,18 @@ export async function recordMonitorRun(env, monitorId, {
   // analyzer that could not run this sweep keeps its old baseline and diffs
   // correctly next time, instead of having its history wiped by an outage.
   archKeys = undefined, estimate = undefined, algo = undefined,
+  // Per-severity tally of the advisories this run saw (migrations/0017).
+  // Same `undefined` contract as the baselines above.
+  severities = undefined,
+  // Outcome of this attempt (migrations/0017). Defaults to "ok" because every
+  // existing caller of this function is on the success path; the failure and
+  // skip paths call recordMonitorAttempt below instead, which does NOT touch
+  // baselines.
+  status = "ok", error = null,
 }) {
-  const sets  = ["last_run_at = ?", "last_result_hash = ?", "last_advisory_ids = ?"];
-  const binds = [ranAt, resultHash, JSON.stringify(advisoryIds)];
+  const sets  = ["last_run_at = ?", "last_attempt_at = ?", "last_result_hash = ?",
+                 "last_advisory_ids = ?", "last_status = ?", "last_error = ?"];
+  const binds = [ranAt, ranAt, resultHash, JSON.stringify(advisoryIds), status, error];
   if (delta) { sets.push("last_delta_json = ?"); binds.push(JSON.stringify(delta)); }
   if (archKeys !== undefined) {
     sets.push("last_arch_keys = ?");
@@ -257,10 +337,47 @@ export async function recordMonitorRun(env, monitorId, {
     sets.push("last_algo_json = ?");
     binds.push(algo === null ? null : JSON.stringify(algo));
   }
+  if (severities !== undefined) {
+    sets.push("last_severity_json = ?");
+    binds.push(severities === null ? null : JSON.stringify(severities));
+  }
   binds.push(monitorId);
   await env.DB.prepare(
     `UPDATE monitors SET ${sets.join(", ")} WHERE monitor_id = ?`,
   ).bind(...binds).run();
+}
+
+/**
+ * Record an attempt that did NOT produce a usable result.
+ *
+ * Deliberately separate from recordMonitorRun, and deliberately narrow: it
+ * writes the status, the reason and the attempt time, and touches no baseline
+ * and no result hash. That separation is the whole safety property — a
+ * throttled night must leave every diff baseline exactly where the last
+ * successful sweep left it, or the next successful sweep reports the entire
+ * world as new.
+ *
+ * `status` is 'failed' (permanent — retrying will not fix it) or 'skipped'
+ * (transient — the next sweep may well succeed). last_run_at is NOT advanced
+ * for either: "when did this monitor last actually produce a result" is the
+ * question that field answers, and a failure did not.
+ */
+export async function recordMonitorAttempt(env, monitorId, { status, error = null, at = null }) {
+  if (!env || !env.DB || !monitorId) return false;
+  const sets  = ["last_status = ?", "last_error = ?"];
+  const binds = [status, error];
+  if (typeof at === "number") { sets.push("last_attempt_at = ?"); binds.push(at); }
+  binds.push(monitorId);
+  try {
+    await env.DB.prepare(
+      `UPDATE monitors SET ${sets.join(", ")} WHERE monitor_id = ?`,
+    ).bind(...binds).run();
+    return true;
+  } catch {
+    // Health is diagnostic, never load-bearing: failing to record why a sweep
+    // failed must not also fail the sweep.
+    return false;
+  }
 }
 
 /**
@@ -308,11 +425,30 @@ const WEEK_SECONDS = 7 * 86_400;
 // twice in one sweep.
 const DAILY_MIN_GAP = 20 * 3600;
 
-/** Whether a monitor's cadence says it should run now. */
+/**
+ * Whether a monitor's cadence says it should run now.
+ *
+ * `runAtHour` (migrations/0017) holds a monitor back until its own UTC hour
+ * has arrived. It is only consulted when the sweep is running at a DIFFERENT
+ * hour than the one requested, and only for monitors that have run before —
+ * a brand-new monitor is always due, because making someone wait a day to
+ * find out their repo URL was wrong is the behaviour the Run-now button
+ * exists to avoid, and holding the first sweep back would reintroduce it.
+ *
+ * null means "whenever the sweep runs", which is what every row created
+ * before this column existed does, so the default costs nothing.
+ */
 export function isDue(monitor, nowSec) {
   if (!monitor || monitor.pausedAt !== null) return false;
   if (monitor.lastRunAt === null) return true;      // never run — always due
   const elapsed = nowSec - monitor.lastRunAt;
+  if (typeof monitor.runAtHour === "number") {
+    // Compare against the sweep's own hour rather than a stored "next run"
+    // timestamp: the cron is the clock, and a monitor whose hour has not come
+    // around yet simply is not due on this tick.
+    const hourNow = Math.floor(nowSec / 3600) % 24;
+    if (hourNow !== monitor.runAtHour) return false;
+  }
   if (monitor.schedule === "weekly") return elapsed >= WEEK_SECONDS;
   return elapsed >= DAILY_MIN_GAP;
 }
