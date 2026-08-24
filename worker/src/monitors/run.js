@@ -39,6 +39,7 @@ import {
   runAlgoForMonitor, diffAlgoGrades,
 } from "./analyzers.js";
 import { recordEmailSend } from "../oplog.js";
+import { recordSnapshot } from "../arch/snapshots.js";
 
 // Bound on how many monitors one sweep enqueues. Far above any plausible
 // near-term monitor count; it exists so a runaway row count can't turn one
@@ -182,6 +183,26 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
     if (arch.status === "ok") {
       archDiff = diffArchFindings(arch.findings, arch.keys, monitor.lastArchKeys);
       archBaseline = archDiff.currentKeys;
+
+      // The nightly snapshot (migrations/0018). This is the one that makes the
+      // history CONTINUOUS rather than a scattering of whenever-someone-clicked
+      // — a repo under watch accumulates a graph per sweep without anyone
+      // asking, which is what "drift since last deploy" needs to be able to
+      // answer. Awaited rather than fire-and-forget: the sweep is already
+      // running on a queue with nothing waiting on it, and a snapshot that
+      // silently loses the race with the isolate shutting down is worse than
+      // one that costs a few extra milliseconds. It still cannot throw.
+      if (arch.result && arch.result.graph) {
+        await recordSnapshot(env, ctx, {
+          orgId:     monitor.orgId,
+          repoUrl:   monitor.repoUrl,
+          branch:    monitor.branch,
+          source:    "monitor",
+          graph:     arch.result.graph,
+          findingCount: arch.findings.length,
+          capturedAt: nowSec,
+        });
+      }
     } else if (arch.status === "no_manifests") {
       // A permanent condition, not an outage: record the empty set so a repo
       // that later gains a manifest baselines from "nothing", and the run

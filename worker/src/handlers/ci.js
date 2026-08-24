@@ -38,6 +38,7 @@ import { persistRun } from "./runs.js";
 import { storeReportFor } from "../reports/render.js";
 import { SUPPORTED_FILES as LOCKFILE_NAMES, MAX_LOCKFILE_BYTES } from "../analyzers/lockfile.js";
 import { validateArchitectureInput, analyzeArchitecture } from "../analyzers/architecture.js";
+import { recordSnapshot } from "../arch/snapshots.js";
 import { captureException } from "../observability.js";
 
 // Total submitted bytes. Generous next to the per-file cap (a monorepo can
@@ -314,6 +315,22 @@ export async function ciRunHandler(request, env, ctx) {
     if (archResult) {
       const bySeverity = (archResult.summary && archResult.summary.bySeverity) || {};
       const archFailed = shouldFail(bySeverity, v.value.archFailOn);
+
+      // A versioned snapshot per CI run (migrations/0018). This is the source
+      // that makes drift answerable on a pull request — "did this branch add a
+      // dependency" is a question about two graphs, and the commit sha is what
+      // lets a reviewer say WHICH two. Best-effort: a snapshot that fails to
+      // write must never turn a passing build red.
+      const archSnap = recordSnapshot(env, ctx, {
+        orgId,
+        repoUrl:   ciContext.repo || null,
+        branch:    ciContext.ref || null,
+        commitSha: ciContext.commitSha || null,
+        source:    "ci",
+        graph:     archResult.graph,
+        findingCount: Array.isArray(archResult.findings) ? archResult.findings.length : 0,
+      }).catch(() => null);
+      if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(archSnap);
 
       let archRun = null;
       try {

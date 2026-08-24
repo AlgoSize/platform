@@ -74,6 +74,11 @@ import {
   monitorResultHandler,
 } from "./handlers/monitors.js";
 import { scorecardHandler } from "./handlers/scorecard.js";
+import {
+  listArchSnapshotsHandler,
+  getArchSnapshotHandler,
+  archDiffHandler,
+} from "./handlers/arch_snapshots.js";
 import { sweepDueMonitors, handleMonitorQueue } from "./monitors/run.js";
 import { logoutHandler } from "./handlers/logout.js";
 import { meHandler } from "./handlers/me.js";
@@ -444,6 +449,15 @@ router.get(   "/api/monitors/:id/result/:analyzer", requireAuth, monitorResultHa
 // and nothing is defaulted. A repo with no baseline reports "not measured",
 // never a passing grade. See handlers/scorecard.js.
 router.get(   "/api/scorecard",              requireAuth, scorecardHandler);
+
+// ---- Architecture history (migrations/0018) ------------------------------
+// Every X-ray run — manual, CI or nightly — records a versioned snapshot of
+// the graph it built. These read that history back. Phase 1 ships the reads
+// with nothing rendering them yet, so the drift view has an endpoint to build
+// against rather than a schema to guess at. See src/arch/snapshots.js.
+router.get(   "/api/arch/snapshots",         requireAuth, listArchSnapshotsHandler);
+router.get(   "/api/arch/diff",              requireAuth, archDiffHandler);
+router.get(   "/api/arch/snapshots/:id",     requireAuth, getArchSnapshotHandler);
 
 // ---- Analytics noscript pixel (Task #26) ----------------------------------
 // Forwards a GET <img> request to Plausible's POST events API so visitors

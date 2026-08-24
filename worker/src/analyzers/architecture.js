@@ -21,6 +21,7 @@
 import { buildGraph } from "./architecture/graph.js";
 import { scoreGraph, countByLens, countBySeverity, UNIMPLEMENTED_RULES } from "./architecture/rules.js";
 import { recommend } from "./architecture/recommend.js";
+import { enrichGraph } from "./architecture/enrich.js";
 
 // Bounds. These mirror the lockfile analyzer's posture: cap the work, and
 // SAY when the cap bit rather than returning a confidently partial answer.
@@ -127,15 +128,21 @@ export function analyzeArchitecture({ files, oversized = [] }) {
     clusters,
   };
 
+  // Phase 1: add the fields drift, SPOF and trust-boundary work will fill in.
+  // Purely additive — every field it adds is null, and the rules engine above
+  // has already run against the un-enriched graph, so nothing here can change
+  // a finding. See architecture/enrich.js for why null means NOT MEASURED.
+  const enriched = enrichGraph(drawable);
+
   const severityCounts = countBySeverity(findings);
   return {
-    graph: drawable,
+    graph: enriched,
     findings,
     recommendations,
     summary: {
       clusters: clusters.length,
-      nodes: drawable.nodes.length,
-      edges: drawable.edges.length,
+      nodes: enriched.nodes.length,
+      edges: enriched.edges.length,
       findings: findings.length,
       byLens: countByLens(findings),
       bySeverity: severityCounts,
