@@ -1,0 +1,9 @@
+{
+  "$comment": "monthlyCeilingUsd is the number that fails a build, checked against the CHEAPEST priced provider. Omit it (or set it to null) to annotate the pull request without ever failing — which is the right setting until you have watched a few runs and trust the figure. `compose` is repo-root-relative.",
+  "compose": "docker-compose.yml",
+  "monthlyCeilingUsd": null,
+  "providers": [
+    "hetzner",
+    "aws"
+  ]
+}

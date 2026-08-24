@@ -546,35 +546,30 @@
         "the catalog, not a statement that the stack is free."));
     }
 
-    if (resources.length) {
-      var rs = el("section", { class: "report-section" });
-      var rh = el("div", { class: "report-section-head" });
-      rh.appendChild(el("h3", null, "What was priced"));
-      rh.appendChild(el("span", { class: "mono report-section-note" },
-        resources.length + " resource" + (resources.length === 1 ? "" : "s")));
-      rs.appendChild(rh);
-
-      var rscroll = el("div", { class: "report-table-scroll" });
-      var rtable = el("div", { class: "report-table" });
-      var rhr = el("div", { class: "report-table-row report-table-head" });
-      ["Resource", "Replicas", "vCPU", "Memory", "Storage"].forEach(function (h) {
-        rhr.appendChild(el("span", { class: "mono" }, h));
-      });
-      rtable.appendChild(rhr);
-      resources.forEach(function (r) {
-        var row = el("div", { class: "report-table-row" });
-        row.appendChild(el("span", { class: "mono" }, r.name || r.id || "—"));
-        row.appendChild(el("span", { class: "mono" }, String(r.quantity != null ? r.quantity : 1)));
-        row.appendChild(el("span", { class: "mono" }, milli(r.cpuMilli, "")));
-        row.appendChild(el("span", { class: "mono" }, milli(r.memoryMilliGiB, " GiB")));
-        row.appendChild(el("span", { class: "mono" }, milli(r.storageMilliGiB, " GiB")));
-        rtable.appendChild(row);
-      });
-      rscroll.appendChild(rtable);
-      rs.appendChild(rscroll);
-      wrap.appendChild(rs);
+    // No per-resource table, and its absence is stated rather than left as a
+    // gap. The estimator's HTTP boundary refuses to record parsed resource
+    // values — a resource id can be a service name, a region can identify a
+    // customer — so run history keeps totals and a count and nothing else.
+    // An empty table here would read as "the estimate covered nothing".
+    if (result.specRetained === false) {
+      var kept = el("section", { class: "report-section" });
+      var kh = el("div", { class: "report-section-head" });
+      kh.appendChild(el("h3", null, "What was priced"));
+      kh.appendChild(el("span", { class: "mono report-section-note" },
+        (result.resourceCount || 0) + " resource" + (result.resourceCount === 1 ? "" : "s") +
+        (result.warningCount ? " · " + result.warningCount + " assumption" +
+          (result.warningCount === 1 ? "" : "s") + " applied" : "")));
+      kept.appendChild(kh);
+      kept.appendChild(el("p", { class: "report-note" }, result.specNote ||
+        "The submitted specification was not retained, so the resources cannot be listed here. " +
+        "Re-run the estimator to see them."));
+      wrap.appendChild(kept);
     }
 
+    // Warnings quote resources by name ("resource 'payments-db' has no
+    // storage class"), which is exactly what the boundary refuses to record,
+    // so only their count survives — rendered above. A live estimate on the
+    // estimator page still shows them in full.
     var warnings = Array.isArray(result.warnings) ? result.warnings : [];
     if (warnings.length) {
       wrap.appendChild(warningList(warnings));

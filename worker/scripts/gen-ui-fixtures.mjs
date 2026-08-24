@@ -26,6 +26,8 @@ import { getAccountHandler, listSessionsHandler, listLoginsHandler,
 import { billingSummaryHandler, billingInvoicesHandler } from "../src/handlers/billing.js";
 import { listApiKeysHandler } from "../src/handlers/keys.js";
 import { getOrgHandler } from "../src/handlers/org.js";
+import { ciSnippetHandler, ciOptimizerSnippetHandler,
+         ciEstimateSnippetHandler, ciArchitectureSnippetHandler } from "../src/handlers/ci.js";
 import { getReferralsHandler } from "../src/handlers/referrals.js";
 import { listMonitorsHandler } from "../src/handlers/monitors.js";
 import { scorecardHandler } from "../src/handlers/scorecard.js";
@@ -36,6 +38,7 @@ import { createMonitor, recordMonitorRun } from "../src/monitors/_store.js";
 import { getRunHandler } from "../src/handlers/runs.js";
 import { analyzeArchitecture } from "../src/analyzers/architecture.js";
 import { persistRun } from "../src/handlers/runs.js";
+import { aggregateOf } from "../src/handlers/estimate_history.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUT = join(__dirname, "..", "..", "tests", "fixtures");
@@ -195,11 +198,14 @@ async function seed() {
     },
   });
 
+  // Through aggregateOf(), so the stored shape is the one the recorder
+  // actually produces rather than a hand-written guess at it. A fixture that
+  // carries fields the recorder strips would let the report render data that
+  // never reaches it in production.
   await persistRun(env, {
     orgId: ORG, userId: USER, analyzer: "estimate", source: "manual", ms: 31.7,
-    input: { inputType: "compose", name: "acme-stack", resourceCount: 3,
-             providers: ["hetzner", "aws"], duration: "1mo" },
-    result: {
+    input: { inputType: "compose", resourceCount: 3 },
+    result: aggregateOf({
       normalizedSpec: { name: "acme-stack", resources: [
         { name: "api", quantity: 3, cpuMilli: 500, memoryMilliGiB: 1024, storageMilliGiB: 0 },
         { name: "worker", quantity: 1, cpuMilli: 1000, memoryMilliGiB: 2048, storageMilliGiB: 0 },
@@ -215,9 +221,9 @@ async function seed() {
       ],
       warnings: ["No duration was declared, so one month was assumed.",
                  "Storage class was not specified; standard block storage was priced."],
-      duration: "1mo", currency: "USD", pricingCatalogVersion: "2026-08",
+      duration: "1mo", currency: "USD", pricingCatalogVersion: "2026-08", inputType: "compose",
       disclaimer: "List prices against the submitted specification. Not a quote, and not your bill.",
-    },
+    }),
   });
 
   await persistRun(env, {
@@ -264,6 +270,10 @@ const run = async () => {
   await cap("/api/org", getOrgHandler);
   await cap("/api/account/org", getOrgHandler);   // alias the Account page uses
   await cap("/api/referrals", getReferralsHandler);
+  await cap("/api/ci/snippet", ciSnippetHandler);
+  await cap("/api/ci/optimizer-snippet", ciOptimizerSnippetHandler);
+  await cap("/api/ci/estimate-snippet", ciEstimateSnippetHandler);
+  await cap("/api/ci/architecture-snippet", ciArchitectureSnippetHandler);
   await cap("/api/monitors", listMonitorsHandler);
   await cap("/api/monitors/route", monitorRouteHandler);
   await cap("/api/scorecard", scorecardHandler);

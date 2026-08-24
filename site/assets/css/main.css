@@ -4679,6 +4679,17 @@ a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
    a severity the analyzer never assigned. */
 .report-finding-unknown { border-left-color: var(--border-soft); }
 
+/* Explanatory prose inside a report section — used where a table would be if
+   the data existed. Set as body text rather than as a warning banner: "we
+   deliberately did not keep this" is a design decision being disclosed, not
+   a problem to alarm anyone about. */
+.report-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  max-width: 68ch;
+}
+
 @media print {
   /* Tables must not be cut off at the page edge in a printed report — the
      screen scroller has no equivalent on paper. */

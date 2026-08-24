@@ -86,7 +86,8 @@ import {
   revokeRunShareHandler,
   sharedReportHandler,
 } from "./handlers/runs.js";
-import { ciRunHandler, ciSnippetHandler, ciOptimizerSnippetHandler } from "./handlers/ci.js";
+import { ciRunHandler, ciSnippetHandler, ciOptimizerSnippetHandler,
+         ciEstimateSnippetHandler, ciArchitectureSnippetHandler } from "./handlers/ci.js";
 import {
   billingPortalHandler,
   billingSummaryHandler,
@@ -123,6 +124,7 @@ import { makeRateLimit, makeApiKeyRateLimit } from "./middleware/rate-limit.js";
 import { captureException } from "./observability.js";
 import { generateFixHandler } from "./handlers/fix.js";
 import { estimateHandler, estimateProvidersHandler } from "./handlers/estimate.js";
+import { withEstimateHistory } from "./handlers/estimate_history.js";
 export { UsageCounter } from "./usage-counter.js";
 
 const router = Router();
@@ -203,7 +205,15 @@ router.post("/api/fix", analyzeRateLimit, requireAuth, generateFixHandler);
 // sanitizing boundary both paths share.
 //
 // Metered like the other analyzers — an estimate is a run.
-router.post("/api/estimate", analyzeRateLimit, requireAuth, apiKeyAnalyzeRateLimit, enforceQuota(estimateHandler));
+// The history wrapper sits OUTSIDE the estimator's own handler on purpose.
+// handlers/estimate.js is a sanitizing boundary whose module header forbids
+// persisting anything derived from a submitted configuration, and a test
+// asserts that file contains no persistence reach at all — a structural
+// guarantee rather than a careful one. So the filing happens here, from a
+// module that sees only the sanitized response the boundary chose to return,
+// and copies an allowlisted aggregate of it. See handlers/estimate_history.js.
+router.post("/api/estimate", analyzeRateLimit, requireAuth, apiKeyAnalyzeRateLimit,
+            enforceQuota(withEstimateHistory(estimateHandler)));
 // Catalog metadata for the provider picker. Not quota-metered: it is a page
 // load, not a run, and charging for it would make the form cost a run to open.
 router.get("/api/estimate/providers", requireAuth, estimateProvidersHandler);
@@ -303,6 +313,11 @@ router.get( "/api/ci/snippet", requireAuth, ciSnippetHandler);
 // same manifest drives the scheduled monitors' optimizer pass, so the
 // nightly sweep and the CI gate watch the same functions by construction.
 router.get( "/api/ci/optimizer-snippet", requireAuth, ciOptimizerSnippetHandler);
+// The remaining two gates. The architecture endpoint has accepted `files`
+// since the X-ray shipped, but with no workflow and no snippet nobody could
+// reach it without hand-writing YAML against an undocumented body.
+router.get( "/api/ci/estimate-snippet",     requireAuth, ciEstimateSnippetHandler);
+router.get( "/api/ci/architecture-snippet", requireAuth, ciArchitectureSnippetHandler);
 
 // ---- Stripe Customer Portal (Task #18) — manage card / cancel / invoices --
 router.post("/api/billing/portal",  requireAuth, billingPortalHandler);

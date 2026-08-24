@@ -840,3 +840,335 @@ jobs:
           NODE
 `;
 }
+
+// ---------------------------------------------------------------------------
+// GET /api/ci/estimate-snippet
+// ---------------------------------------------------------------------------
+
+/**
+ * The infrastructure-cost budget gate.
+ *
+ * Deliberately the only gate that stores nothing. It posts a compose file to
+ * /api/estimate, reads the cheapest monthly total, and compares it to a
+ * ceiling committed in the repository. The estimator's HTTP boundary refuses
+ * to record parsed resource values, so a gate that needed run history to work
+ * would have to weaken that — this one does not need it. What ends up in run
+ * history is the aggregate the recorder keeps, which is a side effect of the
+ * call rather than a dependency of the gate.
+ *
+ * The budget lives in the repo rather than in a dashboard setting for the
+ * same reason the optimizer's ceilings do: the number that fails a build
+ * should be reviewable in the pull request that changes it.
+ */
+export function ciEstimateSnippetHandler(request, env) {
+  const origin = (env.SITE_ORIGIN || "https://algosize.com").replace(/\/$/, "");
+  return json({
+    filename: ".github/workflows/algosize-estimate.yml",
+    configFilename: "algosize.budget.json",
+    secretName: "ALGOSIZE_API_KEY",
+    setupSteps: [
+      "Use the same ALGOSIZE_API_KEY repository secret the dependency audit uses — there is nothing new to create.",
+      "Commit algosize.budget.json at the repo root with your monthly ceiling, or leave it out to annotate without ever failing a build.",
+      "Commit the workflow file below.",
+    ],
+    configExample: buildBudgetExample(),
+    workflow: buildEstimateWorkflow({ origin }),
+  }, 200);
+}
+
+export function buildBudgetExample() {
+  return JSON.stringify({
+    "$comment": "monthlyCeilingUsd is the number that fails a build, checked against the CHEAPEST priced provider. Omit it (or set it to null) to annotate the pull request without ever failing — which is the right setting until you have watched a few runs and trust the figure. `compose` is repo-root-relative.",
+    compose: "docker-compose.yml",
+    monthlyCeilingUsd: null,
+    providers: ["hetzner", "aws"],
+  }, null, 2);
+}
+
+export function buildEstimateWorkflow({ origin }) {
+  return `name: Algosize infrastructure cost
+
+# Prices the committed compose file on every pull request and, when a ceiling
+# is declared, fails the build if the cheapest provider is over it.
+#
+# What this does NOT do, and will not be made to do: connect to a cloud
+# account. There is no credential here and none is accepted. Every figure is
+# a list price applied to what the compose file declares — which is why it
+# can run on a fork's pull request, and why it says "not your bill" every
+# time it reports one.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  estimate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Missing secret is a skip with a notice, never a red build. A gate that
+      # fails closed on setup is a gate somebody deletes on their first busy
+      # afternoon.
+      - name: Check for the API key
+        id: key
+        env:
+          ALGOSIZE_API_KEY: \${{ secrets.ALGOSIZE_API_KEY }}
+        run: |
+          if [ -z "$ALGOSIZE_API_KEY" ]; then
+            echo "::notice::ALGOSIZE_API_KEY is not set — skipping the cost estimate."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Read the budget
+        if: steps.key.outputs.skip != 'true'
+        id: budget
+        run: |
+          COMPOSE=docker-compose.yml
+          CEILING=
+          PROVIDERS='["hetzner","aws"]'
+          if [ -f algosize.budget.json ]; then
+            COMPOSE=$(jq -r '.compose // "docker-compose.yml"' algosize.budget.json)
+            CEILING=$(jq -r '.monthlyCeilingUsd // empty' algosize.budget.json)
+            PROVIDERS=$(jq -c '.providers // ["hetzner","aws"]' algosize.budget.json)
+          fi
+          echo "compose=$COMPOSE"     >> "$GITHUB_OUTPUT"
+          echo "ceiling=$CEILING"     >> "$GITHUB_OUTPUT"
+          echo "providers=$PROVIDERS" >> "$GITHUB_OUTPUT"
+          if [ ! -f "$COMPOSE" ]; then
+            echo "::notice::No $COMPOSE in this repository — nothing to price."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Estimate
+        if: steps.key.outputs.skip != 'true' && steps.budget.outputs.skip != 'true'
+        id: run
+        env:
+          ALGOSIZE_API_KEY: \${{ secrets.ALGOSIZE_API_KEY }}
+        run: |
+          jq -n \
+            --rawfile compose "\${{ steps.budget.outputs.compose }}" \
+            --argjson providers '\${{ steps.budget.outputs.providers }}' \
+            '{inputType:"compose", content:$compose, options:{providers:$providers}}' > payload.json
+
+          HTTP=$(curl -sS -o response.json -w '%{http_code}' \
+            -X POST "${origin}/api/estimate" \
+            -H "Authorization: Bearer $ALGOSIZE_API_KEY" \
+            -H "Content-Type: application/json" \
+            --data @payload.json)
+
+          if [ "$HTTP" != "200" ]; then
+            echo "::warning::The estimator returned HTTP $HTTP — annotating without a verdict."
+            jq -r '.message // .error // "no detail"' response.json || true
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Cheapest priced provider. Providers that could not be priced are
+          # excluded rather than counted as zero.
+          jq -r '[.providers[] | select(.estimatedTotalMicroUsd != null)]
+                 | sort_by(.estimatedTotalMicroUsd) | .[0]
+                 | "cheapest_usd=\(.estimatedTotalMicroUsd / 1000000)",
+                   "cheapest_name=\(.providerName // .providerId)"' response.json >> "$GITHUB_OUTPUT"
+          jq -r '"resources=\(.normalizedSpec.resources | length)"' response.json >> "$GITHUB_OUTPUT"
+
+      - name: Comment and gate
+        if: steps.key.outputs.skip != 'true' && steps.budget.outputs.skip != 'true' && steps.run.outputs.skip != 'true'
+        env:
+          GH_TOKEN: \${{ github.token }}
+          CEILING:  \${{ steps.budget.outputs.ceiling }}
+          USD:      \${{ steps.run.outputs.cheapest_usd }}
+          NAME:     \${{ steps.run.outputs.cheapest_name }}
+          RESOURCES: \${{ steps.run.outputs.resources }}
+          PR: \${{ github.event.pull_request.number }}
+        run: |
+          VERDICT="No ceiling is set, so this is an annotation only."
+          FAIL=0
+          if [ -n "$CEILING" ]; then
+            if awk "BEGIN{exit !($USD > $CEILING)}"; then
+              VERDICT="Over the \$$CEILING/mo ceiling."
+              FAIL=1
+            else
+              VERDICT="Within the \$$CEILING/mo ceiling."
+            fi
+          fi
+
+          {
+            echo "<!-- algosize-estimate -->"
+            echo "### Infrastructure cost"
+            echo
+            echo "**\$$USD / month** on $NAME — cheapest of the priced providers, $RESOURCES resources."
+            echo
+            echo "$VERDICT"
+            echo
+            echo "_List prices against the committed compose file. Not a quote, and not your bill._"
+            echo "_No cloud account was contacted and no credential was used._"
+          } > comment.md
+
+          gh pr comment "$PR" --body-file comment.md --edit-last || \
+            gh pr comment "$PR" --body-file comment.md
+
+          if [ "$FAIL" = "1" ]; then
+            echo "::error::Estimated monthly cost \$$USD exceeds the \$$CEILING ceiling."
+            exit 1
+          fi
+`;
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/ci/architecture-snippet
+// ---------------------------------------------------------------------------
+
+/**
+ * The architecture gate.
+ *
+ * POST /api/ci/runs has accepted `files` since the X-ray shipped, but there
+ * was no workflow and no snippet, so the capability existed and nobody could
+ * reach it without hand-writing YAML against an undocumented body. This is
+ * that YAML.
+ *
+ * Defaults to arch_fail_on "none" — annotate, never fail. Architecture
+ * findings are judgements about structure rather than facts about a
+ * published advisory, and a build that goes red over a judgement on the day
+ * it is switched on is a build people learn to ignore.
+ */
+export function ciArchitectureSnippetHandler(request, env) {
+  const origin = (env.SITE_ORIGIN || "https://algosize.com").replace(/\/$/, "");
+  return json({
+    filename: ".github/workflows/algosize-architecture.yml",
+    secretName: "ALGOSIZE_API_KEY",
+    setupSteps: [
+      "Use the same ALGOSIZE_API_KEY repository secret the dependency audit uses.",
+      "Commit the workflow file below. It annotates by default and fails nothing until you raise arch_fail_on.",
+    ],
+    workflow: buildArchitectureWorkflow({ origin }),
+  }, 200);
+}
+
+export function buildArchitectureWorkflow({ origin }) {
+  return `name: Algosize architecture
+
+# Maps the module graph on every pull request and reports what changed shape.
+# Submits source PATHS and contents to the same endpoint the dependency audit
+# uses; the result is stored as findings and paths, never as a copy of the
+# files.
+#
+# arch_fail_on is "none" by default: this annotates and fails nothing. Raise
+# it to "critical" once you have watched a few runs and agree with what it
+# calls critical.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  architecture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for the API key
+        id: key
+        env:
+          ALGOSIZE_API_KEY: \${{ secrets.ALGOSIZE_API_KEY }}
+        run: |
+          if [ -z "$ALGOSIZE_API_KEY" ]; then
+            echo "::notice::ALGOSIZE_API_KEY is not set — skipping the architecture map."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Collect source
+        if: steps.key.outputs.skip != 'true'
+        id: collect
+        run: |
+          # Source only, and bounded. Build output and vendored dependencies
+          # carry no signal about YOUR architecture and would dominate the graph.
+          find . \
+            -path ./node_modules -prune -o \
+            -path ./.git -prune -o \
+            -path ./dist -prune -o \
+            -path ./build -prune -o \
+            -path ./vendor -prune -o \
+            -type f \( -name '*.js' -o -name '*.mjs' -o -name '*.ts' -o -name '*.tsx' -o -name '*.py' -o -name '*.go' \) \
+            -size -200k -print | head -400 | sed 's|^\./||' > files.txt
+
+          COUNT=$(wc -l < files.txt | tr -d ' ')
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          if [ "$COUNT" = "0" ]; then
+            echo "::notice::No source files matched — nothing to map."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Map
+        if: steps.key.outputs.skip != 'true' && steps.collect.outputs.skip != 'true'
+        id: run
+        env:
+          ALGOSIZE_API_KEY: \${{ secrets.ALGOSIZE_API_KEY }}
+        run: |
+          jq -Rn --arg repo "\${{ github.repository }}" \
+                 --arg ref "\${{ github.head_ref }}" \
+                 --arg sha "\${{ github.event.pull_request.head.sha }}" \
+            '{repo:$repo, ref:$ref, commit_sha:$sha, arch_fail_on:"none",
+              files:[inputs | {path:., content:""}]}' < files.txt > skeleton.json
+
+          # Read each file into its entry. Done in jq rather than in the shell
+          # so contents are JSON-escaped exactly once.
+          python3 - <<'PY' > payload.json
+          import json, pathlib
+          skel = json.load(open("skeleton.json"))
+          out = []
+          for entry in skel["files"]:
+              p = pathlib.Path(entry["path"])
+              try:
+                  out.append({"path": entry["path"], "content": p.read_text(errors="replace")})
+              except OSError:
+                  pass
+          skel["files"] = out
+          json.dump(skel, open("/dev/stdout", "w"))
+          PY
+
+          HTTP=$(curl -sS -o response.json -w '%{http_code}' \
+            -X POST "${origin}/api/ci/runs" \
+            -H "Authorization: Bearer $ALGOSIZE_API_KEY" \
+            -H "Content-Type: application/json" \
+            --data @payload.json)
+
+          if [ "$HTTP" != "200" ]; then
+            echo "::warning::The architecture endpoint returned HTTP $HTTP — annotating without a verdict."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          jq -r '.architecture
+                 | "clusters=\(.summary.clusters // 0)",
+                   "findings=\(.summary.findings // 0)",
+                   "worst=\(.worstSeverity // "none")",
+                   "failed=\(.failed)"' response.json >> "$GITHUB_OUTPUT"
+
+      - name: Comment
+        if: steps.key.outputs.skip != 'true' && steps.collect.outputs.skip != 'true' && steps.run.outputs.skip != 'true'
+        env:
+          GH_TOKEN: \${{ github.token }}
+          PR: \${{ github.event.pull_request.number }}
+        run: |
+          {
+            echo "<!-- algosize-architecture -->"
+            echo "### Architecture"
+            echo
+            echo "\${{ steps.collect.outputs.count }} files · \${{ steps.run.outputs.clusters }} clusters · \${{ steps.run.outputs.findings }} findings (worst: \${{ steps.run.outputs.worst }})"
+          } > comment.md
+          gh pr comment "$PR" --body-file comment.md --edit-last || \
+            gh pr comment "$PR" --body-file comment.md
+
+          if [ "\${{ steps.run.outputs.failed }}" = "true" ]; then
+            echo "::error::Architecture findings exceeded the configured threshold."
+            exit 1
+          fi
+`;
+}

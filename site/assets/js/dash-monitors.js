@@ -582,6 +582,41 @@
     });
   }
 
+  /**
+   * The two gates that had no UI.
+   *
+   * Same shape as the optimizer loader and deliberately not generalised into
+   * one: each snippet endpoint returns a different set of fields, and a
+   * shared loader driven by a config object would be longer than the three
+   * copies and harder to read when one of them changes.
+   */
+  function loadEstimateSnippet() {
+    var yamlEl = document.getElementById("ci-est-yaml");
+    var cfgEl  = document.getElementById("ci-est-config");
+    var fileEl = document.getElementById("ci-est-filename");
+    var cfgNameEl = document.getElementById("ci-est-config-filename");
+    return callApi("/api/ci/estimate-snippet", null, "GET").then(function (res) {
+      if (fileEl && res.filename) fileEl.textContent = res.filename;
+      if (cfgNameEl && res.configFilename) cfgNameEl.textContent = res.configFilename;
+      if (cfgEl) cfgEl.textContent = res.configExample || "";
+      if (yamlEl) yamlEl.textContent = res.workflow || "";
+    }).catch(function (e) {
+      if (yamlEl) yamlEl.textContent = "Could not load the workflow: " + (e.message || "error");
+      if (cfgEl) cfgEl.textContent = "Could not load the example.";
+    });
+  }
+
+  function loadArchitectureSnippet() {
+    var yamlEl = document.getElementById("ci-arch-yaml");
+    var fileEl = document.getElementById("ci-arch-filename");
+    return callApi("/api/ci/architecture-snippet", null, "GET").then(function (res) {
+      if (fileEl && res.filename) fileEl.textContent = res.filename;
+      if (yamlEl) yamlEl.textContent = res.workflow || "";
+    }).catch(function (e) {
+      if (yamlEl) yamlEl.textContent = "Could not load the workflow: " + (e.message || "error");
+    });
+  }
+
   function checkFirstRun() {
     var dot = document.getElementById("ci-status-dot");
     var text = document.getElementById("ci-status-text");
@@ -781,7 +816,8 @@
       checkFirstRun(),
       loadAlertRoute(),
     ];
-    if (first) jobs.push(loadSnippet(), loadOptimizerSnippet());
+    if (first) jobs.push(loadSnippet(), loadOptimizerSnippet(),
+                         loadEstimateSnippet(), loadArchitectureSnippet());
     return Promise.all(jobs);
   }
 

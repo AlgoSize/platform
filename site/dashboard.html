@@ -812,6 +812,90 @@ permalink: /dashboard/
         </div>
       </section>
 
+      <!-- ============= CI: INFRASTRUCTURE COST (D-9) =============
+           The only gate that stores nothing to do its job. It prices the
+           committed compose file and compares the cheapest provider to a
+           ceiling committed beside it — no cloud account, no credential,
+           which is what lets it run on a fork's pull request. -->
+      <section class="panel" id="panel-ci-estimate">
+        <header class="panel-head">
+          <div class="panel-heading">
+            <span class="panel-tag">CI</span>
+            <h2>Gate the infrastructure bill</h2>
+            <p class="panel-desc">Prices the compose file on every pull request and fails the build only when the cheapest provider goes over a ceiling you commit. Leave the ceiling out and it annotates without ever failing.</p>
+          </div>
+        </header>
+        <div class="panel-body">
+          <ol class="wizard" id="ci-est-wizard">
+            <li class="wizard-step">
+              <div class="wizard-step-head">
+                <span class="wizard-n" aria-hidden="true">1</span>
+                <h3>Reuse the audit's API key</h3>
+              </div>
+              <p class="wizard-copy">Same <code>ALGOSIZE_API_KEY</code> repository secret as every other gate. If the dependency audit is set up, this step is done.</p>
+            </li>
+            <li class="wizard-step">
+              <div class="wizard-step-head">
+                <span class="wizard-n" aria-hidden="true">2</span>
+                <h3>Commit the budget, or don't</h3>
+              </div>
+              <p class="wizard-copy">Save as <code class="mono" id="ci-est-config-filename">algosize.budget.json</code>. Shipping it with a null ceiling is the recommended start: watch a few runs before you let a number fail a build.</p>
+              <div class="snippet-row snippet-row-tall">
+                <pre class="result-snippet" id="ci-est-config">Loading example…</pre>
+                <button type="button" class="btn btn-ghost btn-sm" data-copy-target="ci-est-config">Copy</button>
+              </div>
+            </li>
+            <li class="wizard-step">
+              <div class="wizard-step-head">
+                <span class="wizard-n" aria-hidden="true">3</span>
+                <h3>Commit the workflow file</h3>
+              </div>
+              <p class="wizard-copy">Save as <code class="mono" id="ci-est-filename">.github/workflows/algosize-estimate.yml</code>. Every comment it posts repeats that these are list prices and that no cloud account was contacted.</p>
+              <div class="snippet-row snippet-row-tall">
+                <pre class="result-snippet" id="ci-est-yaml">Loading workflow…</pre>
+                <button type="button" class="btn btn-ghost btn-sm" data-copy-target="ci-est-yaml">Copy</button>
+              </div>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <!-- ============= CI: ARCHITECTURE (D-9) =============
+           The endpoint has accepted `files` since the X-ray shipped; there
+           was simply no workflow and no snippet, so the capability existed
+           and nobody could reach it without hand-writing YAML. -->
+      <section class="panel" id="panel-ci-architecture">
+        <header class="panel-head">
+          <div class="panel-heading">
+            <span class="panel-tag">CI</span>
+            <h2>Watch the shape of the codebase</h2>
+            <p class="panel-desc">Maps the module graph on every pull request and reports what changed. Annotates by default and fails nothing until you raise the threshold yourself.</p>
+          </div>
+        </header>
+        <div class="panel-body">
+          <ol class="wizard" id="ci-arch-wizard">
+            <li class="wizard-step">
+              <div class="wizard-step-head">
+                <span class="wizard-n" aria-hidden="true">1</span>
+                <h3>Reuse the audit's API key</h3>
+              </div>
+              <p class="wizard-copy">Same secret again. Nothing new to create.</p>
+            </li>
+            <li class="wizard-step">
+              <div class="wizard-step-head">
+                <span class="wizard-n" aria-hidden="true">2</span>
+                <h3>Commit the workflow file</h3>
+              </div>
+              <p class="wizard-copy">Save as <code class="mono" id="ci-arch-filename">.github/workflows/algosize-architecture.yml</code>. Findings and paths are stored; the submitted source never is.</p>
+              <div class="snippet-row snippet-row-tall">
+                <pre class="result-snippet" id="ci-arch-yaml">Loading workflow…</pre>
+                <button type="button" class="btn btn-ghost btn-sm" data-copy-target="ci-arch-yaml">Copy</button>
+              </div>
+            </li>
+          </ol>
+        </div>
+      </section>
+
       <section class="panel" id="panel-ci-optimizer">
         <header class="panel-head">
           <div class="panel-heading">

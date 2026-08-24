@@ -1,0 +1,121 @@
+name: Algosize infrastructure cost
+
+# Prices the committed compose file on every pull request and, when a ceiling
+# is declared, fails the build if the cheapest provider is over it.
+#
+# What this does NOT do, and will not be made to do: connect to a cloud
+# account. There is no credential here and none is accepted. Every figure is
+# a list price applied to what the compose file declares — which is why it
+# can run on a fork's pull request, and why it says "not your bill" every
+# time it reports one.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  estimate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Missing secret is a skip with a notice, never a red build. A gate that
+      # fails closed on setup is a gate somebody deletes on their first busy
+      # afternoon.
+      - name: Check for the API key
+        id: key
+        env:
+          ALGOSIZE_API_KEY: ${{ secrets.ALGOSIZE_API_KEY }}
+        run: |
+          if [ -z "$ALGOSIZE_API_KEY" ]; then
+            echo "::notice::ALGOSIZE_API_KEY is not set — skipping the cost estimate."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Read the budget
+        if: steps.key.outputs.skip != 'true'
+        id: budget
+        run: |
+          COMPOSE=docker-compose.yml
+          CEILING=
+          PROVIDERS='["hetzner","aws"]'
+          if [ -f algosize.budget.json ]; then
+            COMPOSE=$(jq -r '.compose // "docker-compose.yml"' algosize.budget.json)
+            CEILING=$(jq -r '.monthlyCeilingUsd // empty' algosize.budget.json)
+            PROVIDERS=$(jq -c '.providers // ["hetzner","aws"]' algosize.budget.json)
+          fi
+          echo "compose=$COMPOSE"     >> "$GITHUB_OUTPUT"
+          echo "ceiling=$CEILING"     >> "$GITHUB_OUTPUT"
+          echo "providers=$PROVIDERS" >> "$GITHUB_OUTPUT"
+          if [ ! -f "$COMPOSE" ]; then
+            echo "::notice::No $COMPOSE in this repository — nothing to price."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Estimate
+        if: steps.key.outputs.skip != 'true' && steps.budget.outputs.skip != 'true'
+        id: run
+        env:
+          ALGOSIZE_API_KEY: ${{ secrets.ALGOSIZE_API_KEY }}
+        run: |
+          jq -n             --rawfile compose "${{ steps.budget.outputs.compose }}"             --argjson providers '${{ steps.budget.outputs.providers }}'             '{inputType:"compose", content:$compose, options:{providers:$providers}}' > payload.json
+
+          HTTP=$(curl -sS -o response.json -w '%{http_code}'             -X POST "https://algosize.com/api/estimate"             -H "Authorization: Bearer $ALGOSIZE_API_KEY"             -H "Content-Type: application/json"             --data @payload.json)
+
+          if [ "$HTTP" != "200" ]; then
+            echo "::warning::The estimator returned HTTP $HTTP — annotating without a verdict."
+            jq -r '.message // .error // "no detail"' response.json || true
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Cheapest priced provider. Providers that could not be priced are
+          # excluded rather than counted as zero.
+          jq -r '[.providers[] | select(.estimatedTotalMicroUsd != null)]
+                 | sort_by(.estimatedTotalMicroUsd) | .[0]
+                 | "cheapest_usd=(.estimatedTotalMicroUsd / 1000000)",
+                   "cheapest_name=(.providerName // .providerId)"' response.json >> "$GITHUB_OUTPUT"
+          jq -r '"resources=(.normalizedSpec.resources | length)"' response.json >> "$GITHUB_OUTPUT"
+
+      - name: Comment and gate
+        if: steps.key.outputs.skip != 'true' && steps.budget.outputs.skip != 'true' && steps.run.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CEILING:  ${{ steps.budget.outputs.ceiling }}
+          USD:      ${{ steps.run.outputs.cheapest_usd }}
+          NAME:     ${{ steps.run.outputs.cheapest_name }}
+          RESOURCES: ${{ steps.run.outputs.resources }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          VERDICT="No ceiling is set, so this is an annotation only."
+          FAIL=0
+          if [ -n "$CEILING" ]; then
+            if awk "BEGIN{exit !($USD > $CEILING)}"; then
+              VERDICT="Over the $$CEILING/mo ceiling."
+              FAIL=1
+            else
+              VERDICT="Within the $$CEILING/mo ceiling."
+            fi
+          fi
+
+          {
+            echo "<!-- algosize-estimate -->"
+            echo "### Infrastructure cost"
+            echo
+            echo "**$$USD / month** on $NAME — cheapest of the priced providers, $RESOURCES resources."
+            echo
+            echo "$VERDICT"
+            echo
+            echo "_List prices against the committed compose file. Not a quote, and not your bill._"
+            echo "_No cloud account was contacted and no credential was used._"
+          } > comment.md
+
+          gh pr comment "$PR" --body-file comment.md --edit-last ||             gh pr comment "$PR" --body-file comment.md
+
+          if [ "$FAIL" = "1" ]; then
+            echo "::error::Estimated monthly cost $$USD exceeds the $$CEILING ceiling."
+            exit 1
+          fi
