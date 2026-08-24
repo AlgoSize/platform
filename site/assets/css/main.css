@@ -1197,20 +1197,44 @@ code, .mono {
   font-size: var(--fs-xs);
 }
 
-/* Dashboard top bar
-   Five section tabs plus a busy signed-in actions cluster (email, quota
-   pill, plan pill, billing button, Account, Admin, Sign out) don't fit one
-   row within --content's 1120px cap at ANY viewport width — unlike the
-   marketing nav, this isn't a narrow-screen problem to media-query around.
-   So the dashboard header is always two deliberate rows: brand + actions on
-   top, the full-width tab strip below. Scoped to .dash-nav so the shared
-   marketing .nav-inner (just a brand and a couple of links) is untouched. */
-.dash-nav .nav-inner { flex-wrap: wrap; gap: var(--s-2) var(--s-4); }
+/* Dashboard top bar — one row, brand and sections left, controls right.
+   It took two rows when there were five tabs and seven signed-in controls,
+   which did not fit inside --content's 1120px cap at any width. Two of those
+   pressures are gone: the strip is down to two tabs, and the signed-in email
+   was removed outright (the avatar already identifies the account, and the
+   address was a long variable-width string that shoved everything else
+   around). What remains fits one line, so it gets one line.
+   Scoped to .dash-nav so the shared marketing .nav-inner is untouched. */
+.dash-nav .nav-inner {
+  flex-wrap: nowrap;
+  gap: var(--s-4);
+  align-items: flex-start;
+}
+
+/* The left group is the one allowed to shrink. Its tab strip already scrolls
+   horizontally, so squeezing it degrades gracefully; squeezing the right
+   group would clip a button someone needs to press. */
+.dash-nav-left {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.dash-nav-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.3rem;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
 
 .dash-nav-actions {
   display: inline-flex;
   align-items: center;
-  gap: var(--s-4);
+  gap: var(--s-3);
 }
 .dash-status {
   display: none;
@@ -1232,24 +1256,18 @@ code, .mono {
   background: #b15a5a;
   box-shadow: 0 0 0 4px color-mix(in srgb, #b15a5a 22%, transparent);
 }
-.dash-user-email {
-  display: none;
-  font-size: var(--fs-xs);
-  color: var(--text-muted);
-  max-width: 22ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.dash-user-email[hidden] { display: none !important; }
 /* Same [hidden]-override fix for the Manage billing button (Task #18) — the
    .btn rule sets display:inline-flex which would otherwise win over the
    user-agent default for [hidden]. */
 #billing-portal-btn[hidden] { display: none !important; }
 
-/* --- Quota pill (Task #19) — "X / 5" for free, "Unlimited" for paid --- */
+/* --- Quota pill (Task #19) — "X / 5" for free, "Unlimited" for paid ---
+   Shown at every width, unlike the plan pill. It used to be hidden below
+   640px because it was competing for room on the one header row; now it sits
+   on its own line beneath the Account button, so it costs no horizontal
+   space and there is no reason to deny a phone the number. */
 .dash-quota {
-  display: none;
+  display: inline-flex;
   align-items: center;
   gap: var(--s-2);
   padding: 0.2rem 0.55rem;
@@ -1276,11 +1294,47 @@ code, .mono {
 }
 .dash-quota--depleted .dash-quota-value { color: #f3c4c4; }
 .dash-quota--unlimited .dash-quota-value { color: var(--accent); }
+/* The plan pill DOES still compete for the actions row, so it stays a
+   wide-screen affordance. Its information is never only here — the Account
+   screen's billing section says the same thing in full sentences. */
 @media (min-width: 640px) {
   .dash-status { display: inline-flex; }
-  .dash-user-email { display: inline-block; }
-  .dash-quota { display: inline-flex; }
 }
+
+/* ---- Header at narrow widths -------------------------------------------
+   The row never wraps. What gives, in order, is the least identifying text:
+   the brand word (the mark still says who we are), then the word "Account"
+   (the avatar is the control, and its accessible name carries the meaning).
+   The tab strip shrinks last and scrolls rather than clipping. */
+@media (max-width: 860px) {
+  .dash-nav .nav-inner { gap: var(--s-3); }
+  .dash-nav-actions { gap: var(--s-2); }
+  .brand-word { display: none; }
+}
+@media (max-width: 620px) {
+  .dash-account-word { display: none; }
+  .dash-account { padding: 4px 6px; }
+  .dash-tab { padding: 0.35rem 0.6rem; font-size: 0.82rem; }
+  .dash-nav-right { gap: 0.25rem; }
+  .dash-quota { padding: 0.15rem 0.45rem; font-size: 0.68rem; }
+  .dash-quota-meter { display: none; }
+}
+
+/* Touch targets in the bar.
+   Everything here is aimed at with a thumb, and a 17px-tall wordmark or a
+   34px pill is a miss waiting to happen — the WCAG 2.5.8 floor is 24px and
+   the practical floor on a phone is around 44px. These heights cost nothing
+   on a pointer device (the bar is already taller than the text) and are the
+   difference between hitting Account and hitting Sign out. */
+.dash-nav .brand,
+.dash-tab,
+.dash-account,
+.dash-nav-actions .btn {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+}
+.dash-tab { justify-content: center; }
 
 /* --- Quota upgrade banner (Task #19) — revealed on 402 quota_exceeded --- */
 .quota-banner {
@@ -1387,7 +1441,15 @@ code, .mono {
   padding: var(--s-5);
   display: grid;
   gap: var(--s-3);
+  /* Grid items default to min-width:auto and refuse to shrink below their
+     content. Every wide thing in this app — the scorecard table, a YAML
+     snippet, a findings row — lives inside a panel body, and each of them
+     already has its own overflow-x scroller. Without this, that scroller
+     never gets the chance: the grid grows to fit instead and takes the whole
+     page sideways with it. */
+  min-width: 0;
 }
+.panel-body > * { min-width: 0; }
 .panel-input-label {
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
@@ -2117,6 +2179,11 @@ code, .mono {
   border: 1px solid var(--border);
   border-radius: 9px;
   background: var(--bg-elevated);
+  /* Wraps rather than overflowing. Three filter buttons plus a Refresh don't
+     fit beside a panel title at 360px, and a control that runs off the edge
+     is a control nobody can press. */
+  flex-wrap: wrap;
+  max-width: 100%;
 }
 .seg-btn {
   padding: 0.3rem 0.7rem;
@@ -2556,9 +2623,17 @@ button.analyzer-opt:focus-visible { outline: 2px solid var(--accent); outline-of
 }
 
 /* --- CI wizard (D-3) --- */
-.wizard { list-style: none; margin: 0 0 var(--s-5); padding: 0; display: grid; gap: var(--s-5); }
-.wizard-step { display: grid; gap: var(--s-2); }
-.wizard-step-head { display: flex; gap: var(--s-3); align-items: center; }
+/* min-width:0 on every grid/flex level down to the <pre>.
+   A grid or flex item defaults to min-width:auto, which refuses to shrink
+   below its content — and the content here is a YAML snippet with
+   white-space:pre and 80-character lines. The <pre> itself already scrolls,
+   but that never got a chance to matter: each ancestor grew to fit it
+   instead, pushing the whole wizard ~600px past a phone's viewport. Every
+   link in the chain has to opt out of auto for the innermost scroller to do
+   its job. */
+.wizard { list-style: none; margin: 0 0 var(--s-5); padding: 0; display: grid; gap: var(--s-5); min-width: 0; }
+.wizard-step { display: grid; gap: var(--s-2); min-width: 0; }
+.wizard-step-head { display: flex; gap: var(--s-3); align-items: center; min-width: 0; }
 .wizard-step-head h3 { font-size: var(--fs-md); }
 .wizard-n {
   display: grid;
@@ -2573,13 +2648,27 @@ button.analyzer-opt:focus-visible { outline: 2px solid var(--accent); outline-of
   color: var(--text-muted);
   flex: 0 0 auto;
 }
-.wizard-copy { color: var(--text-muted); font-size: var(--fs-sm); max-width: 70ch; }
-.snippet-row { display: flex; gap: var(--s-2); align-items: flex-start; }
+/* overflow-wrap so an unbroken token — a URL, a workflow path — wraps rather
+   than setting the paragraph's minimum width to its own length. */
+.wizard-copy {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  max-width: 70ch;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.snippet-row { display: flex; gap: var(--s-2); align-items: flex-start; min-width: 0; }
 .snippet-row .result-snippet { flex: 1 1 auto; min-width: 0; margin: 0; }
 .snippet-row .btn { flex: 0 0 auto; }
 .snippet-row .panel-input { flex: 1 1 auto; min-width: 0; }
 .snippet-row-tall .result-snippet { max-height: 380px; overflow: auto; }
 .result-snippet-inline { font-size: var(--fs-xs); padding: var(--s-2) var(--s-3); }
+@media (max-width: 560px) {
+  /* Copy under the snippet rather than beside it — side by side leaves the
+     code roughly 40 characters wide, which is not reading, it is guessing. */
+  .snippet-row { flex-direction: column; align-items: stretch; }
+  .snippet-row .btn { align-self: flex-start; }
+}
 
 .ci-status {
   display: flex;
@@ -3442,6 +3531,13 @@ input.acct-input, select.acct-input { min-height: 44px; }
   border-radius: var(--radius);
   background: #0d1118;
   overflow: hidden;
+  /* max-width alone caps how WIDE it can get and says nothing about how
+     narrow it may become. Inside a grid or flex parent it still refuses to
+     shrink past its content — a referral URL and a Copy button — and on a
+     phone that put it ~50px outside the pane. width:100% plus min-width:0
+     is what actually makes it fit the column it is in. */
+  width: 100%;
+  min-width: 0;
   max-width: 460px;
 }
 .acct-copy-value {
@@ -4092,7 +4188,9 @@ input.acct-input, select.acct-input { min-height: 44px; }
   color: var(--text);
   font-size: var(--fs-sm);
   font-weight: 600;
-  min-height: 34px;
+  /* 40px, matching every other control in the bar. It was 34, which on a
+     phone sits inside the miss radius of the Sign out button beside it. */
+  min-height: 40px;
 }
 .dash-account:hover { border-color: var(--text-muted); color: var(--text); }
 .dash-account[aria-current="page"] { border-color: var(--accent); }
@@ -4114,10 +4212,6 @@ input.acct-input, select.acct-input { min-height: 44px; }
    them would otherwise show as a ring around a non-square photo. */
 .dash-avatar.has-image { background: var(--border); }
 .dash-avatar-img { width: 100%; height: 100%; object-fit: cover; display: block; }
-@media (max-width: 520px) {
-  .dash-account-word { display: none; }
-  .dash-account { padding: 4px; }
-}
 
 /* --- Split page head: title left, one link right --- */
 .dash-head-split {
@@ -4192,7 +4286,7 @@ a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
 }
 
 /* --- Service scorecard --- */
-.scorecard-scroll { overflow-x: auto; }
+.scorecard-scroll { overflow-x: auto; min-width: 0; max-width: 100%; }
 .scorecard { min-width: 720px; }
 .scorecard-row {
   display: flex;
@@ -4430,3 +4524,175 @@ a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
 .night-grade-over .night-grade-value { color: #f3c4c4; }
 .night-grade-ok .night-grade-value   { color: var(--accent-2); }
 .night-grade-skip { font-size: 0.72rem; color: var(--accent-warm); overflow-wrap: anywhere; }
+
+
+/* ==========================================================================
+   Touch targets
+   ==========================================================================
+   Everything below applies only where a finger is the pointer. It is scoped
+   to `pointer: coarse` rather than to a width, because the question is not
+   "is the screen small" — a 1024px tablet is a finger device and a 400px
+   desktop window is not. Getting that wrong is how a mouse user ends up with
+   a toolbar of oversized buttons.
+
+   40px is the working floor. WCAG 2.5.8 asks for 24px as a minimum and the
+   platform guidance from both Apple and Google lands around 44; 40 with the
+   surrounding gap clears the practical bar without redesigning dense rows
+   into a list of slabs.
+
+   Inline links inside running prose are deliberately NOT included. They are
+   read and occasionally followed, not aimed at, and padding them out breaks
+   the line rhythm of the paragraph they live in. */
+@media (pointer: coarse) {
+  .btn,
+  .btn-sm,
+  .seg-btn,
+  .choice-btn,
+  .dash-tab,
+  .dash-account,
+  .dash-crumb,
+  .dash-head-aside,
+  .acct-nav-item,
+  .scorecard-enable,
+  .ws-tool-open,
+  select.panel-input,
+  input.panel-input {
+    min-height: 40px;
+  }
+
+  /* Anything that is a flex/inline-flex control needs its content centred
+     once it is taller than its text, or the label sits against the top. */
+  .btn, .btn-sm, .seg-btn, .dash-tab, .dash-account, .acct-nav-item {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Two links that are navigation dressed as text. They get the height, and
+     the padding that makes the height reachable rather than a tall box with
+     a small hot spot in it. */
+  .dash-crumb, .dash-head-aside {
+    display: inline-flex;
+    align-items: center;
+    padding-block: var(--s-2);
+  }
+
+  /* The footer's link list is the last thing on every page and the easiest
+     to mis-tap, because the rows are set tight for desktop reading. */
+  .footer-inner a { min-height: 40px; display: inline-flex; align-items: center; }
+
+  /* Toggle chips — the per-monitor analyzer switches. They are 22px tall
+     because they are sized like labels, but they are buttons that change
+     what a nightly sweep runs, and four of them sit in a row a few pixels
+     apart. Given the height rather than the width so the row still reads as
+     a set of tags rather than four more buttons. */
+  .chip-toggle { min-height: 40px; display: inline-flex; align-items: center; }
+}
+
+/* ==========================================================================
+   Report — the non-audit analyzers
+   ==========================================================================
+   The report used to refuse anything that was not a dependency audit, so
+   four of the five tools led to a dead end from Recent runs. Each analyzer
+   now brings its own body and shares the chrome.
+
+   They do not share a layout, deliberately. A letter grade is meaningful for
+   a security audit and meaningless for a cost estimate; a severity ramp
+   applies to architecture findings and not to a Big-O measurement. Forcing
+   all five through one template would either flatten them into a row of
+   numbers or invent a severity for things that have none. */
+
+/* The headline figure where an audit shows its grade. Same optical weight as
+   .report-grade, but set as text rather than boxed — a price and a
+   complexity class are read, not scored. */
+.report-bigo,
+.report-price {
+  font-size: 1.9rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  line-height: 1;
+}
+.report-price { color: var(--accent-2); }
+
+/* Neutral count tiles for the architecture shape band, which counts things
+   that have no severity. The severity variants keep their own colours. */
+.report-count-ok  .report-count-n { color: var(--accent-2); }
+.report-count-bad .report-count-n { color: #f3c4c4; }
+
+/* --- Tables (provider prices, sampled timings, priced resources) --- */
+.report-table-scroll { overflow-x: auto; min-width: 0; }
+.report-table {
+  min-width: 480px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+/* Flex, not grid.
+   `grid-template-columns: 2fr repeat(auto-fit, minmax(0,1fr))` reads like it
+   makes columns and does not: auto-fit resolves against the container, not
+   against the number of children, so every cell landed in column one and the
+   table rendered as a vertical stack. Flex with equal-basis children gives
+   the same intent with none of the ambiguity, and works for a 4-column table
+   and a 5-column one without either declaring its own template. */
+.report-table-row {
+  display: flex;
+  gap: var(--s-3);
+  padding: 0.55rem var(--s-4);
+  border-bottom: 1px solid var(--border-soft);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+/* The first column is the label — a provider or a resource name — and needs
+   roughly twice the room of a figure. */
+.report-table-row > :first-child { flex: 2 1 0; }
+.report-table-row:last-child { border-bottom: 0; }
+.report-table-head {
+  background: var(--bg);
+  color: var(--text-dim);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 0.62rem;
+}
+.report-table-row > span {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- Assumption / warning list on an estimate --- */
+.report-warnings {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+.report-warnings li { overflow-wrap: anywhere; }
+
+/* A finding with no severity still needs a left stripe, or the list reads as
+   unstructured prose. Neutral, because inventing a colour would be inventing
+   a severity the analyzer never assigned. */
+.report-finding-unknown { border-left-color: var(--border-soft); }
+
+/* Explanatory prose inside a report section — used where a table would be if
+   the data existed. Set as body text rather than as a warning banner: "we
+   deliberately did not keep this" is a design decision being disclosed, not
+   a problem to alarm anyone about. */
+.report-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  max-width: 68ch;
+}
+
+@media print {
+  /* Tables must not be cut off at the page edge in a printed report — the
+     screen scroller has no equivalent on paper. */
+  .report-table-scroll { overflow-x: visible; }
+  .report-table { min-width: 0; }
+}

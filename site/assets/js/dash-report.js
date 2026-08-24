@@ -284,31 +284,69 @@
   // Render
   // ---------------------------------------------------------------------
 
+  /**
+   * The report, for whichever analyzer produced the run.
+   *
+   * This used to refuse anything that was not a dependency audit — "Reports
+   * are produced for dependency audits; this is an 'arch' run" — which meant
+   * View report on four of the five tools led to a dead end. The runs were
+   * real and the results were stored; only the renderer was missing.
+   *
+   * Every analyzer shares the chrome (masthead, scope footer) and brings its
+   * own body, because the analyzers genuinely do not have a common shape: a
+   * grade band makes sense for a security audit and is meaningless for a cost
+   * estimate. Forcing all four through one layout would either flatten them
+   * into a list of numbers or invent a severity for things that have none.
+   */
   function render(run) {
     var body = document.getElementById("report-body");
     if (!body) return;
     while (body.firstChild) body.removeChild(body.firstChild);
 
-    if (run.analyzer !== "vuln") {
+    var builder = BODIES[run.analyzer];
+    if (!builder) {
       body.appendChild(core.errorState(
-        "Reports are produced for dependency audits; this is a \"" + run.analyzer + "\" run."));
+        "No report layout exists for a \"" + run.analyzer + "\" run yet."));
       return;
     }
 
+    var wrap = el("div", { class: "report-wrap" });
+    wrap.appendChild(masthead(run));
+    builder(run, wrap);
+    wrap.appendChild(scopeFooter(run));
+    body.appendChild(wrap);
+  }
+
+  /** Eyebrow + subject line, identical for every analyzer. */
+  function masthead(run) {
+    var box = el("div", { class: "report-masthead" });
+    var title = el("div", { class: "report-masthead-title" });
+    title.appendChild(el("span", { class: "eyebrow" }, EYEBROW[run.analyzer] || "Report"));
+    var result = run.result || {};
+    var subject = (result.ci && result.ci.repo) ||
+      (run.input && (run.input.repo || run.input.repoUrl || run.input.name)) ||
+      SUBJECT_FALLBACK[run.analyzer] || "Report";
+    title.appendChild(el("h2", null,
+      String(subject).replace(/^https?:\/\/(www\.)?github\.com\//, "")));
+    box.appendChild(title);
+    return box;
+  }
+
+  var EYEBROW = {
+    vuln: "Dependency audit", arch: "Architecture X-ray",
+    algo: "Algorithm complexity", estimate: "Infrastructure cost",
+    cost: "Cloud cost analysis",
+  };
+  var SUBJECT_FALLBACK = {
+    vuln: "Audit report", arch: "System map", algo: "Measured function",
+    estimate: "Estimated stack", cost: "Cost and usage report",
+  };
+
+  function renderVulnBody(run, wrap) {
     var result = run.result || {};
     var summary = result.summary || {};
     var counts = summary.counts || result.counts || {};
     var advisories = Array.isArray(result.advisories) ? result.advisories : [];
-
-    var wrap = el("div", { class: "report-wrap" });
-
-    var masthead = el("div", { class: "report-masthead" });
-    var title = el("div", { class: "report-masthead-title" });
-    title.appendChild(el("span", { class: "eyebrow" }, "Dependency audit"));
-    var repo = (result.ci && result.ci.repo) || (run.input && (run.input.repo || run.input.repoUrl)) || "Audit report";
-    title.appendChild(el("h2", null, String(repo).replace(/^https?:\/\/(www\.)?github\.com\//, "")));
-    masthead.appendChild(title);
-    wrap.appendChild(masthead);
 
     wrap.appendChild(verdictBand(summary, counts));
 
@@ -329,9 +367,382 @@
       var rem = remediationSection(summary.remediation);
       if (rem) wrap.appendChild(rem);
     }
+  }
 
-    wrap.appendChild(scopeFooter(run));
-    body.appendChild(wrap);
+  // ---------------------------------------------------------------------
+  // Architecture X-ray
+  // ---------------------------------------------------------------------
+  //
+  // Reuses the audit's severity chrome because architecture findings ARE
+  // graded by severity — a circular dependency between two services is a
+  // different order of problem from an inconsistent naming convention, and
+  // the analyzer already says which is which. What it does not have is a
+  // letter grade, so the verdict band is a shape count instead of an
+  // invented score.
+
+  function renderArchBody(run, wrap) {
+    var result = run.result || {};
+    var summary = result.summary || {};
+    var bySev = summary.bySeverity || {};
+    var findings = Array.isArray(result.findings) ? result.findings : [];
+
+    wrap.appendChild(shapeBand([
+      { n: summary.clusters || 0, label: "clusters" },
+      { n: summary.nodes || (result.nodes && result.nodes.length) || 0, label: "modules" },
+      { n: summary.edges || (result.edges && result.edges.length) || 0, label: "dependencies" },
+      { n: typeof summary.findings === "number" ? summary.findings : findings.length,
+        label: "findings", tone: (bySev.critical || bySev.high) ? "bad" : "ok" },
+    ]));
+
+    wrap.appendChild(severityTiles(bySev));
+
+    if (!findings.length) {
+      wrap.appendChild(emptyBand("No structural findings",
+        "The graph was built and every rule ran. This says the shape is sound at the time of the " +
+        "scan — not that the code inside each module is."));
+      return;
+    }
+    wrap.appendChild(genericFindings(findings, {
+      title: "Findings",
+      note: findings.length + " finding" + (findings.length === 1 ? "" : "s") + " · ordered worst first",
+      titleOf: function (f) { return f.title || f.rule || "Finding"; },
+      whereOf: function (f) { return f.target || f.module || null; },
+      bodyOf:  function (f) { return f.detail || f.why || f.message || ""; },
+      fixOf:   function (f) { return f.recommendation || f.fix || null; },
+    }));
+  }
+
+  // ---------------------------------------------------------------------
+  // Algorithm complexity
+  // ---------------------------------------------------------------------
+
+  function renderAlgoBody(run, wrap) {
+    var result = run.result || {};
+    var bigO = (result.bigO && result.bigO.label) || "unmeasured";
+    var ceiling = (run.input && run.input.ceiling) || (result.ceiling || null);
+
+    var band = el("div", { class: "report-verdict" });
+    var gradeWrap = el("div", { class: "report-grade-wrap" });
+    gradeWrap.appendChild(el("span", { class: "report-bigo mono" }, bigO));
+    if (typeof result.wallTimeMs === "number") {
+      gradeWrap.appendChild(el("span", { class: "mono report-score" },
+        result.wallTimeMs.toFixed(2) + " ms"));
+    }
+    band.appendChild(gradeWrap);
+    // Said plainly, because a Big-O label read without this caveat gets
+    // quoted as a proof. It is a curve fitted to timings on one machine.
+    band.appendChild(el("p", { class: "report-grade-note" },
+      ceiling
+        ? "Measured against a declared ceiling of " + ceiling + ". A grade is a curve fitted to " +
+          "observed timings, not a proof — treat a one-bucket move as noise."
+        : "A grade is a curve fitted to observed timings on this machine, not a proof. " +
+          "No ceiling was declared for this function, so nothing here can fail a build."));
+    wrap.appendChild(band);
+
+    var points = Array.isArray(result.samples) ? result.samples
+               : Array.isArray(result.points) ? result.points : [];
+    if (points.length) {
+      var sec = el("section", { class: "report-section" });
+      var head = el("div", { class: "report-section-head" });
+      head.appendChild(el("h3", null, "Measurements"));
+      head.appendChild(el("span", { class: "mono report-section-note" },
+        points.length + " sample" + (points.length === 1 ? "" : "s")));
+      sec.appendChild(head);
+
+      var scroll = el("div", { class: "report-table-scroll" });
+      var table = el("div", { class: "report-table" });
+      var hr = el("div", { class: "report-table-row report-table-head" });
+      hr.appendChild(el("span", { class: "mono" }, "Input size"));
+      hr.appendChild(el("span", { class: "mono" }, "Wall time"));
+      table.appendChild(hr);
+      points.forEach(function (pt) {
+        var row = el("div", { class: "report-table-row" });
+        row.appendChild(el("span", { class: "mono" }, String(pt.n != null ? pt.n : pt.size || "—")));
+        var ms = pt.ms != null ? pt.ms : pt.wallTimeMs;
+        row.appendChild(el("span", { class: "mono" },
+          typeof ms === "number" ? ms.toFixed(3) + " ms" : "—"));
+        table.appendChild(row);
+      });
+      scroll.appendChild(table);
+      sec.appendChild(scroll);
+      wrap.appendChild(sec);
+    }
+
+    if (result.notes || result.warning) {
+      wrap.appendChild(noteBand(result.notes || result.warning));
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Infrastructure cost estimate
+  // ---------------------------------------------------------------------
+
+  function renderEstimateBody(run, wrap) {
+    var result = run.result || {};
+    var providers = Array.isArray(result.providers) ? result.providers : [];
+    var priced = providers.filter(function (p) {
+      return typeof p.estimatedTotalMicroUsd === "number";
+    }).sort(function (a, b) { return a.estimatedTotalMicroUsd - b.estimatedTotalMicroUsd; });
+
+    var spec = result.normalizedSpec || {};
+    var resources = Array.isArray(spec.resources) ? spec.resources : [];
+
+    if (priced.length) {
+      var best = priced[0];
+      var band = el("div", { class: "report-verdict" });
+      var gw = el("div", { class: "report-grade-wrap" });
+      gw.appendChild(el("span", { class: "report-price mono" }, money(best.estimatedTotalMicroUsd)));
+      gw.appendChild(el("span", { class: "mono report-score" },
+        "on " + (best.providerName || best.providerId)));
+      band.appendChild(gw);
+      band.appendChild(el("p", { class: "report-grade-note" },
+        "Cheapest of " + priced.length + " provider" + (priced.length === 1 ? "" : "s") +
+        " for " + resources.length + " resource" + (resources.length === 1 ? "" : "s") +
+        (result.duration ? " over " + result.duration : "") + "."));
+      wrap.appendChild(band);
+    }
+
+    // The disclaimer is not decoration and is never paraphrased: these are
+    // list prices against a declared spec, not anybody's invoice.
+    wrap.appendChild(noteBand(result.disclaimer ||
+      "List prices against the submitted specification. Not a quote, and not your bill."));
+
+    if (priced.length) {
+      var sec = el("section", { class: "report-section" });
+      var head = el("div", { class: "report-section-head" });
+      head.appendChild(el("h3", null, "By provider"));
+      head.appendChild(el("span", { class: "mono report-section-note" },
+        "cheapest first" + (result.pricingCatalogVersion
+          ? " · catalog " + result.pricingCatalogVersion : "")));
+      sec.appendChild(head);
+
+      var scroll = el("div", { class: "report-table-scroll" });
+      var table = el("div", { class: "report-table" });
+      var hr = el("div", { class: "report-table-row report-table-head" });
+      ["Provider", "Monthly total", "Range", "Confidence"].forEach(function (h) {
+        hr.appendChild(el("span", { class: "mono" }, h));
+      });
+      table.appendChild(hr);
+      priced.forEach(function (p) {
+        var row = el("div", { class: "report-table-row" });
+        row.appendChild(el("span", { class: "mono" }, p.providerName || p.providerId));
+        row.appendChild(el("span", { class: "mono" }, money(p.estimatedTotalMicroUsd)));
+        // A single number where a range exists would overstate what the
+        // engine actually knows, so the absence of one is shown as a dash
+        // rather than by repeating the point estimate twice.
+        row.appendChild(el("span", { class: "mono" },
+          typeof p.lowerBoundMicroUsd === "number" && typeof p.upperBoundMicroUsd === "number"
+            ? money(p.lowerBoundMicroUsd) + " – " + money(p.upperBoundMicroUsd)
+            : "—"));
+        row.appendChild(el("span", { class: "mono" }, p.confidence || "—"));
+        table.appendChild(row);
+      });
+      scroll.appendChild(table);
+      sec.appendChild(scroll);
+      wrap.appendChild(sec);
+    } else {
+      wrap.appendChild(emptyBand("Nothing could be priced",
+        "The specification parsed but no provider in the catalog could price it. That is a gap in " +
+        "the catalog, not a statement that the stack is free."));
+    }
+
+    // No per-resource table, and its absence is stated rather than left as a
+    // gap. The estimator's HTTP boundary refuses to record parsed resource
+    // values — a resource id can be a service name, a region can identify a
+    // customer — so run history keeps totals and a count and nothing else.
+    // An empty table here would read as "the estimate covered nothing".
+    if (result.specRetained === false) {
+      var kept = el("section", { class: "report-section" });
+      var kh = el("div", { class: "report-section-head" });
+      kh.appendChild(el("h3", null, "What was priced"));
+      kh.appendChild(el("span", { class: "mono report-section-note" },
+        (result.resourceCount || 0) + " resource" + (result.resourceCount === 1 ? "" : "s") +
+        (result.warningCount ? " · " + result.warningCount + " assumption" +
+          (result.warningCount === 1 ? "" : "s") + " applied" : "")));
+      kept.appendChild(kh);
+      kept.appendChild(el("p", { class: "report-note" }, result.specNote ||
+        "The submitted specification was not retained, so the resources cannot be listed here. " +
+        "Re-run the estimator to see them."));
+      wrap.appendChild(kept);
+    }
+
+    // Warnings quote resources by name ("resource 'payments-db' has no
+    // storage class"), which is exactly what the boundary refuses to record,
+    // so only their count survives — rendered above. A live estimate on the
+    // estimator page still shows them in full.
+    var warnings = Array.isArray(result.warnings) ? result.warnings : [];
+    if (warnings.length) {
+      wrap.appendChild(warningList(warnings));
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Cloud cost analysis (CUR)
+  // ---------------------------------------------------------------------
+
+  function renderCostBody(run, wrap) {
+    var result = run.result || {};
+    var suggestions = Array.isArray(result.suggestions) ? result.suggestions : [];
+
+    var band = el("div", { class: "report-verdict" });
+    var gw = el("div", { class: "report-grade-wrap" });
+    gw.appendChild(el("span", { class: "report-price mono" },
+      typeof result.totalSavingsPct === "number" ? result.totalSavingsPct + "%" : "—"));
+    gw.appendChild(el("span", { class: "mono report-score" }, "of spend recoverable"));
+    band.appendChild(gw);
+    band.appendChild(el("p", { class: "report-grade-note" },
+      suggestions.length
+        ? suggestions.length + " suggestion" + (suggestions.length === 1 ? "" : "s") +
+          ", ranked by what each is worth per month."
+        : "No suggestion cleared the reporting threshold for this billing period."));
+    wrap.appendChild(band);
+
+    if (!suggestions.length) {
+      wrap.appendChild(emptyBand("Nothing worth changing",
+        "Every rule ran against the report and none found a saving large enough to be worth the " +
+        "migration risk. That is a result, not an empty scan."));
+      return;
+    }
+
+    wrap.appendChild(genericFindings(suggestions, {
+      title: "Suggested savings",
+      note: suggestions.length + " suggestion" + (suggestions.length === 1 ? "" : "s") +
+            " · largest first",
+      titleOf: function (x) { return x.title || x.service || "Saving"; },
+      whereOf: function (x) {
+        return typeof x.monthlySavingsUsd === "number"
+          ? "$" + x.monthlySavingsUsd.toFixed(2) + " / mo" : null;
+      },
+      bodyOf: function (x) { return x.detail || x.why || ""; },
+      fixOf:  function (x) { return x.action || x.recommendation || null; },
+    }));
+  }
+
+  var BODIES = {
+    vuln:     renderVulnBody,
+    arch:     renderArchBody,
+    algo:     renderAlgoBody,
+    estimate: renderEstimateBody,
+    cost:     renderCostBody,
+  };
+
+  // ---------------------------------------------------------------------
+  // Shared pieces the non-audit bodies use
+  // ---------------------------------------------------------------------
+
+  function money(micro) {
+    if (typeof micro !== "number") return "—";
+    return "$" + (micro / 1000000).toFixed(2);
+  }
+
+  /** A milli-quantity as a plain number, or a dash when it is zero/absent. */
+  function milli(v, unit) {
+    if (typeof v !== "number" || v === 0) return "—";
+    var n = v / 1000;
+    return (Number.isInteger(n) ? String(n) : n.toFixed(2)) + (unit || "");
+  }
+
+  /** Four counted facts about a shape — the arch equivalent of a grade. */
+  function shapeBand(items) {
+    var band = el("div", { class: "report-verdict" });
+    var tiles = el("div", { class: "report-counts" });
+    items.forEach(function (it) {
+      var tile = el("span", {
+        class: "report-count" + (it.tone ? " report-count-" + it.tone : "") + (it.n ? " has" : ""),
+      });
+      tile.appendChild(el("span", { class: "report-count-n mono" }, String(it.n)));
+      tile.appendChild(el("span", { class: "report-count-l mono" }, it.label));
+      tiles.appendChild(tile);
+    });
+    band.appendChild(tiles);
+    return band;
+  }
+
+  function severityTiles(bySev) {
+    var tiles = el("div", { class: "report-counts" });
+    ["critical", "high", "medium", "low"].forEach(function (sev) {
+      var n = bySev[sev] || 0;
+      var tile = el("span", { class: "report-count report-count-" + sev + (n ? " has" : "") });
+      tile.appendChild(el("span", { class: "report-count-n mono" }, String(n)));
+      tile.appendChild(el("span", { class: "report-count-l mono" }, SEV_LABEL[sev]));
+      tiles.appendChild(tile);
+    });
+    return tiles;
+  }
+
+  function emptyBand(title, body) {
+    var box = el("div", { class: "report-clean" });
+    var head = el("h3", null);
+    head.appendChild(el("span", { class: "report-clean-check", "aria-hidden": "true" }, "✓ "));
+    head.appendChild(document.createTextNode(title));
+    box.appendChild(head);
+    box.appendChild(el("p", null, body));
+    return box;
+  }
+
+  function noteBand(text) {
+    var box = el("div", { class: "banner banner-amber", role: "note" });
+    var wrap = el("div", { class: "banner-text" });
+    wrap.appendChild(el("p", null, String(text)));
+    box.appendChild(wrap);
+    return box;
+  }
+
+  function warningList(warnings) {
+    var sec = el("section", { class: "report-section" });
+    var head = el("div", { class: "report-section-head" });
+    head.appendChild(el("h3", null, "Assumptions and warnings"));
+    head.appendChild(el("span", { class: "mono report-section-note" },
+      warnings.length + " note" + (warnings.length === 1 ? "" : "s")));
+    sec.appendChild(head);
+    var ul = el("ul", { class: "report-warnings" });
+    warnings.forEach(function (w) {
+      ul.appendChild(el("li", null,
+        typeof w === "string" ? w : (w.statement || w.message || JSON.stringify(w))));
+    });
+    sec.appendChild(ul);
+    return sec;
+  }
+
+  /**
+   * A findings list for analyzers whose items are not advisories.
+   *
+   * Shares the audit's markup so a finding looks the same wherever it came
+   * from — the accessors are the only per-analyzer part, which keeps one
+   * severity treatment rather than three that drift.
+   */
+  function genericFindings(items, opts) {
+    var section = el("section", { class: "report-section" });
+    var head = el("div", { class: "report-section-head" });
+    head.appendChild(el("h3", null, opts.title));
+    head.appendChild(el("span", { class: "mono report-section-note" }, opts.note));
+    section.appendChild(head);
+
+    var list = el("ol", { class: "report-findings" });
+    items.forEach(function (item) {
+      var li = el("li", { class: "report-finding report-finding-" + (item.severity || "unknown") });
+
+      var top = el("div", { class: "report-finding-head" });
+      if (item.severity) top.appendChild(sevChip(item.severity));
+      top.appendChild(el("h4", null, opts.titleOf(item)));
+      var where = opts.whereOf(item);
+      if (where) top.appendChild(el("span", { class: "mono report-finding-where" }, where));
+      li.appendChild(top);
+
+      var bodyText = opts.bodyOf(item);
+      if (bodyText) li.appendChild(el("p", { class: "report-finding-body" }, bodyText));
+
+      var fix = opts.fixOf(item);
+      if (fix) {
+        var fixRow = el("div", { class: "report-finding-fix" });
+        fixRow.appendChild(el("span", { class: "report-finding-fix-label mono" }, "Fix"));
+        fixRow.appendChild(el("span", { class: "report-finding-fix-text" }, fix));
+        li.appendChild(fixRow);
+      }
+      list.appendChild(li);
+    });
+    section.appendChild(list);
+    return section;
   }
 
   // ---------------------------------------------------------------------
@@ -501,6 +912,11 @@
   // for other analyzers with a 400, so the picker doesn't offer what the
   // server would bounce. JSON is the raw result and works for every run.
   function formatsFor(analyzer) {
+    // The document formats describe a dependency audit specifically — SARIF
+    // is a static-analysis schema, CycloneDX is a bill of materials, and the
+    // CSV columns are advisory columns. The Worker refuses them for other
+    // analyzers with a 400, so the picker offers only what the server will
+    // actually serve rather than letting someone pick an error.
     return analyzer === "vuln"
       ? ["pdf", "csv", "json", "sarif", "cyclonedx"]
       : ["json"];

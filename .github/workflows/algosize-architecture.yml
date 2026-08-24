@@ -1,0 +1,106 @@
+name: Algosize architecture
+
+# Maps the module graph on every pull request and reports what changed shape.
+# Submits source PATHS and contents to the same endpoint the dependency audit
+# uses; the result is stored as findings and paths, never as a copy of the
+# files.
+#
+# arch_fail_on is "none" by default: this annotates and fails nothing. Raise
+# it to "critical" once you have watched a few runs and agree with what it
+# calls critical.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  architecture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for the API key
+        id: key
+        env:
+          ALGOSIZE_API_KEY: ${{ secrets.ALGOSIZE_API_KEY }}
+        run: |
+          if [ -z "$ALGOSIZE_API_KEY" ]; then
+            echo "::notice::ALGOSIZE_API_KEY is not set — skipping the architecture map."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Collect source
+        if: steps.key.outputs.skip != 'true'
+        id: collect
+        run: |
+          # Source only, and bounded. Build output and vendored dependencies
+          # carry no signal about YOUR architecture and would dominate the graph.
+          find .             -path ./node_modules -prune -o             -path ./.git -prune -o             -path ./dist -prune -o             -path ./build -prune -o             -path ./vendor -prune -o             -type f ( -name '*.js' -o -name '*.mjs' -o -name '*.ts' -o -name '*.tsx' -o -name '*.py' -o -name '*.go' )             -size -200k -print | head -400 | sed 's|^./||' > files.txt
+
+          COUNT=$(wc -l < files.txt | tr -d ' ')
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          if [ "$COUNT" = "0" ]; then
+            echo "::notice::No source files matched — nothing to map."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Map
+        if: steps.key.outputs.skip != 'true' && steps.collect.outputs.skip != 'true'
+        id: run
+        env:
+          ALGOSIZE_API_KEY: ${{ secrets.ALGOSIZE_API_KEY }}
+        run: |
+          jq -Rn --arg repo "${{ github.repository }}"                  --arg ref "${{ github.head_ref }}"                  --arg sha "${{ github.event.pull_request.head.sha }}"             '{repo:$repo, ref:$ref, commit_sha:$sha, arch_fail_on:"none",
+              files:[inputs | {path:., content:""}]}' < files.txt > skeleton.json
+
+          # Read each file into its entry. Done in jq rather than in the shell
+          # so contents are JSON-escaped exactly once.
+          python3 - <<'PY' > payload.json
+          import json, pathlib
+          skel = json.load(open("skeleton.json"))
+          out = []
+          for entry in skel["files"]:
+              p = pathlib.Path(entry["path"])
+              try:
+                  out.append({"path": entry["path"], "content": p.read_text(errors="replace")})
+              except OSError:
+                  pass
+          skel["files"] = out
+          json.dump(skel, open("/dev/stdout", "w"))
+          PY
+
+          HTTP=$(curl -sS -o response.json -w '%{http_code}'             -X POST "https://algosize.com/api/ci/runs"             -H "Authorization: Bearer $ALGOSIZE_API_KEY"             -H "Content-Type: application/json"             --data @payload.json)
+
+          if [ "$HTTP" != "200" ]; then
+            echo "::warning::The architecture endpoint returned HTTP $HTTP — annotating without a verdict."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          jq -r '.architecture
+                 | "clusters=(.summary.clusters // 0)",
+                   "findings=(.summary.findings // 0)",
+                   "worst=(.worstSeverity // "none")",
+                   "failed=(.failed)"' response.json >> "$GITHUB_OUTPUT"
+
+      - name: Comment
+        if: steps.key.outputs.skip != 'true' && steps.collect.outputs.skip != 'true' && steps.run.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          {
+            echo "<!-- algosize-architecture -->"
+            echo "### Architecture"
+            echo
+            echo "${{ steps.collect.outputs.count }} files · ${{ steps.run.outputs.clusters }} clusters · ${{ steps.run.outputs.findings }} findings (worst: ${{ steps.run.outputs.worst }})"
+          } > comment.md
+          gh pr comment "$PR" --body-file comment.md --edit-last ||             gh pr comment "$PR" --body-file comment.md
+
+          if [ "${{ steps.run.outputs.failed }}" = "true" ]; then
+            echo "::error::Architecture findings exceeded the configured threshold."
+            exit 1
+          fi

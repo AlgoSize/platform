@@ -7,26 +7,66 @@ permalink: /dashboard/
 
 <header class="nav dash-nav">
   <div class="nav-inner">
-    <a href="/" class="brand">
-      <span class="brand-mark" aria-hidden="true">[as]</span>
-      <span class="brand-word">Algosize</span>
-    </a>
-    <!-- Two tabs, and that is the whole strip.
-         There were five, plus four action buttons, and they never fit inside
-         1120px at any viewport — the strip wrapped on a laptop. The fix is
-         structural rather than responsive: Workspace holds every tool and
-         every result, Monitors & CI holds everything that runs without you,
-         and Team moved into Account where the rest of the org settings
-         already live. The individual tools keep their hash routes and are
-         reached from their card on the Workspace, so every existing deep
-         link still resolves. -->
-    <nav class="dash-tabs" aria-label="Dashboard sections">
-      <a href="#/" class="dash-tab" data-view="workspace" aria-current="page">
-        <span class="dash-tab-glyph mono" aria-hidden="true">▣</span>Workspace</a>
-      <a href="#/monitors" class="dash-tab" data-view="monitors">
-        <span class="dash-tab-glyph mono" aria-hidden="true">◷</span>Monitors &amp; CI</a>
-    </nav>
-    <div class="dash-nav-actions">
+    <!-- LEFT: identity and the two sections, in that order.
+         The tab strip sits beside the brand rather than on its own row —
+         with two tabs there is room, and a nav that occupies a full second
+         row reads as more important than the page under it. -->
+    <div class="dash-nav-left">
+      <a href="/" class="brand">
+        <span class="brand-mark" aria-hidden="true">[as]</span>
+        <span class="brand-word">Algosize</span>
+      </a>
+      <!-- Two tabs, and that is the whole strip.
+           There were five, plus four action buttons, and they never fit
+           inside 1120px at any viewport. The fix was structural rather than
+           responsive: Workspace holds every tool and every result, Monitors
+           & CI holds everything that runs without you, and Team moved into
+           Account where the rest of the org settings already live. The
+           individual tools keep their hash routes and are reached from their
+           card on the Workspace, so every existing deep link still resolves. -->
+      <nav class="dash-tabs" aria-label="Dashboard sections">
+        <a href="#/" class="dash-tab" data-view="workspace" aria-current="page">
+          <span class="dash-tab-glyph mono" aria-hidden="true">▣</span>Workspace</a>
+        <a href="#/monitors" class="dash-tab" data-view="monitors">
+          <span class="dash-tab-glyph mono" aria-hidden="true">◷</span>Monitors &amp; CI</a>
+      </nav>
+    </div>
+
+    <!-- RIGHT: the controls on one line, with the quota readout tucked
+         underneath the Account button.
+         The quota is a STATUS, not a control — it is read occasionally and
+         acted on rarely — so it sits below the row of things you click
+         rather than competing with them for the same line. The signed-in
+         email used to sit here too and has been removed outright: the avatar
+         and its accessible name already say which account this is, and the
+         address itself was a long string that pushed everything else around
+         while answering a question nobody asks twice. -->
+    <div class="dash-nav-right">
+      <div class="dash-nav-actions">
+        <!-- Plan pill (D-1): one element, restyled per ENTITLEMENT_REASON by
+             dashboard.js. Text always carries the state in words — the colour
+             is the third channel, after the word and the glyph. -->
+        <span class="dash-status" id="dash-status" hidden>
+          <span class="dash-status-dot" aria-hidden="true"></span>
+          <span id="dash-status-text">Subscription active</span>
+        </span>
+        <!-- Account: avatar first, then the word. The avatar is an <img> when
+             /api/me returns an avatarUrl and initials otherwise — never a
+             generic silhouette, which tells you nothing about which account
+             you are signed in to. On narrow screens the word is hidden by CSS
+             and the avatar alone is the control, which is why the accessible
+             name lives on the link rather than in the visible text. -->
+        <a id="account-link" href="#/account" class="dash-account" aria-label="Account settings">
+          <span class="dash-avatar mono" id="dash-avatar" aria-hidden="true">··</span>
+          <span class="dash-account-word">Account</span>
+        </a>
+        <button id="billing-portal-btn" type="button" class="btn btn-ghost btn-sm" hidden>Manage billing</button>
+        <!-- Shown only when /api/me reports isAdmin: true (dashboard.js). The
+             /admin panel itself is gated server-side regardless — this link is
+             discoverability, not the access control. -->
+        <a id="admin-link" href="/admin" class="btn btn-ghost btn-sm" hidden>Admin</a>
+        <button id="logout-btn" type="button" class="btn btn-ghost btn-sm">Sign out</button>
+      </div>
       <!-- Quota pill (Task #19 → D-1): "X / 5" with a segment meter whenever
            entitlement is not active. Hidden until /api/me answers so we never
            flash "X / 5" at a paid customer. -->
@@ -35,30 +75,6 @@ permalink: /dashboard/
         <span class="dash-quota-meter" id="dash-quota-meter" aria-hidden="true"></span>
         <span class="dash-quota-value" id="dash-quota-value">— / 5</span>
       </span>
-      <!-- Plan pill (D-1): one element, restyled per ENTITLEMENT_REASON by
-           dashboard.js. Text always carries the state in words — the colour
-           is the third channel, after the word and the glyph. -->
-      <span class="dash-status" id="dash-status" hidden>
-        <span class="dash-status-dot" aria-hidden="true"></span>
-        <span id="dash-status-text">Subscription active</span>
-      </span>
-      <!-- Account: avatar first, then the word. The avatar is an <img> when
-           /api/me returns an avatarUrl and initials otherwise — never a
-           generic silhouette, which tells you nothing about which account
-           you are signed in to. Below 420px the word is hidden by CSS and
-           the avatar alone is the control, which is why the accessible name
-           lives on the link rather than in the visible text. -->
-      <a id="account-link" href="#/account" class="dash-account" aria-label="Account settings">
-        <span class="dash-avatar mono" id="dash-avatar" aria-hidden="true">··</span>
-        <span class="dash-account-word">Account</span>
-      </a>
-      <button id="billing-portal-btn" type="button" class="btn btn-ghost btn-sm" hidden>Manage billing</button>
-      <!-- Shown only when /api/me reports isAdmin: true (dashboard.js). The
-           /admin panel itself is gated server-side regardless — this link is
-           discoverability, not the access control. -->
-      <a id="admin-link" href="/admin" class="btn btn-ghost btn-sm" hidden>Admin</a>
-      <button id="logout-btn" type="button" class="btn btn-ghost btn-sm">Sign out</button>
-      <span class="dash-user-email mono" id="dash-user-email" hidden></span>
     </div>
   </div>
 </header>
@@ -117,9 +133,9 @@ permalink: /dashboard/
       <section class="panel" id="panel-scorecard">
         <header class="panel-head">
           <div class="panel-heading">
-            <span class="panel-glyph mono" aria-hidden="true">▦</span>
+            <span class="panel-tag">Scorecard</span>
             <h2>Service scorecard</h2>
-            <p class="panel-sub">One row per watched repository, one column per analyzer. Graded on the last nightly sweep.</p>
+            <p class="panel-desc">One row per watched repository, one column per analyzer. Graded on the last nightly sweep.</p>
           </div>
           <div class="panel-actions">
             <span class="field-label" id="scorecard-sort-label">Sort</span>
@@ -793,6 +809,90 @@ permalink: /dashboard/
             <span class="ci-status-text" id="ci-status-text">Checking for a first CI run…</span>
             <button type="button" class="btn btn-ghost btn-sm" id="ci-status-refresh">Check again</button>
           </div>
+        </div>
+      </section>
+
+      <!-- ============= CI: INFRASTRUCTURE COST (D-9) =============
+           The only gate that stores nothing to do its job. It prices the
+           committed compose file and compares the cheapest provider to a
+           ceiling committed beside it — no cloud account, no credential,
+           which is what lets it run on a fork's pull request. -->
+      <section class="panel" id="panel-ci-estimate">
+        <header class="panel-head">
+          <div class="panel-heading">
+            <span class="panel-tag">CI</span>
+            <h2>Gate the infrastructure bill</h2>
+            <p class="panel-desc">Prices the compose file on every pull request and fails the build only when the cheapest provider goes over a ceiling you commit. Leave the ceiling out and it annotates without ever failing.</p>
+          </div>
+        </header>
+        <div class="panel-body">
+          <ol class="wizard" id="ci-est-wizard">
+            <li class="wizard-step">
+              <div class="wizard-step-head">
+                <span class="wizard-n" aria-hidden="true">1</span>
+                <h3>Reuse the audit's API key</h3>
+              </div>
+              <p class="wizard-copy">Same <code>ALGOSIZE_API_KEY</code> repository secret as every other gate. If the dependency audit is set up, this step is done.</p>
+            </li>
+            <li class="wizard-step">
+              <div class="wizard-step-head">
+                <span class="wizard-n" aria-hidden="true">2</span>
+                <h3>Commit the budget, or don't</h3>
+              </div>
+              <p class="wizard-copy">Save as <code class="mono" id="ci-est-config-filename">algosize.budget.json</code>. Shipping it with a null ceiling is the recommended start: watch a few runs before you let a number fail a build.</p>
+              <div class="snippet-row snippet-row-tall">
+                <pre class="result-snippet" id="ci-est-config">Loading example…</pre>
+                <button type="button" class="btn btn-ghost btn-sm" data-copy-target="ci-est-config">Copy</button>
+              </div>
+            </li>
+            <li class="wizard-step">
+              <div class="wizard-step-head">
+                <span class="wizard-n" aria-hidden="true">3</span>
+                <h3>Commit the workflow file</h3>
+              </div>
+              <p class="wizard-copy">Save as <code class="mono" id="ci-est-filename">.github/workflows/algosize-estimate.yml</code>. Every comment it posts repeats that these are list prices and that no cloud account was contacted.</p>
+              <div class="snippet-row snippet-row-tall">
+                <pre class="result-snippet" id="ci-est-yaml">Loading workflow…</pre>
+                <button type="button" class="btn btn-ghost btn-sm" data-copy-target="ci-est-yaml">Copy</button>
+              </div>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <!-- ============= CI: ARCHITECTURE (D-9) =============
+           The endpoint has accepted `files` since the X-ray shipped; there
+           was simply no workflow and no snippet, so the capability existed
+           and nobody could reach it without hand-writing YAML. -->
+      <section class="panel" id="panel-ci-architecture">
+        <header class="panel-head">
+          <div class="panel-heading">
+            <span class="panel-tag">CI</span>
+            <h2>Watch the shape of the codebase</h2>
+            <p class="panel-desc">Maps the module graph on every pull request and reports what changed. Annotates by default and fails nothing until you raise the threshold yourself.</p>
+          </div>
+        </header>
+        <div class="panel-body">
+          <ol class="wizard" id="ci-arch-wizard">
+            <li class="wizard-step">
+              <div class="wizard-step-head">
+                <span class="wizard-n" aria-hidden="true">1</span>
+                <h3>Reuse the audit's API key</h3>
+              </div>
+              <p class="wizard-copy">Same secret again. Nothing new to create.</p>
+            </li>
+            <li class="wizard-step">
+              <div class="wizard-step-head">
+                <span class="wizard-n" aria-hidden="true">2</span>
+                <h3>Commit the workflow file</h3>
+              </div>
+              <p class="wizard-copy">Save as <code class="mono" id="ci-arch-filename">.github/workflows/algosize-architecture.yml</code>. Findings and paths are stored; the submitted source never is.</p>
+              <div class="snippet-row snippet-row-tall">
+                <pre class="result-snippet" id="ci-arch-yaml">Loading workflow…</pre>
+                <button type="button" class="btn btn-ghost btn-sm" data-copy-target="ci-arch-yaml">Copy</button>
+              </div>
+            </li>
+          </ol>
         </div>
       </section>
 

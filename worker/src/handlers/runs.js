@@ -64,8 +64,20 @@ export function newRunId() {
   return `${ts}_${rand}`;
 }
 
-/** The analyzers a run can belong to — closed set, used to gate the SQL filter. */
-export const ANALYZERS = Object.freeze(["cost", "vuln", "algo", "arch"]);
+/**
+ * The analyzers a run can belong to — closed set, used to gate the SQL filter.
+ *
+ * "estimate" was missing, and its absence was not cosmetic: without a member
+ * here the infrastructure estimator could not persist a run at all, so it
+ * never appeared in Recent runs, never had a report, and never showed in the
+ * per-analyzer filter. Every other tool on the Workspace could point at
+ * something it had produced; that one could only ever be used and forgotten.
+ *
+ * The column is plain TEXT with no CHECK, so adding a member needs no
+ * migration — this list is the only gate, which is why it is also the only
+ * place to add one.
+ */
+export const ANALYZERS = Object.freeze(["cost", "vuln", "algo", "arch", "estimate"]);
 
 /**
  * One-line headline metric for the dashboard list. Kept analyzer-specific
@@ -106,6 +118,20 @@ export function summarize(analyzer, result) {
     const bigO = (result.bigO && result.bigO.label) || "unknown";
     const ms = typeof result.wallTimeMs === "number" ? result.wallTimeMs.toFixed(2) : "—";
     return `${bigO} · ${ms} ms`;
+  }
+  if (analyzer === "estimate") {
+    // The cheapest provider, because that is the number a decision turns on.
+    // Named, not just quoted: "$12.40/mo" without "on Hetzner" is a figure
+    // nobody can act on or reproduce.
+    const providers = Array.isArray(result.providers) ? result.providers : [];
+    const priced = providers.filter((p) => typeof p.estimatedTotalMicroUsd === "number");
+    if (!priced.length) return "no providers priced";
+    const best = priced.reduce((a, b) =>
+      b.estimatedTotalMicroUsd < a.estimatedTotalMicroUsd ? b : a);
+    const dollars = (best.estimatedTotalMicroUsd / 1_000_000).toFixed(2);
+    const n = (result.normalizedSpec && result.normalizedSpec.resources || []).length;
+    return `$${dollars}/mo on ${best.providerName || best.providerId} · ` +
+           `${n} resource${n === 1 ? "" : "s"} · ${priced.length} provider${priced.length === 1 ? "" : "s"}`;
   }
   return "";
 }
@@ -375,7 +401,7 @@ export async function listRunsHandler(request, env) {
   // ?source=ci|manual — anything else (including absent) means no filter.
   const rawSource = url.searchParams.get("source");
   const source = rawSource === "ci" || rawSource === "manual" ? rawSource : null;
-  // ?analyzer=cost|vuln|algo|arch — anything else (including absent) means no
+  // ?analyzer=cost|vuln|algo|arch|estimate — anything else (including absent) means no
   // filter. Whitelisted against ANALYZERS rather than passed through, because
   // the value reaches a SQL predicate.
   const rawAnalyzer = url.searchParams.get("analyzer");

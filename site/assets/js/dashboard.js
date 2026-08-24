@@ -1199,7 +1199,6 @@
   }
 
   function hydrateHeader() {
-    var emailEl   = document.getElementById("dash-user-email");
     var statusEl  = document.getElementById("dash-status");
     var textEl    = document.getElementById("dash-status-text");
     var billingEl = document.getElementById("billing-portal-btn");
@@ -1208,15 +1207,15 @@
     var quotaMeter = document.getElementById("dash-quota-meter");
     var bannerSlot = document.getElementById("billing-banner");
     var adminEl   = document.getElementById("admin-link");
-    if (!emailEl || !statusEl || !textEl) return Promise.resolve();
+    if (!statusEl || !textEl) return Promise.resolve();
 
     return callApi("/api/me", null, "GET").then(function (me) {
       lastMe = me;
       // callApi already redirects to "/" on 401, so we only get here for 2xx.
-      if (me && me.email) {
-        emailEl.textContent = me.email;
-        emailEl.hidden = false;
-      }
+      // The signed-in address is no longer printed in the bar: the avatar and
+      // the Account link's accessible name already identify the account, and
+      // a full email is a long, variable-width string that pushed every other
+      // control around to answer a question nobody asks twice.
       hydrateAccountControl(me);
 
       // Quota pill + segment meter: shown whenever entitlement is NOT

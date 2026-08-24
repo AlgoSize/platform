@@ -87,10 +87,11 @@ test.describe("dashboard happy path", () => {
     await expect(page.locator("#dash-avatar")).toBeVisible();
     await expect(page.locator("#logout-btn")).toBeVisible();
 
-    // Header was hydrated with the seeded email + the active pill.
-    const userEmail = page.locator("#dash-user-email");
-    await expect(userEmail).toBeVisible();
-    await expect(userEmail).toHaveText(E2E_EMAIL);
+    // The header no longer prints the signed-in address — the avatar and the
+    // Account link's accessible name identify the account instead.
+    await expect(page.locator("#dash-user-email")).toHaveCount(0);
+    await expect(page.locator("#account-link"))
+      .toHaveAttribute("aria-label", new RegExp(E2E_EMAIL.replace(/[.+]/g, "\\$&")));
     await expect(page.locator("#dash-status-text")).toHaveText(/Subscription active/i);
 
     // ----------------------------------------------------------------
