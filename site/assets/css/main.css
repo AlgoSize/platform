@@ -4588,3 +4588,100 @@ a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
      a set of tags rather than four more buttons. */
   .chip-toggle { min-height: 40px; display: inline-flex; align-items: center; }
 }
+
+/* ==========================================================================
+   Report — the non-audit analyzers
+   ==========================================================================
+   The report used to refuse anything that was not a dependency audit, so
+   four of the five tools led to a dead end from Recent runs. Each analyzer
+   now brings its own body and shares the chrome.
+
+   They do not share a layout, deliberately. A letter grade is meaningful for
+   a security audit and meaningless for a cost estimate; a severity ramp
+   applies to architecture findings and not to a Big-O measurement. Forcing
+   all five through one template would either flatten them into a row of
+   numbers or invent a severity for things that have none. */
+
+/* The headline figure where an audit shows its grade. Same optical weight as
+   .report-grade, but set as text rather than boxed — a price and a
+   complexity class are read, not scored. */
+.report-bigo,
+.report-price {
+  font-size: 1.9rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  line-height: 1;
+}
+.report-price { color: var(--accent-2); }
+
+/* Neutral count tiles for the architecture shape band, which counts things
+   that have no severity. The severity variants keep their own colours. */
+.report-count-ok  .report-count-n { color: var(--accent-2); }
+.report-count-bad .report-count-n { color: #f3c4c4; }
+
+/* --- Tables (provider prices, sampled timings, priced resources) --- */
+.report-table-scroll { overflow-x: auto; min-width: 0; }
+.report-table {
+  min-width: 480px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+/* Flex, not grid.
+   `grid-template-columns: 2fr repeat(auto-fit, minmax(0,1fr))` reads like it
+   makes columns and does not: auto-fit resolves against the container, not
+   against the number of children, so every cell landed in column one and the
+   table rendered as a vertical stack. Flex with equal-basis children gives
+   the same intent with none of the ambiguity, and works for a 4-column table
+   and a 5-column one without either declaring its own template. */
+.report-table-row {
+  display: flex;
+  gap: var(--s-3);
+  padding: 0.55rem var(--s-4);
+  border-bottom: 1px solid var(--border-soft);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+/* The first column is the label — a provider or a resource name — and needs
+   roughly twice the room of a figure. */
+.report-table-row > :first-child { flex: 2 1 0; }
+.report-table-row:last-child { border-bottom: 0; }
+.report-table-head {
+  background: var(--bg);
+  color: var(--text-dim);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 0.62rem;
+}
+.report-table-row > span {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- Assumption / warning list on an estimate --- */
+.report-warnings {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+.report-warnings li { overflow-wrap: anywhere; }
+
+/* A finding with no severity still needs a left stripe, or the list reads as
+   unstructured prose. Neutral, because inventing a colour would be inventing
+   a severity the analyzer never assigned. */
+.report-finding-unknown { border-left-color: var(--border-soft); }
+
+@media print {
+  /* Tables must not be cut off at the page edge in a printed report — the
+     screen scroller has no equivalent on paper. */
+  .report-table-scroll { overflow-x: visible; }
+  .report-table { min-width: 0; }
+}

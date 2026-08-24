@@ -33,11 +33,31 @@ import { monitorRouteHandler } from "../src/handlers/monitors.js";
 import { meHandler } from "../src/handlers/me.js";
 import { listRunsHandler } from "../src/handlers/runs.js";
 import { createMonitor, recordMonitorRun } from "../src/monitors/_store.js";
+import { getRunHandler } from "../src/handlers/runs.js";
+import { analyzeArchitecture } from "../src/analyzers/architecture.js";
+import { persistRun } from "../src/handlers/runs.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUT = join(__dirname, "..", "..", "tests", "fixtures");
 
-const NOW = Math.floor(Date.now() / 1000) - 120;
+// A fixed instant, 2026-08-01T00:00:00Z.
+//
+// The whole clock is frozen to it, not just this constant. Handlers stamp
+// their own timestamps from Date.now() — a referral window, a run's
+// created_at, a membership date — and chasing each one individually is a
+// losing game: the next handler to add a timestamp reintroduces the churn.
+// Freezing the source means regenerating with no code change produces a
+// byte-identical file, so the one field that actually moved is the only
+// thing in the diff.
+const NOW = 1_785_542_400;
+
+const FROZEN_MS = NOW * 1000;
+Date.now = () => FROZEN_MS;
+const RealDate = Date;
+globalThis.Date = class extends RealDate {
+  constructor(...args) { super(...(args.length ? args : [FROZEN_MS])); }
+  static now() { return FROZEN_MS; }
+};
 const USER = "usr_fixture";
 const ORG  = "org_fixture";
 const EMAIL = "dana@acme.test";
@@ -138,6 +158,85 @@ async function seed() {
          }),
          "F · 2 advisories, worst critical",
          (NOW - 3600) * 1000).run();
+
+  // One run per analyzer, so the report renderer is exercised for every
+  // layout rather than only the one that existed first. The architecture
+  // result comes from the REAL analyzer — a hand-written graph would drift
+  // from what the renderer is given.
+  let archResult;
+  try {
+    archResult = analyzeArchitecture({
+      files: [
+        { path: "src/index.js", content: "import { a } from './api.js';\nimport { b } from './db.js';\n" },
+        { path: "src/api.js",   content: "import { b } from './db.js';\nimport { c } from './index.js';\n" },
+        { path: "src/db.js",    content: "export const b = 1;\n" },
+      ],
+    });
+  } catch { archResult = null; }
+  if (archResult) {
+    await persistRun(env, {
+      orgId: ORG, userId: USER, analyzer: "arch", source: "manual",
+      input: { fileCount: 3, paths: ["src/index.js", "src/api.js", "src/db.js"] },
+      result: archResult, ms: 18.2,
+    });
+  }
+
+  await persistRun(env, {
+    orgId: ORG, userId: USER, analyzer: "algo", source: "ci", ms: 640.1,
+    input: { name: "groupByOwner", ceiling: "O(n log n)" },
+    result: {
+      bigO: { label: "O(n²)", confidence: "high" },
+      wallTimeMs: 612.4,
+      samples: [
+        { n: 100, ms: 0.42 }, { n: 200, ms: 1.61 },
+        { n: 400, ms: 6.38 }, { n: 800, ms: 25.9 },
+      ],
+      notes: "Timings taken on a shared runner; treat a one-bucket move as noise.",
+    },
+  });
+
+  await persistRun(env, {
+    orgId: ORG, userId: USER, analyzer: "estimate", source: "manual", ms: 31.7,
+    input: { inputType: "compose", name: "acme-stack", resourceCount: 3,
+             providers: ["hetzner", "aws"], duration: "1mo" },
+    result: {
+      normalizedSpec: { name: "acme-stack", resources: [
+        { name: "api", quantity: 3, cpuMilli: 500, memoryMilliGiB: 1024, storageMilliGiB: 0 },
+        { name: "worker", quantity: 1, cpuMilli: 1000, memoryMilliGiB: 2048, storageMilliGiB: 0 },
+        { name: "postgres", quantity: 1, cpuMilli: 2000, memoryMilliGiB: 4096, storageMilliGiB: 100000 },
+      ] },
+      providers: [
+        { providerId: "hetzner", providerName: "Hetzner Cloud", currency: "USD",
+          estimatedTotalMicroUsd: 12_400_000, confidence: "medium" },
+        { providerId: "aws", providerName: "Amazon Web Services", currency: "USD",
+          estimatedTotalMicroUsd: 41_000_000,
+          lowerBoundMicroUsd: 36_000_000, upperBoundMicroUsd: 48_500_000,
+          confidence: "low" },
+      ],
+      warnings: ["No duration was declared, so one month was assumed.",
+                 "Storage class was not specified; standard block storage was priced."],
+      duration: "1mo", currency: "USD", pricingCatalogVersion: "2026-08",
+      disclaimer: "List prices against the submitted specification. Not a quote, and not your bill.",
+    },
+  });
+
+  await persistRun(env, {
+    orgId: ORG, userId: USER, analyzer: "cost", source: "manual", ms: 88.4,
+    input: { file: "cur-2026-08.csv" },
+    result: {
+      totalSavingsPct: 23,
+      suggestions: [
+        { title: "Rightsize 4 over-provisioned EC2 instances", service: "EC2",
+          monthlySavingsUsd: 412.9, severity: "high",
+          detail: "Four m5.2xlarge instances averaged 8% CPU across the billing period.",
+          action: "Move to m5.large and re-measure after a full week." },
+        { title: "Delete 1.2 TB of unattached EBS volumes", service: "EBS",
+          monthlySavingsUsd: 96.0, severity: "medium",
+          detail: "Eleven volumes have had no attachment for the whole period.",
+          action: "Snapshot, then delete." },
+      ],
+    },
+  });
 }
 
 async function body(res) {
@@ -170,8 +269,44 @@ const run = async () => {
   await cap("/api/scorecard", scorecardHandler);
   await cap("/api/runs", listRunsHandler);
 
+  // One report payload per analyzer, keyed by run id, so the visual audit can
+  // open each report layout.
+  const runs = await env.DB.prepare(
+    "SELECT id, analyzer FROM runs ORDER BY created_at DESC").all();
+  out.__runs = (runs.results || []).map((r) => ({ id: r.id, analyzer: r.analyzer }));
+  for (const r of (runs.results || [])) {
+    await cap(`/api/runs/${r.id}`, getRunHandler, { params: { id: r.id } });
+  }
+
+  // Every generated identifier is random or time-derived, so a no-op refresh
+  // would rewrite dozens of ids and bury the one field that actually moved —
+  // and people stop reading a diff that is noise by default. Each family is
+  // remapped to a stable name before the file is written.
+  let json = JSON.stringify(out, null, 2);
+
+  // Run ids: `<ms>_<hex>`. Keyed by analyzer, which is all a consumer cares about.
+  for (const r of out.__runs || []) json = json.split(r.id).join(`run_${r.analyzer}`);
+
+  // Monitor ids: random hex, numbered in list order.
+  const monitors = (out["/api/monitors"] && out["/api/monitors"].monitors) || [];
+  monitors.forEach((m, i) => { json = json.split(m.monitorId).join(`mon_${i + 1}`); });
+
+  // Referral code: random suffix, and it appears inside the link too.
+  const code = out["/api/referrals"] && out["/api/referrals"].code;
+  if (code) json = json.split(code).join("acme-referral-code");
+
+  // With the clock frozen every run shares one created_at, so the feed's
+  // ORDER is a tie the database breaks arbitrarily. Sorted by analyzer so the
+  // list is stable; the timestamps are already identical and honest about it.
+  const shaped = JSON.parse(json);
+  const feed = shaped["/api/runs"];
+  if (feed && Array.isArray(feed.items)) {
+    feed.items.sort((a, b) => (a.analyzer < b.analyzer ? -1 : a.analyzer > b.analyzer ? 1 : 0));
+  }
+  json = JSON.stringify(shaped, null, 2);
+
   mkdirSync(OUT, { recursive: true });
-  writeFileSync(join(OUT, "ui-payloads.json"), JSON.stringify(out, null, 2) + "\n");
+  writeFileSync(join(OUT, "ui-payloads.json"), json + "\n");
 
   const broken = Object.entries(out).filter(([, v]) => v && v.__generatorError);
   for (const [k, v] of broken) console.log(`  ! ${k}: ${v.__generatorError}`);

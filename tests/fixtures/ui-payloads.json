@@ -22,7 +22,7 @@
       "initials": "DR",
       "authMethod": null,
       "authMethodKnown": false,
-      "createdAt": 1784124355,
+      "createdAt": 1782086400,
       "pendingEmailChange": null
     },
     "org": {
@@ -82,7 +82,7 @@
       "initials": "DR",
       "authMethod": null,
       "authMethodKnown": false,
-      "createdAt": 1784124355,
+      "createdAt": 1782086400,
       "pendingEmailChange": null
     },
     "org": {
@@ -349,13 +349,13 @@
         "userId": "usr_fixture",
         "email": "dana@acme.test",
         "role": "owner",
-        "joinedAt": 1784124355
+        "joinedAt": 1782086400
       },
       {
         "userId": "usr_second",
         "email": "engineering-oncall@acme.test",
         "role": "member",
-        "joinedAt": 1786716355
+        "joinedAt": 1784678400
       }
     ],
     "pendingInvites": []
@@ -390,24 +390,24 @@
         "userId": "usr_fixture",
         "email": "dana@acme.test",
         "role": "owner",
-        "joinedAt": 1784124355
+        "joinedAt": 1782086400
       },
       {
         "userId": "usr_second",
         "email": "engineering-oncall@acme.test",
         "role": "member",
-        "joinedAt": 1786716355
+        "joinedAt": 1784678400
       }
     ],
     "pendingInvites": []
   },
   "/api/referrals": {
-    "code": "acme-corporation-hol-epaoxfx9",
-    "link": "https://algosize.com/api/r/acme-corporation-hol-epaoxfx9",
+    "code": "acme-referral-code",
+    "link": "https://algosize.com/api/r/acme-referral-code",
     "usage": {
       "used": 0,
       "limit": 25,
-      "windowEndsAt": 1819116475,
+      "windowEndsAt": 1817078400,
       "limitReached": false
     },
     "referrals": [],
@@ -433,13 +433,13 @@
   "/api/monitors": {
     "monitors": [
       {
-        "monitorId": "mon_a62167361664435ea3f6",
+        "monitorId": "mon_1",
         "repoUrl": "https://github.com/acme/api-gateway-with-a-long-name",
         "branch": "main",
         "schedule": "daily",
-        "lastRunAt": 1787576755,
+        "lastRunAt": 1785538800,
         "paused": false,
-        "createdAt": 1787580475,
+        "createdAt": 1785542400,
         "knownAdvisoryCount": 2,
         "lastDelta": {
           "total": 2,
@@ -447,7 +447,7 @@
             "critical": 1,
             "high": 1
           },
-          "at": 1787576755
+          "at": 1785538800
         },
         "analyzers": [
           "vuln",
@@ -461,25 +461,25 @@
             "hetzner": 12400000,
             "aws": 41000000
           },
-          "at": 1787576755
+          "at": 1785538800
         },
         "lastAlgo": {
           "functions": 2,
-          "at": 1787576755
+          "at": 1785538800
         },
         "lastStatus": "ok",
-        "lastAttemptAt": 1787576755,
+        "lastAttemptAt": 1785538800,
         "lastError": null,
         "runAtHour": 14
       },
       {
-        "monitorId": "mon_e623cf76bda040eb9972",
+        "monitorId": "mon_2",
         "repoUrl": "https://github.com/acme/billing-worker",
         "branch": "main",
         "schedule": "daily",
         "lastRunAt": null,
         "paused": false,
-        "createdAt": 1787580475,
+        "createdAt": 1785542400,
         "knownAdvisoryCount": null,
         "lastDelta": null,
         "analyzers": [
@@ -542,13 +542,13 @@
     ],
     "rows": [
       {
-        "monitorId": "mon_a62167361664435ea3f6",
+        "monitorId": "mon_1",
         "repo": "acme/api-gateway-with-a-long-name",
         "repoUrl": "https://github.com/acme/api-gateway-with-a-long-name",
         "branch": "main",
         "paused": false,
-        "gradedAt": 1787576755,
-        "attemptedAt": 1787576755,
+        "gradedAt": 1785538800,
+        "attemptedAt": 1785538800,
         "status": "ok",
         "error": null,
         "cells": {
@@ -579,7 +579,7 @@
         }
       },
       {
-        "monitorId": "mon_e623cf76bda040eb9972",
+        "monitorId": "mon_2",
         "repo": "acme/billing-worker",
         "repoUrl": "https://github.com/acme/billing-worker",
         "branch": "main",
@@ -621,11 +621,55 @@
   "/api/runs": {
     "items": [
       {
-        "id": "run_fixture",
+        "id": "run_algo",
+        "analyzer": "algo",
+        "headline": "O(n²) · 612.40 ms",
+        "ms": 640.1,
+        "createdAt": 1785542400000,
+        "source": "ci",
+        "repo": null,
+        "commitSha": null,
+        "hasInput": true
+      },
+      {
+        "id": "run_arch",
+        "analyzer": "arch",
+        "headline": "0 clusters · 0 findings · 0 crit, 0 high",
+        "ms": 18.2,
+        "createdAt": 1785542400000,
+        "source": "manual",
+        "repo": null,
+        "commitSha": null,
+        "hasInput": true
+      },
+      {
+        "id": "run_cost",
+        "analyzer": "cost",
+        "headline": "23% savings · 2 suggestions",
+        "ms": 88.4,
+        "createdAt": 1785542400000,
+        "source": "manual",
+        "repo": null,
+        "commitSha": null,
+        "hasInput": true
+      },
+      {
+        "id": "run_estimate",
+        "analyzer": "estimate",
+        "headline": "$12.40/mo on Hetzner Cloud · 3 resources · 2 providers",
+        "ms": 31.7,
+        "createdAt": 1785542400000,
+        "source": "manual",
+        "repo": null,
+        "commitSha": null,
+        "hasInput": true
+      },
+      {
+        "id": "run_vuln",
         "analyzer": "vuln",
         "headline": "F · 2 advisories, worst critical",
         "ms": 412.5,
-        "createdAt": 1787576755000,
+        "createdAt": 1785538800000,
         "source": "ci",
         "repo": null,
         "commitSha": null,
@@ -633,5 +677,292 @@
       }
     ],
     "nextCursor": null
+  },
+  "__runs": [
+    {
+      "id": "run_arch",
+      "analyzer": "arch"
+    },
+    {
+      "id": "run_algo",
+      "analyzer": "algo"
+    },
+    {
+      "id": "run_estimate",
+      "analyzer": "estimate"
+    },
+    {
+      "id": "run_cost",
+      "analyzer": "cost"
+    },
+    {
+      "id": "run_vuln",
+      "analyzer": "vuln"
+    }
+  ],
+  "/api/runs/run_arch": {
+    "id": "run_arch",
+    "userId": "usr_fixture",
+    "orgId": "org_fixture",
+    "source": "manual",
+    "analyzer": "arch",
+    "input": {
+      "fileCount": 3,
+      "paths": [
+        "src/index.js",
+        "src/api.js",
+        "src/db.js"
+      ]
+    },
+    "result": {
+      "graph": {
+        "nodes": [],
+        "edges": [],
+        "clusters": []
+      },
+      "findings": [],
+      "recommendations": [],
+      "summary": {
+        "clusters": 0,
+        "nodes": 0,
+        "edges": 0,
+        "findings": 0,
+        "byLens": {
+          "speed": 0,
+          "cost": 0,
+          "security": 0
+        },
+        "bySeverity": {
+          "critical": 0,
+          "high": 0,
+          "medium": 0,
+          "low": 0
+        },
+        "complete": true
+      },
+      "limits": {
+        "filesAnalyzed": 3,
+        "filesSkipped": 0,
+        "skipped": [],
+        "truncatedSkippedList": false,
+        "oversized": [],
+        "droppedForMissingEvidence": 0,
+        "notImplemented": [
+          {
+            "lens": "cost",
+            "rule": "egress_volume",
+            "why": "Egress cost depends on bytes transferred, which no file in a repository records. The nearest detectable proxy — one external API called from several clusters — is reported as `shared_external_dependency` instead, and is about coupling, not bytes."
+          },
+          {
+            "lens": "speed",
+            "rule": "chatty_edge_by_volume",
+            "why": "Call volume is a runtime property. What is counted here is distinct call SITES between one pair of services, which is a code-shape signal, not traffic."
+          }
+        ]
+      }
+    },
+    "ms": 18.2,
+    "headline": "0 clusters · 0 findings · 0 crit, 0 high",
+    "createdAt": 1785542400000
+  },
+  "/api/runs/run_algo": {
+    "id": "run_algo",
+    "userId": "usr_fixture",
+    "orgId": "org_fixture",
+    "source": "ci",
+    "analyzer": "algo",
+    "input": {
+      "name": "groupByOwner",
+      "ceiling": "O(n log n)"
+    },
+    "result": {
+      "bigO": {
+        "label": "O(n²)",
+        "confidence": "high"
+      },
+      "wallTimeMs": 612.4,
+      "samples": [
+        {
+          "n": 100,
+          "ms": 0.42
+        },
+        {
+          "n": 200,
+          "ms": 1.61
+        },
+        {
+          "n": 400,
+          "ms": 6.38
+        },
+        {
+          "n": 800,
+          "ms": 25.9
+        }
+      ],
+      "notes": "Timings taken on a shared runner; treat a one-bucket move as noise."
+    },
+    "ms": 640.1,
+    "headline": "O(n²) · 612.40 ms",
+    "createdAt": 1785542400000
+  },
+  "/api/runs/run_estimate": {
+    "id": "run_estimate",
+    "userId": "usr_fixture",
+    "orgId": "org_fixture",
+    "source": "manual",
+    "analyzer": "estimate",
+    "input": {
+      "inputType": "compose",
+      "name": "acme-stack",
+      "resourceCount": 3,
+      "providers": [
+        "hetzner",
+        "aws"
+      ],
+      "duration": "1mo"
+    },
+    "result": {
+      "normalizedSpec": {
+        "name": "acme-stack",
+        "resources": [
+          {
+            "name": "api",
+            "quantity": 3,
+            "cpuMilli": 500,
+            "memoryMilliGiB": 1024,
+            "storageMilliGiB": 0
+          },
+          {
+            "name": "worker",
+            "quantity": 1,
+            "cpuMilli": 1000,
+            "memoryMilliGiB": 2048,
+            "storageMilliGiB": 0
+          },
+          {
+            "name": "postgres",
+            "quantity": 1,
+            "cpuMilli": 2000,
+            "memoryMilliGiB": 4096,
+            "storageMilliGiB": 100000
+          }
+        ]
+      },
+      "providers": [
+        {
+          "providerId": "hetzner",
+          "providerName": "Hetzner Cloud",
+          "currency": "USD",
+          "estimatedTotalMicroUsd": 12400000,
+          "confidence": "medium"
+        },
+        {
+          "providerId": "aws",
+          "providerName": "Amazon Web Services",
+          "currency": "USD",
+          "estimatedTotalMicroUsd": 41000000,
+          "lowerBoundMicroUsd": 36000000,
+          "upperBoundMicroUsd": 48500000,
+          "confidence": "low"
+        }
+      ],
+      "warnings": [
+        "No duration was declared, so one month was assumed.",
+        "Storage class was not specified; standard block storage was priced."
+      ],
+      "duration": "1mo",
+      "currency": "USD",
+      "pricingCatalogVersion": "2026-08",
+      "disclaimer": "List prices against the submitted specification. Not a quote, and not your bill."
+    },
+    "ms": 31.7,
+    "headline": "$12.40/mo on Hetzner Cloud · 3 resources · 2 providers",
+    "createdAt": 1785542400000
+  },
+  "/api/runs/run_cost": {
+    "id": "run_cost",
+    "userId": "usr_fixture",
+    "orgId": "org_fixture",
+    "source": "manual",
+    "analyzer": "cost",
+    "input": {
+      "file": "cur-2026-08.csv"
+    },
+    "result": {
+      "totalSavingsPct": 23,
+      "suggestions": [
+        {
+          "title": "Rightsize 4 over-provisioned EC2 instances",
+          "service": "EC2",
+          "monthlySavingsUsd": 412.9,
+          "severity": "high",
+          "detail": "Four m5.2xlarge instances averaged 8% CPU across the billing period.",
+          "action": "Move to m5.large and re-measure after a full week."
+        },
+        {
+          "title": "Delete 1.2 TB of unattached EBS volumes",
+          "service": "EBS",
+          "monthlySavingsUsd": 96,
+          "severity": "medium",
+          "detail": "Eleven volumes have had no attachment for the whole period.",
+          "action": "Snapshot, then delete."
+        }
+      ]
+    },
+    "ms": 88.4,
+    "headline": "23% savings · 2 suggestions",
+    "createdAt": 1785542400000
+  },
+  "/api/runs/run_vuln": {
+    "id": "run_vuln",
+    "userId": "usr_fixture",
+    "orgId": "org_fixture",
+    "source": "ci",
+    "analyzer": "vuln",
+    "input": {
+      "repoUrl": "https://github.com/acme/api-gateway-with-a-long-name"
+    },
+    "result": {
+      "advisories": [
+        {
+          "id": "GHSA-a",
+          "package": "lodash",
+          "ecosystem": "npm",
+          "severity": "critical",
+          "installedVersion": "4.17.11",
+          "fixedIn": "4.17.21",
+          "summary": "Prototype pollution in lodash"
+        },
+        {
+          "id": "GHSA-b",
+          "package": "axios",
+          "ecosystem": "npm",
+          "severity": "high",
+          "installedVersion": "0.21.0",
+          "fixedIn": "0.21.2",
+          "summary": "SSRF in axios"
+        }
+      ],
+      "summary": {
+        "securityScore": 39,
+        "grade": "F",
+        "totalIssues": 2,
+        "counts": {
+          "critical": 1,
+          "high": 1,
+          "medium": 0,
+          "low": 0,
+          "unknown": 0
+        },
+        "worstSeverity": "critical",
+        "sourceFindings": 0,
+        "dependencyAdvisories": 2,
+        "remediation": [],
+        "complete": true
+      }
+    },
+    "ms": 412.5,
+    "headline": "F · 2 advisories, worst critical",
+    "createdAt": 1785538800000
   }
 }

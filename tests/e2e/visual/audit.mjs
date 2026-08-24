@@ -60,6 +60,11 @@ const WIDTHS = [
 
 // Every routed view. A view that is never opened is never checked, and the
 // bug lives in the one nobody opened.
+//
+// The five report routes are here for a specific reason: the report refused
+// to render anything but a dependency audit, so View report on four of the
+// five tools led to an error panel. Nothing caught it, because nothing ever
+// opened one.
 const VIEWS = [
   ["#/",          "Workspace"],
   ["#/monitors",  "Monitors & CI"],
@@ -69,6 +74,11 @@ const VIEWS = [
   ["#/optimizer", "Algorithm optimizer"],
   ["#/estimate",  "Cost estimator"],
   ["#/account",   "Account"],
+  ["#/report/run_vuln",     "Report · dependency audit"],
+  ["#/report/run_arch",     "Report · architecture"],
+  ["#/report/run_algo",     "Report · complexity"],
+  ["#/report/run_estimate", "Report · infrastructure cost"],
+  ["#/report/run_cost",     "Report · cloud cost"],
 ];
 
 /**
@@ -217,6 +227,25 @@ const run = async () => {
         });
         return out;
       }, w);
+
+      // A table whose cells all wrapped into one column still passes every
+      // overflow check — a vertical stack never overflows anything. It is
+      // also unmistakably broken to look at, which is how the report tables
+      // shipped stacked. So: a header row's cells must share a top edge.
+      const stacked = await page.evaluate(() => {
+        const bad = [];
+        document.querySelectorAll(".report-table-head").forEach((row) => {
+          const cells = [...row.children];
+          if (cells.length < 2) return;
+          const tops = cells.map((c) => Math.round(c.getBoundingClientRect().top));
+          if (new Set(tops).size > 1) {
+            bad.push(cells.length + " cells on " + new Set(tops).size + " rows");
+          }
+        });
+        return bad;
+      });
+      expect(stacked.length === 0,
+        `${label} — table columns lay out side by side${stacked.length ? ": " + stacked.join(", ") : ""}`);
 
       expect(report.errors.length === 0,
         `${label} — every panel rendered${report.errors.length ? ": " + report.errors.slice(0, 2).join(" | ") : ""}`);
