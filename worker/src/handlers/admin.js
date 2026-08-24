@@ -256,6 +256,10 @@ const MIGRATIONS = Object.freeze([
              { table: "monitors", column: "last_attempt_at" },
              { table: "monitors", column: "run_at_hour" },
              { table: "monitors", column: "last_severity_json" }] },
+  { id: "0018", name: "arch_snapshots",
+    checks: [{ table: "arch_snapshots", column: "snapshot_id" },
+             { table: "arch_snapshots", column: "graph_json" },
+             { table: "arch_snapshots", column: "prev_snapshot_id" }] },
 ]);
 
 /** Plain SQLite identifier — the only shape we will interpolate into a PRAGMA. */

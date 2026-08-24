@@ -19,6 +19,7 @@ import { analyzeCur, _CUR_HELP_URL } from "../analyzers/cur.js";
 import { validateVulnInput, analyzeVuln } from "../analyzers/vuln.js";
 import { validateAlgoInput, analyzeAlgo } from "../analyzers/algo.js";
 import { validateArchitectureInput, analyzeArchitecture } from "../analyzers/architecture.js";
+import { recordSnapshot } from "../arch/snapshots.js";
 import {
   parseLockfile,
   SUPPORTED_FILES as LOCKFILE_NAMES,
@@ -62,6 +63,23 @@ async function maybePersist(ctx, env, request, analyzer, input, response) {
   // link opened minutes later serves from R2 instead of rendering on the
   // reader's request. No-ops when the bucket is unbound, or for analyzers that
   // produce no report — see reports/render.js.
+  // Architecture runs also become a versioned snapshot (migrations/0018), so
+  // "what changed since last time" has something to compare against. A manual
+  // upload has no repository behind it, so repo_url and branch stay NULL —
+  // which is what makes the chain link manual uploads to each other rather
+  // than to some repo's nightly history.
+  //
+  // Fire-and-forget on the same waitUntil budget as the report render, and
+  // best-effort like everything else here: a snapshot that cannot be written
+  // must not cost the user the analysis they actually asked for.
+  if (analyzer === "arch" && orgId && result && result.graph) {
+    const snap = recordSnapshot(env, ctx, {
+      orgId, source: "manual", graph: result.graph,
+      findingCount: Array.isArray(result.findings) ? result.findings.length : 0,
+    }).catch(() => null);
+    if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(snap);
+  }
+
   const persisted = queuePersist(ctx, env, { userId, orgId, analyzer, input, result, ms })
     .then((run) => (run ? storeReportFor(env, ctx, run) : null))
     .catch((err) => { console.error("maybePersist: report store failed", err); return null; });
