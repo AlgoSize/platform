@@ -255,6 +255,44 @@ group("the new classes are styled, and none are dead");
 }
 
 // ===========================================================================
+group("the header is one row, with the quota under the Account control");
+// ===========================================================================
+{
+  expect(/class="dash-nav-left"/.test(html) && /class="dash-nav-right"/.test(html),
+    "the bar is split into a left group and a right group");
+  const left = html.split('class="dash-nav-left"')[1].split("</div>")[0] +
+               html.split('class="dash-nav-left"')[1].slice(0, 2000);
+  expect(/class="dash-tabs"/.test(left),
+    "the tab strip is inside the left group, so it sits beside the brand");
+  const right = html.split('class="dash-nav-right"')[1].split('<!-- ')[0] +
+                html.split('class="dash-nav-right"')[1].slice(0, 3000);
+  expect(/id="dash-quota"/.test(right) && /class="dash-nav-actions"/.test(right),
+    "the quota and the actions row are both in the right group");
+  expect(right.indexOf('class="dash-nav-actions"') < right.indexOf('id="dash-quota"'),
+    "…and the quota comes after the actions, so it renders below them");
+  expect(/\.dash-nav \.nav-inner \{[^}]*flex-wrap: nowrap/.test(css),
+    "the bar never wraps to a second row");
+  expect(!/id="dash-user-email"/.test(html) && !/dash-user-email/.test(dashJs),
+    "the signed-in email is gone from the markup and the script");
+}
+
+// ===========================================================================
+group("no class is applied without a rule, and no rule is applied to nothing");
+// ===========================================================================
+{
+  // A class with no CSS renders as an unstyled inline span — which is how a
+  // decorative glyph ended up on its own line above the scorecard title,
+  // looking like a layout bug for as long as nobody looked closely.
+  const applied = uniq(matchAll(html, /class="([^"]+)"/g)
+    .flatMap((c) => c.split(/\s+/))
+    .filter((c) => /^(panel|dash|ws|acct|scorecard|route|monitor)-/.test(c)));
+  const styled = new Set(matchAll(css, /\.([a-zA-Z][a-zA-Z0-9_-]*)/g));
+  const unstyled = applied.filter((c) => !styled.has(c));
+  expect(unstyled.length === 0,
+    `every layout class in dashboard.html has a rule${unstyled.length ? " — unstyled: " + unstyled.join(", ") : ` (${applied.length} checked)`}`);
+}
+
+// ===========================================================================
 group("no innerHTML anywhere in the new modules");
 // ===========================================================================
 {

@@ -1,0 +1,637 @@
+{
+  "/api/me": {
+    "email": "dana@acme.test",
+    "subStatus": null,
+    "plan": "free",
+    "monthlyRunsUsed": 0,
+    "monthlyRunsLimit": 5,
+    "active": false,
+    "reason": "free_plan",
+    "currentPeriodEnd": null,
+    "isAdmin": true,
+    "displayName": "Dana Reyes",
+    "avatarUrl": null,
+    "initials": "DR"
+  },
+  "/api/account": {
+    "profile": {
+      "userId": "usr_fixture",
+      "email": "dana@acme.test",
+      "displayName": "Dana Reyes",
+      "avatarUrl": null,
+      "initials": "DR",
+      "authMethod": null,
+      "authMethodKnown": false,
+      "createdAt": 1784124355,
+      "pendingEmailChange": null
+    },
+    "org": {
+      "orgId": "org_fixture",
+      "name": "Acme Corporation Holdings International",
+      "role": "owner",
+      "tier": null,
+      "plan": "free",
+      "subStatus": null,
+      "seatsPurchased": 1,
+      "seatsUsed": 2,
+      "billingEmail": null,
+      "hasStripeCustomer": false
+    },
+    "entitlement": {
+      "active": false,
+      "reason": "free_plan",
+      "currentPeriodEnd": null
+    },
+    "usage": {
+      "monthlyRunsUsed": 0,
+      "monthlyRunsLimit": 5
+    },
+    "credit": {
+      "balanceCents": 0,
+      "balance": "$0.00",
+      "unsyncedCents": 0,
+      "expiringCents": 0,
+      "expiringAt": null,
+      "known": true
+    },
+    "capabilities": {
+      "branding": {
+        "unlocked": false,
+        "requiredTier": "firm"
+      },
+      "team": {
+        "canManage": true
+      },
+      "apiKeys": {
+        "canManage": true
+      },
+      "dangerZone": {
+        "canDeleteOrg": true
+      },
+      "billing": {
+        "canManage": true
+      }
+    }
+  },
+  "/api/account/profile": {
+    "profile": {
+      "userId": "usr_fixture",
+      "email": "dana@acme.test",
+      "displayName": "Dana Reyes",
+      "avatarUrl": null,
+      "initials": "DR",
+      "authMethod": null,
+      "authMethodKnown": false,
+      "createdAt": 1784124355,
+      "pendingEmailChange": null
+    },
+    "org": {
+      "orgId": "org_fixture",
+      "name": "Acme Corporation Holdings International",
+      "role": "owner",
+      "tier": null,
+      "plan": "free",
+      "subStatus": null,
+      "seatsPurchased": 1,
+      "seatsUsed": 2,
+      "billingEmail": null,
+      "hasStripeCustomer": false
+    },
+    "entitlement": {
+      "active": false,
+      "reason": "free_plan",
+      "currentPeriodEnd": null
+    },
+    "usage": {
+      "monthlyRunsUsed": 0,
+      "monthlyRunsLimit": 5
+    },
+    "credit": {
+      "balanceCents": 0,
+      "balance": "$0.00",
+      "unsyncedCents": 0,
+      "expiringCents": 0,
+      "expiringAt": null,
+      "known": true
+    },
+    "capabilities": {
+      "branding": {
+        "unlocked": false,
+        "requiredTier": "firm"
+      },
+      "team": {
+        "canManage": true
+      },
+      "apiKeys": {
+        "canManage": true
+      },
+      "dangerZone": {
+        "canDeleteOrg": true
+      },
+      "billing": {
+        "canManage": true
+      }
+    }
+  },
+  "/api/account/sessions": {
+    "sessions": [],
+    "complete": true,
+    "indexedOnly": true,
+    "note": "Sessions issued before device tracking shipped are not listed. Sessions expire after 30 days."
+  },
+  "/api/account/logins": {
+    "logins": [],
+    "since": "Recorded from the release that added sign-in history. Earlier sign-ins were not logged."
+  },
+  "/api/account/notifications": {
+    "groups": [
+      {
+        "id": "billing",
+        "title": "Billing",
+        "description": "Money and access. Email cannot be switched off for the first two — a missed decline becomes a lapsed account.",
+        "rows": [
+          {
+            "id": "pay_failed",
+            "label": "Payment failed",
+            "hint": "Sent on each Stripe retry, with the deadline.",
+            "channels": {
+              "email": {
+                "on": true,
+                "locked": true
+              },
+              "inapp": {
+                "on": true,
+                "locked": false
+              },
+              "slack": {
+                "on": false,
+                "locked": false
+              }
+            }
+          },
+          {
+            "id": "plan_changed",
+            "label": "Plan or seats changed",
+            "hint": "Upgrade, downgrade, seat add-on, cancellation.",
+            "channels": {
+              "email": {
+                "on": true,
+                "locked": true
+              },
+              "inapp": {
+                "on": false,
+                "locked": false
+              },
+              "slack": {
+                "on": false,
+                "locked": false
+              }
+            }
+          },
+          {
+            "id": "invoice_paid",
+            "label": "Invoice paid",
+            "hint": "Receipt to your billing email.",
+            "channels": {
+              "email": {
+                "on": true,
+                "locked": false
+              },
+              "inapp": {
+                "on": false,
+                "locked": false
+              },
+              "slack": {
+                "on": false,
+                "locked": false
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "product",
+        "title": "Product",
+        "description": "Scans and findings. Silence any of these without losing billing notices.",
+        "rows": [
+          {
+            "id": "scan_done",
+            "label": "Scan complete",
+            "hint": "Every finished run, CI or manual.",
+            "channels": {
+              "email": {
+                "on": false,
+                "locked": false
+              },
+              "inapp": {
+                "on": true,
+                "locked": false
+              },
+              "slack": {
+                "on": false,
+                "locked": false
+              }
+            }
+          },
+          {
+            "id": "severity",
+            "label": "New finding at or above high",
+            "hint": "Threshold: high. Critical always notifies.",
+            "channels": {
+              "email": {
+                "on": true,
+                "locked": false
+              },
+              "inapp": {
+                "on": true,
+                "locked": false
+              },
+              "slack": {
+                "on": true,
+                "locked": false
+              }
+            }
+          },
+          {
+            "id": "monitor",
+            "label": "Monitor alerts",
+            "hint": "A scheduled sweep failed, or a delta appeared.",
+            "channels": {
+              "email": {
+                "on": true,
+                "locked": false
+              },
+              "inapp": {
+                "on": false,
+                "locked": false
+              },
+              "slack": {
+                "on": false,
+                "locked": false
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "slack": {
+      "configured": false,
+      "note": "No Slack webhook is configured for this organisation, so Slack toggles have nowhere to deliver."
+    },
+    "stored": true
+  },
+  "/api/billing/summary": {
+    "org": {
+      "orgId": "org_fixture",
+      "name": "Acme Corporation Holdings International",
+      "role": "owner",
+      "tier": null,
+      "plan": "free",
+      "subStatus": null,
+      "seatsPurchased": 1,
+      "seatsUsed": 2
+    },
+    "entitlement": {
+      "active": false,
+      "reason": "free_plan",
+      "currentPeriodEnd": null
+    },
+    "billingEmail": {
+      "address": "dana@acme.test",
+      "explicit": false
+    },
+    "credit": {
+      "balanceCents": 0,
+      "balance": "$0.00",
+      "known": true
+    },
+    "subscription": null,
+    "paymentMethod": null,
+    "billingAddress": null,
+    "reason": "no_stripe_customer",
+    "message": "This organisation has never been through checkout, so there is nothing on file with Stripe yet."
+  },
+  "/api/billing/invoices": {
+    "invoices": [],
+    "reason": "no_stripe_customer",
+    "message": "No invoice has been raised yet — this organisation has not been through checkout."
+  },
+  "/api/keys": {
+    "keys": []
+  },
+  "/api/org": {
+    "org": {
+      "orgId": "org_fixture",
+      "name": "Acme Corporation Holdings International",
+      "plan": "free",
+      "subStatus": null,
+      "seatsPurchased": 1,
+      "seatsUsed": 2,
+      "tier": null
+    },
+    "branding": {
+      "companyName": null,
+      "logoUrl": null,
+      "accent": null,
+      "available": false,
+      "appliesToNewReports": false,
+      "domain": {
+        "hostname": null,
+        "status": null,
+        "detail": null,
+        "checkedAt": null,
+        "attempts": 0
+      }
+    },
+    "role": "owner",
+    "members": [
+      {
+        "userId": "usr_fixture",
+        "email": "dana@acme.test",
+        "role": "owner",
+        "joinedAt": 1784124355
+      },
+      {
+        "userId": "usr_second",
+        "email": "engineering-oncall@acme.test",
+        "role": "member",
+        "joinedAt": 1786716355
+      }
+    ],
+    "pendingInvites": []
+  },
+  "/api/account/org": {
+    "org": {
+      "orgId": "org_fixture",
+      "name": "Acme Corporation Holdings International",
+      "plan": "free",
+      "subStatus": null,
+      "seatsPurchased": 1,
+      "seatsUsed": 2,
+      "tier": null
+    },
+    "branding": {
+      "companyName": null,
+      "logoUrl": null,
+      "accent": null,
+      "available": false,
+      "appliesToNewReports": false,
+      "domain": {
+        "hostname": null,
+        "status": null,
+        "detail": null,
+        "checkedAt": null,
+        "attempts": 0
+      }
+    },
+    "role": "owner",
+    "members": [
+      {
+        "userId": "usr_fixture",
+        "email": "dana@acme.test",
+        "role": "owner",
+        "joinedAt": 1784124355
+      },
+      {
+        "userId": "usr_second",
+        "email": "engineering-oncall@acme.test",
+        "role": "member",
+        "joinedAt": 1786716355
+      }
+    ],
+    "pendingInvites": []
+  },
+  "/api/referrals": {
+    "code": "acme-corporation-hol-epaoxfx9",
+    "link": "https://algosize.com/api/r/acme-corporation-hol-epaoxfx9",
+    "usage": {
+      "used": 0,
+      "limit": 25,
+      "windowEndsAt": 1819116475,
+      "limitReached": false
+    },
+    "referrals": [],
+    "credit": {
+      "balanceCents": 0,
+      "balance": "$0.00",
+      "expiringCents": 0,
+      "expiring": null,
+      "expiringAt": null,
+      "unsyncedCents": 0,
+      "known": true,
+      "events": []
+    },
+    "terms": {
+      "creditPerReferral": "$120.00",
+      "creditPerReferralCents": 12000,
+      "signupLimit": 25,
+      "earnRule": "You earn $120.00 in credit when a referred organisation's first invoice is paid — not at signup, and not for a trial that never converts.",
+      "cashPolicy": "Credit reduces your Algosize bill. It is not withdrawable as cash and cannot be transferred.",
+      "expiry": "Earned credit is valid for 12 months from the day it is issued."
+    }
+  },
+  "/api/monitors": {
+    "monitors": [
+      {
+        "monitorId": "mon_a62167361664435ea3f6",
+        "repoUrl": "https://github.com/acme/api-gateway-with-a-long-name",
+        "branch": "main",
+        "schedule": "daily",
+        "lastRunAt": 1787576755,
+        "paused": false,
+        "createdAt": 1787580475,
+        "knownAdvisoryCount": 2,
+        "lastDelta": {
+          "total": 2,
+          "counts": {
+            "critical": 1,
+            "high": 1
+          },
+          "at": 1787576755
+        },
+        "analyzers": [
+          "vuln",
+          "arch",
+          "estimate",
+          "algo"
+        ],
+        "archFindingCount": 3,
+        "lastEstimate": {
+          "byProvider": {
+            "hetzner": 12400000,
+            "aws": 41000000
+          },
+          "at": 1787576755
+        },
+        "lastAlgo": {
+          "functions": 2,
+          "at": 1787576755
+        },
+        "lastStatus": "ok",
+        "lastAttemptAt": 1787576755,
+        "lastError": null,
+        "runAtHour": 14
+      },
+      {
+        "monitorId": "mon_e623cf76bda040eb9972",
+        "repoUrl": "https://github.com/acme/billing-worker",
+        "branch": "main",
+        "schedule": "daily",
+        "lastRunAt": null,
+        "paused": false,
+        "createdAt": 1787580475,
+        "knownAdvisoryCount": null,
+        "lastDelta": null,
+        "analyzers": [
+          "vuln"
+        ],
+        "archFindingCount": null,
+        "lastEstimate": null,
+        "lastAlgo": null,
+        "lastStatus": null,
+        "lastAttemptAt": null,
+        "lastError": null,
+        "runAtHour": null
+      }
+    ],
+    "monitorLimit": 1,
+    "monitorsUsed": 2
+  },
+  "/api/monitors/route": {
+    "channels": [
+      {
+        "id": "email",
+        "label": "Email",
+        "wired": true,
+        "detail": [
+          "dana@acme.test",
+          "engineering-oncall@acme.test"
+        ],
+        "note": null
+      },
+      {
+        "id": "slack",
+        "label": "Slack",
+        "wired": false,
+        "detail": [],
+        "note": "No webhook is configured for this organisation."
+      }
+    ],
+    "muted": false,
+    "reason": null,
+    "summary": "The next alert goes to 2 email addresses."
+  },
+  "/api/scorecard": {
+    "columns": [
+      {
+        "id": "security",
+        "label": "Security"
+      },
+      {
+        "id": "cost",
+        "label": "Cost"
+      },
+      {
+        "id": "complexity",
+        "label": "Complexity"
+      },
+      {
+        "id": "architecture",
+        "label": "Architecture"
+      }
+    ],
+    "rows": [
+      {
+        "monitorId": "mon_a62167361664435ea3f6",
+        "repo": "acme/api-gateway-with-a-long-name",
+        "repoUrl": "https://github.com/acme/api-gateway-with-a-long-name",
+        "branch": "main",
+        "paused": false,
+        "gradedAt": 1787576755,
+        "attemptedAt": 1787576755,
+        "status": "ok",
+        "error": null,
+        "cells": {
+          "security": {
+            "kind": "grade",
+            "value": "F · 2",
+            "note": "Worst is critical; 2 advisories total.",
+            "rank": 61
+          },
+          "cost": {
+            "kind": "grade",
+            "value": "$12.40",
+            "note": "Cheapest of 2 providers — hetzner. List prices, not your bill.",
+            "rank": 12400000
+          },
+          "complexity": {
+            "kind": "grade",
+            "value": "O(n²)",
+            "note": "Worst of 2 measured entries.",
+            "rank": 4
+          },
+          "architecture": {
+            "kind": "grade",
+            "value": "3",
+            "note": "3 open findings.",
+            "rank": 3
+          }
+        }
+      },
+      {
+        "monitorId": "mon_e623cf76bda040eb9972",
+        "repo": "acme/billing-worker",
+        "repoUrl": "https://github.com/acme/billing-worker",
+        "branch": "main",
+        "paused": false,
+        "gradedAt": null,
+        "attemptedAt": null,
+        "status": null,
+        "error": null,
+        "cells": {
+          "security": {
+            "kind": "pending",
+            "note": "No sweep has completed yet.",
+            "value": null,
+            "rank": null
+          },
+          "cost": {
+            "kind": "off",
+            "note": null,
+            "value": null,
+            "rank": null
+          },
+          "complexity": {
+            "kind": "off",
+            "note": null,
+            "value": null,
+            "rank": null
+          },
+          "architecture": {
+            "kind": "off",
+            "note": null,
+            "value": null,
+            "rank": null
+          }
+        }
+      }
+    ],
+    "basis": "Rows come from scheduled monitors. A repository has to be under watch to be graded."
+  },
+  "/api/runs": {
+    "items": [
+      {
+        "id": "run_fixture",
+        "analyzer": "vuln",
+        "headline": "F · 2 advisories, worst critical",
+        "ms": 412.5,
+        "createdAt": 1787576755000,
+        "source": "ci",
+        "repo": null,
+        "commitSha": null,
+        "hasInput": true
+      }
+    ],
+    "nextCursor": null
+  }
+}
