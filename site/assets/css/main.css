@@ -2076,6 +2076,9 @@ code, .mono {
 }
 .dash-tabs::-webkit-scrollbar { display: none; }
 .dash-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
   flex: 0 0 auto;
   white-space: nowrap;
   padding: 0.4rem 0.8rem;
@@ -3423,6 +3426,16 @@ input.panel-input {
 }
 
 .acct-main { display: flex; flex-direction: column; gap: var(--s-4); min-width: 0; }
+/* .acct-main's own gap only separates its two direct children — the section
+   head and the #acct-body wrapper. Every section's actual panels
+   (.acct-panel) are appended INSIDE #acct-body, one level deeper, where
+   nothing was providing rhythm: .acct-panel zeroes .panel's normal
+   margin-bottom on the assumption that a flex-gap ancestor supplies the
+   space instead, and #acct-body was a plain block div — no flex, no gap. Two
+   or more panels in one section (Billing → plan + payment + Stripe card,
+   Security → sign-in history + 2FA, Team → seats + members + invite, …)
+   rendered stacked with zero space between them. This is that ancestor. */
+.acct-body { display: flex; flex-direction: column; gap: var(--s-4); min-width: 0; }
 .acct-sec-head {
   display: flex;
   flex-direction: column;

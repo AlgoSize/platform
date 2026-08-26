@@ -117,7 +117,15 @@ const run = async () => {
       await page.waitForTimeout(320);
 
       const r = await page.evaluate(() => {
-        const pane = document.querySelector(".acct-main") ||
+        // #acct-body is where a section's actual panels live — .acct-main's
+        // own children are just the section head and this one wrapper, so
+        // measuring .acct-main directly never sees panel-to-panel spacing at
+        // all. That gap was real: #acct-body had no flex/gap of its own, so
+        // sections rendering two or more panels (Billing, Security, Team, …)
+        // stacked them with zero space between them while this audit,
+        // watching the wrong pane, reported all-green.
+        const pane = document.querySelector("#acct-body") ||
+                     document.querySelector(".acct-main") ||
                      document.querySelector("#view-account .panel");
         if (!pane) return { missing: true };
 
