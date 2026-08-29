@@ -111,11 +111,16 @@ charged twice, and this layer cannot tell which calls are safe to repeat.
 
 ## Troubleshooting
 
-**The server connects but lists no tools** — it is running in its
-unconfigured state, which is what you see when `ALGOSIZE_API_KEY` did not
-reach the process. The reason is in the server's `instructions`, and any tool
-call returns it as the error text. Check the variable is inside the server's
-own `env` object in your client config, not just exported in your shell.
+**The server connects but lists no tools.** Two different causes, and the
+server tells you which:
+
+1. *The key never arrived.* The server's `instructions` say so, and any tool
+   call returns the same text as its error. Check `ALGOSIZE_API_KEY` is inside
+   the server's own `env` object in your client config, not just exported in
+   your shell.
+2. *The key works, but MCP is not enabled for your organisation.* The
+   instructions read normally and the tool list is simply empty. If you are an
+   existing customer, it has not been turned on for your account yet.
 
 The bridge deliberately stays up rather than exiting when it is misconfigured:
 a server that exits at startup is reported by every host as "Connection
@@ -126,10 +131,6 @@ revoked, or belong to a different environment than `ALGOSIZE_BASE_URL`.
 
 **"The Algosize session expired"** — sessions last 24 hours. Reconnect; the
 host will re-initialize.
-
-**The tool list is empty** — the MCP surface is enabled per environment and
-per organisation. If you are an existing customer and see nothing, it has not
-been turned on for your account yet.
 
 ## Development
 
