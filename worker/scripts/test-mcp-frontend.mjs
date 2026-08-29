@@ -70,11 +70,23 @@ group("the catalog comes from the server, not a hard-coded copy");
 {
   expect(/\/api\/mcp\/manifest/.test(js),
     "the tool list is fetched from /api/mcp/manifest");
-  // A hard-coded catalog would drift the moment a tool ships. The only
-  // algosize_ names allowed here are none.
-  const toolNames = js.match(/algosize_[a-z_]+/g) || [];
-  expect(toolNames.length === 0,
-    `no tool is named in the front end (found ${toolNames.join(", ") || "none"})`);
+  // A hard-coded catalog would drift the moment a tool ships. Exactly one
+  // algosize_ name is allowed: the probe the connection test calls, which is
+  // not a listing but a specific call, and which the module checks against
+  // the fetched manifest before offering the button.
+  const named = [...new Set(js.match(/algosize_[a-z_]+/g) || [])];
+  expect(named.length === 0 || (named.length === 1 && named[0] === "algosize_whoami"),
+    `no catalog is duplicated in the front end (found ${named.join(", ") || "none"})`);
+  if (named.length === 1) {
+    expect(/var PROBE_TOOL = "algosize_whoami";/.test(js),
+      "…the one allowed name is a single named constant, not scattered literals");
+    expect((js.match(/"algosize_whoami"/g) || []).length === 1,
+      "…written exactly once");
+    expect(/function probeAvailable\(/.test(js) && /=== false/.test(js) &&
+           /t\.name === PROBE_TOOL/.test(js),
+      "…and checked against the manifest, so a rename disables the test rather than " +
+      "firing a call the server will reject");
+  }
   expect(/state\.manifest\.groups|manifest\.groups/.test(js),
     "…and it renders the server's own grouping");
 }
@@ -126,11 +138,60 @@ group("every runtime-built class has a rule");
   const prefixes = ["mcp-badge-"];
   const dynamic = ["mcp-dot-on", "mcp-dot-off", "mcp-badge-metered", "mcp-badge-read",
                    "mcp-badge-public", "mcp-badge-destructive", "mcp-badge-plan",
-                   "mcp-client-on", "mcp-key-on", "mcp-conn-off", "mcp-copied"];
+                   "mcp-client-on", "mcp-key-on", "mcp-conn-off", "mcp-copied",
+                   // Built by concatenation in the quota, test and volume
+                   // panels, so the literal scan above cannot see them.
+                   "mcp-quota-seg", "mcp-quota-seg-on", "mcp-quota-seg-low",
+                   "mcp-quota-seg-out", "mcp-quota-note", "mcp-quota-warn",
+                   "mcp-test-state", "mcp-test-idle", "mcp-test-ok", "mcp-test-fail",
+                   "mcp-spark-bar", "mcp-spark-zero"];
   const unstyled = applied.concat(dynamic)
     .filter((c) => !styled.has(c) && prefixes.indexOf(c) === -1);
   expect(unstyled.length === 0,
     `every mcp-* class has a rule${unstyled.length ? " — unstyled: " + unstyled.join(", ") : ` (${applied.length + dynamic.length} checked)`}`);
+}
+
+group("the connection test claims only what it proves");
+{
+  // The test speaks over the reader's dashboard session. It cannot see the
+  // key their client will send — that value only exists in the client's
+  // environment. A green result that implied otherwise would send someone
+  // debugging the wrong half of a two-part problem.
+  expect(/credentials: "include"/.test(js),
+    "the test authenticates as the dashboard session, not as a pasted key");
+  expect(!/ask_live_/.test(js), "…so no key value is read, sent, or shown");
+  // Split across a string concatenation in the source, so match the halves.
+  expect(/does not check the/.test(js) && /key your client will send/.test(js),
+    "…and a PASSING result says out loud what it did not check");
+  expect(/not enabled for this organisation/.test(js),
+    "a 404 is reported as \"not enabled\", not as a generic failure");
+  expect(/read-only and unmetered|read-only\" \+|read-only/.test(js),
+    "…and the idle state says the test costs nothing, so nobody avoids it");
+}
+
+group("the allowance panel");
+{
+  // A paid plan has no monthly run ceiling. Drawing an empty meter for one
+  // would invent a limit the customer does not have.
+  expect(/me\.plan !== "free" \|\| me\.monthlyRunsLimit == null/.test(js),
+    "a paid plan is not given a meter it does not have");
+  expect(/core\.me/.test(js),
+    "the number comes from the same /api/me the header already read — two fetches could disagree on screen");
+  expect(/refuse before running/.test(js),
+    "at zero, it says a refused call consumes nothing");
+  expect(/mcp-quota-warn/.test(js) && /accent-warm/.test(css),
+    "…and being out of runs is amber, not red — it is a limit met, not a fault");
+  expect(/aria-label": used \+ " of "/.test(js),
+    "the meter carries its value in text, not in colour alone");
+}
+
+group("call volume");
+{
+  expect(/state\.usage\.daily/.test(js), "the series comes from the server, not from the capped call list");
+  expect(/mcp-spark-zero/.test(js),
+    "a day with no calls is drawn — an empty column and a missing one look identical");
+  expect(/aria-label[\s\S]{0,220}No calls on any of the last/.test(js),
+    "…and the chart has a text description for a reader who cannot see it");
 }
 
 group("responsive");

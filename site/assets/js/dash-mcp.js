@@ -35,6 +35,8 @@
     client: "claude-code",     // which client's config block is showing
     keyPrefix: null,           // the key row picked, for display only
     filter: "",
+    activity: "all",           // "all" | "errors" — the activity feed's filter
+    test: null,                // null | {state, note} — the connection test
   };
 
   // The four clients the config block can be written for, plus an escape
@@ -49,6 +51,24 @@
     { id: "cursor",         name: "Cursor",         kind: "json", file: ".cursor/mcp.json" },
     { id: "other",          name: "Other",          kind: "remote" },
   ];
+
+  // The ONE tool name this module contains. Everything else in the catalog is
+  // rendered from /api/mcp/manifest, because a second copy of the tool list
+  // here would drift the moment a tool shipped.
+  //
+  // This one is different in kind: it is not a listing, it is the specific
+  // call the connection test makes — read-only, unmetered, and the cheapest
+  // possible proof that a credential reaches an organisation. It is still
+  // checked against the manifest before the button is offered, so renaming
+  // the tool disables the test rather than wiring it to a call that will come
+  // back "no tool named that".
+  var PROBE_TOOL = "algosize_whoami";
+
+  function probeAvailable() {
+    var m = state.manifest;
+    if (!m || m.error || !Array.isArray(m.tools)) return null;   // not known yet
+    return m.tools.some(function (t) { return t.name === PROBE_TOOL; });
+  }
 
   function endpoint() {
     return (window.location.origin.indexOf("localhost") !== -1
@@ -102,6 +122,7 @@
     body.appendChild(catalogPanel());
     body.appendChild(clientsPanel());
     body.appendChild(activityPanel());
+    body.appendChild(quotaPanel());
     body.appendChild(securityPanel());
   }
 
@@ -252,6 +273,8 @@
     p.body.appendChild(el("p", { class: "panel-input-help" },
       "The key is written as an environment variable, never inline — so this " +
       "block is safe to paste into a shared config or a screenshot."));
+
+    p.body.appendChild(testBlock());
     return p;
   }
 
@@ -547,8 +570,23 @@
   // ------------------------------------------------------- activity
 
   function activityPanel() {
+    // The filter lives in the header, built before the early returns so a
+    // loading or failed panel still shows the control that caused the state —
+    // a filter that vanishes while its own request is in flight looks like the
+    // page lost it.
+    var modes = el("div", { class: "seg-group", role: "group", "aria-label": "Filter tool calls" });
+    [["all", "All"], ["errors", "Problems only"]].forEach(function (m) {
+      var on = state.activity === m[0];
+      var b = el("button", {
+        type: "button", class: "seg-btn", "aria-pressed": on ? "true" : "false",
+      }, m[1]);
+      b.addEventListener("click", function () { state.activity = m[0]; render(); });
+      modes.appendChild(b);
+    });
+
     var p = panel("Activity", "What the assistant did",
-      "Every tool call on this organisation. Arguments and results are never stored.");
+      "Every tool call on this organisation. Arguments and results are never stored.",
+      [modes]);
     if (state.usage === null) {
       p.body.appendChild(el("div", { class: "panel-empty" }, "Loading activity…"));
       return p;
@@ -570,10 +608,28 @@
     stat(stats, "Busiest tool", t.busiestTool || "—");
     p.body.appendChild(stats);
 
-    var calls = state.usage.calls || [];
+    if (Array.isArray(state.usage.daily) && state.usage.daily.length) {
+      p.body.appendChild(sparkline(state.usage.daily));
+    }
+
+    var all = state.usage.calls || [];
+    if (!all.length) {
+      p.body.appendChild(el("div", { class: "panel-empty" },
+        "No tool calls yet. They appear here as soon as a connected assistant uses one. " +
+        "Ask yours to run " + PROBE_TOOL + " — it is read-only, unmetered, and proves " +
+        "the credential end to end."));
+      return p;
+    }
+
+    // "Problems only" is everything that is not ok, not only errors: a call
+    // refused for quota or held by a rate limit is exactly what someone
+    // filtering this list is looking for, and neither is an error.
+    var calls = state.activity === "errors"
+      ? all.filter(function (c) { return c.status !== "ok"; })
+      : all;
     if (!calls.length) {
       p.body.appendChild(el("div", { class: "panel-empty" },
-        "No tool calls yet. They appear here as soon as a connected assistant uses one."));
+        "No refused or failed calls in this period — every call succeeded."));
       return p;
     }
     var list = el("div", { class: "mcp-feed" });
@@ -611,6 +667,243 @@
     s.appendChild(el("span", { class: "mcp-stat-label" }, label));
     s.appendChild(el("span", { class: "mcp-stat-value" }, value));
     parent.appendChild(s);
+  }
+
+  // ------------------------------------------------------- connection test
+
+  /**
+   * Prove the server end works, and be precise about what that does and does
+   * not cover.
+   *
+   * The test speaks to /api/mcp over the reader's DASHBOARD SESSION, not over
+   * the key they are about to paste — the key's value only ever exists in
+   * their client's environment and this page has never seen it. So a green
+   * result means the endpoint, the organisation and the tool surface are all
+   * working; it cannot mean "your key is correct".
+   *
+   * That distinction is the entire value of the button. Someone whose client
+   * says "failed to connect" is looking at two possible worlds — Algosize is
+   * down, or their ALGOSIZE_API_KEY is empty in the shell that launched the
+   * client — and has no way to tell them apart. This settles the first one.
+   * Claiming it settled the second would send them to debug the wrong half.
+   */
+  function runConnectionTest() {
+    state.test = { state: "testing", note: "Calling " + PROBE_TOOL + "…" };
+    render();
+
+    var started = Date.now();
+    var rpc = function (body, sessionId) {
+      var headers = { "content-type": "application/json" };
+      if (sessionId) headers["Mcp-Session-Id"] = sessionId;
+      return fetch(endpoint(), {
+        method: "POST", credentials: "include", headers, body: JSON.stringify(body),
+      });
+    };
+
+    rpc({
+      jsonrpc: "2.0", id: 1, method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        clientInfo: { name: "algosize-dashboard", version: "1" },
+        capabilities: {},
+      },
+    }).then(function (res) {
+      if (res.status === 404) {
+        throw new Error("The MCP endpoint is not enabled for this organisation yet.");
+      }
+      if (res.status === 401 || res.status === 403) {
+        throw new Error("Your dashboard session was refused. Sign in again and retry.");
+      }
+      if (!res.ok) throw new Error("The endpoint answered HTTP " + res.status + ".");
+      var sid = res.headers.get("Mcp-Session-Id");
+      if (!sid) throw new Error("The endpoint answered without a session id.");
+      return rpc({
+        jsonrpc: "2.0", id: 2, method: "tools/call",
+        params: { name: PROBE_TOOL, arguments: {} },
+      }, sid).then(function (r) { return r.json(); });
+    }).then(function (body) {
+      var ms = Date.now() - started;
+      if (body && body.error) {
+        throw new Error(body.error.message || "The server refused the call.");
+      }
+      var result = body && body.result;
+      if (result && result.isError) {
+        throw new Error((result.content && result.content[0] && result.content[0].text) ||
+          PROBE_TOOL + " reported an error.");
+      }
+      var who = (result && result.content && result.content[0] && result.content[0].text) || "";
+      state.test = {
+        state: "ok",
+        note: "Responded in " + ms + " ms. " + firstLine(who) +
+          " This confirms the endpoint and your organisation — it does not check the " +
+          "key your client will send, which only exists in that client's environment.",
+      };
+      render();
+    }).catch(function (err) {
+      state.test = {
+        state: "failed",
+        note: (err && err.message ? err.message : "The request did not complete.") +
+          " This is the server end only; a client that still cannot connect after a " +
+          "green result here has a problem in its own configuration or environment.",
+      };
+      render();
+    });
+  }
+
+  function firstLine(text) {
+    var line = String(text || "").split("\n")[0];
+    return line.length > 160 ? line.slice(0, 157) + "…" : line;
+  }
+
+  function testBlock() {
+    var wrap = el("div", { class: "mcp-test" });
+    var available = probeAvailable();
+    if (available === false) {
+      // The catalog loaded and does not contain the probe. Saying so beats a
+      // button that reports a failure the reader would spend the afternoon
+      // blaming on their own configuration.
+      wrap.appendChild(el("span", { class: "acct-dim" },
+        "The connection test is unavailable — this server's catalog no longer offers " +
+        PROBE_TOOL + ". Everything else on this page still works."));
+      return wrap;
+    }
+    var btn = el("button", { type: "button", class: "btn btn-ghost btn-sm" }, "Test connection");
+    btn.addEventListener("click", runConnectionTest);
+    if (state.test && state.test.state === "testing") btn.disabled = true;
+    wrap.appendChild(btn);
+
+    var t = state.test;
+    var word = !t ? "not tested" : t.state === "testing" ? "testing" : t.state === "ok" ? "reachable" : "failed";
+    var cls = !t ? "mcp-test-idle"
+      : t.state === "testing" ? "mcp-test-idle"
+      : t.state === "ok" ? "mcp-test-ok" : "mcp-test-fail";
+    var status = el("div", { class: "mcp-test-state " + cls });
+    status.appendChild(el("span", { class: "chip " + cls }, word));
+    status.appendChild(el("span", { class: "acct-dim" },
+      t ? t.note
+        : "Runs algosize_whoami once over your dashboard session. It is read-only and " +
+          "unmetered, so testing costs nothing."));
+    wrap.appendChild(status);
+    return wrap;
+  }
+
+  // ------------------------------------------------------- quota
+
+  /**
+   * What an assistant is allowed to spend.
+   *
+   * The five metered tools draw on the same monthly allowance as the
+   * dashboard's own analyzers, and this is the only screen where somebody is
+   * deciding to hand that allowance to a program that will use it without
+   * asking each time. Leaving them to find the number on another page is how
+   * "why did my analyses stop working" becomes a support conversation.
+   *
+   * Reads the cached /api/me rather than fetching again: the header already
+   * has this number and two fetches could disagree on screen.
+   */
+  function quotaPanel() {
+    var me = core.me && core.me();
+    var p = panel("Usage", "Monthly run allowance",
+      "Shared with the dashboard — an assistant's analysis and your own cost the same.");
+
+    if (!me) {
+      p.body.appendChild(el("div", { class: "panel-empty" }, "Loading your plan…"));
+      return p;
+    }
+    // A paid plan has no monthly ceiling to draw, and drawing an empty meter
+    // for one would invent a limit that does not exist.
+    if (me.plan !== "free" || me.monthlyRunsLimit == null) {
+      p.body.appendChild(el("p", {},
+        "This organisation is on a paid plan — metered tools are not capped by a " +
+        "monthly run count."));
+      p.body.appendChild(el("p", { class: "panel-input-help" },
+        "The five metered tools are the four analyzers and the estimator. Everything " +
+        "else in the catalog is free to call."));
+      return p;
+    }
+
+    var used  = me.monthlyRunsUsed || 0;
+    var limit = me.monthlyRunsLimit;
+    var left  = Math.max(0, limit - used);
+
+    var head = el("div", { class: "mcp-quota-head" });
+    head.appendChild(el("span", { class: "mcp-quota-count mono" }, used + " / " + limit));
+    head.appendChild(el("span", { class: "acct-dim" }, "runs used this month"));
+    p.body.appendChild(head);
+
+    // Segments rather than a bar: five runs is a countable quantity, and a
+    // 40%-filled bar is a worse answer to "how many do I have left" than two
+    // filled boxes out of five.
+    var meter = el("div", {
+      class: "mcp-quota-meter", role: "img",
+      "aria-label": used + " of " + limit + " monthly runs used",
+    });
+    for (var i = 0; i < limit; i++) {
+      meter.appendChild(el("span", {
+        class: "mcp-quota-seg" + (i < used ? (left === 0 ? " mcp-quota-seg-out" :
+          left <= 1 ? " mcp-quota-seg-low" : " mcp-quota-seg-on") : ""),
+      }));
+    }
+    p.body.appendChild(meter);
+
+    var note = el("div", { class: "mcp-quota-note" + (left <= 1 ? " mcp-quota-warn" : "") });
+    note.appendChild(el("strong", {},
+      left === 0 ? "No runs left this month"
+        : left === 1 ? "One run left this month"
+        : "Five metered tools share this allowance"));
+    note.appendChild(el("span", { class: "acct-dim" },
+      left === 0
+        ? "Metered tools now refuse before running, so nothing is consumed by a refused " +
+          "call — the assistant is told it is out of runs and the read-only tools keep working."
+        : left === 1
+        ? "The next metered call from anywhere — a chat window or this dashboard — is the " +
+          "last one. Read-only tools are unaffected."
+        : "An assistant calling a metered tool spends a run exactly as this dashboard does. " +
+          "The rest of the catalog reads history, scorecards and monitors for free."));
+    p.body.appendChild(note);
+
+    var foot = el("p", { class: "panel-input-help" });
+    foot.appendChild(el("a", { href: "#pricing", class: "mcp-link" }, "See plans →"));
+    p.body.appendChild(foot);
+    return p;
+  }
+
+  // ------------------------------------------------------- sparkline
+
+  /**
+   * Calls per day over the window the server defines.
+   *
+   * Bars, not a line: the series is a count per day, and a line between two
+   * daily totals implies values in between that were never measured.
+   *
+   * A day with no calls is drawn as a visible baseline tick rather than
+   * nothing at all — an empty column and a missing column look identical, and
+   * only one of them means "the connection was quiet that day".
+   */
+  function sparkline(daily) {
+    var max = daily.reduce(function (m, d) { return Math.max(m, d.calls); }, 0);
+    var wrap = el("div", { class: "mcp-spark-wrap" });
+    wrap.appendChild(el("span", { class: "mcp-spark-label acct-dim" },
+      "Calls per day · last " + daily.length));
+
+    var total = daily.reduce(function (t, d) { return t + d.calls; }, 0);
+    var chart = el("div", {
+      class: "mcp-spark", role: "img",
+      "aria-label": total === 0
+        ? "No calls on any of the last " + daily.length + " days"
+        : total + " calls over " + daily.length + " days, peaking at " + max + " in one day",
+    });
+    daily.forEach(function (d) {
+      var bar = el("span", {
+        class: "mcp-spark-bar" + (d.calls === 0 ? " mcp-spark-zero" : ""),
+        title: new Date(d.day * 1000).toISOString().slice(0, 10) + " · " +
+          (d.calls === 0 ? "no calls" : d.calls + (d.calls === 1 ? " call" : " calls")),
+      });
+      bar.style.height = d.calls === 0 ? "2px" : Math.max(3, Math.round((d.calls / max) * 40)) + "px";
+      chart.appendChild(bar);
+    });
+    wrap.appendChild(chart);
+    return wrap;
   }
 
   // ------------------------------------------------------- security

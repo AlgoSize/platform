@@ -809,9 +809,11 @@
     return new Date(ts).toISOString().slice(0, 10);
   }
 
-  // Current feed filter (D-3): "all" | "ci" | "manual". Filtering is
-  // server-side (?source=) so a busy pipeline can't push every manual run
-  // off the twenty-item first page.
+  // Current feed filter (D-3): "all" | "ci" | "monitor" | "manual". Filtering
+  // is server-side (?source=) so a busy pipeline can't push every manual run
+  // off the twenty-item first page. "monitor" arrived when scheduled sweeps
+  // started filing their audits as runs: a nightly monitor produces the most
+  // rows of anyone and would otherwise be the thing burying the other two.
   var runsFilter = "all";
 
   function renderRunsList(items) {
@@ -823,6 +825,8 @@
       listEl.appendChild(emptyState(
         runsFilter === "ci"
           ? "No CI runs yet — wire the workflow from the Monitors & CI tab and the first build will land here."
+          : runsFilter === "monitor"
+          ? "No scheduled sweeps yet — a monitor files a run each time it checks, from the Monitors & CI tab."
           : "No runs yet — pick an analyzer below to get started."));
       return;
     }
@@ -830,6 +834,11 @@
     var ul = el("ul", { class: "runs-items" });
     items.forEach(function (it) {
       var isCi = it.source === "ci";
+      var isMonitor = it.source === "monitor";
+      // Both origins read a repository and stored paths rather than content.
+      // Grouping them is what the row actually needs: neither can be re-run,
+      // and both have a repository worth naming.
+      var isAutomated = isCi || isMonitor;
       var li = el("li", { class: "run-item run-item-" + it.analyzer });
 
       var meta = el("div", { class: "run-item-meta" });
@@ -838,10 +847,16 @@
       // produced them. Dashboard entries keep exactly the shape they had.
       if (isCi) {
         meta.appendChild(el("span", { class: "tag tag-ci" }, "CI"));
+      } else if (isMonitor) {
+        // Its own badge rather than sharing CI's. "A schedule did this while
+        // you were asleep" and "a pull request was gated on this" are
+        // different facts, and the second one has a person waiting on it.
+        meta.appendChild(el("span", { class: "tag tag-monitor" }, "Monitor"));
       }
       meta.appendChild(el("span", { class: "run-item-headline" }, it.headline || "—"));
-      var origin = isCi
-        ? (it.repo || "pipeline") + (it.commitSha ? " · " + String(it.commitSha).slice(0, 7) : "")
+      var origin = isAutomated
+        ? (it.repo || (isCi ? "pipeline" : "scheduled")) +
+          (it.commitSha ? " · " + String(it.commitSha).slice(0, 7) : "")
         : null;
       if (origin) meta.appendChild(el("span", { class: "run-item-origin mono" }, origin));
       meta.appendChild(el("span", { class: "run-item-time mono" }, formatRelativeTime(it.createdAt)));
@@ -866,9 +881,11 @@
         }, "View map"));
       }
 
-      // A CI run's stored input is lockfile PATHS, not content — there is
-      // nothing to re-run against, so the button isn't rendered at all.
-      if (!isCi) {
+      // A CI run's stored input is lockfile PATHS, not content, and a swept
+      // run's is the monitor's own configuration — neither has anything to
+      // re-run against, so the button isn't rendered at all. (Re-running a
+      // monitor is a different action, and it lives on the monitor.)
+      if (!isAutomated) {
         var rerun = el("button", {
           type: "button",
           class: "btn btn-ghost btn-sm",
