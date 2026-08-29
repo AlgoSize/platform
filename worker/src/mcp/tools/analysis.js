@@ -52,7 +52,11 @@ export const ANALYSIS_TOOLS = [
         summary:  { type: "string" },
         packagesScanned: { type: "number" },
         fixCommand: { type: "string" },
-        runId: { type: "string" },
+        // No runId: /api/analyze/vuln persists through queuePersist, which is
+        // deliberately fire-and-forget so an analysis is never held up by a
+        // history write. Declaring a field the tool can never populate teaches
+        // a model to look for one and then handle its absence as an error.
+        // The run is findable a moment later through algosize_list_runs.
       },
     },
     async run({ args, request, env, ctx }) {

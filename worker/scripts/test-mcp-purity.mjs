@@ -144,6 +144,28 @@ group("the dangerous surfaces have no tool at all");
     "no tool is even named after a credential, billing or membership operation");
 }
 
+group("enums copied into tools/ cannot drift from the handler's own list");
+{
+  // tools/ may not import a handler — that is the purity rule — so two enums
+  // are duplicated there as literals. A duplicated literal is only safe while
+  // something compares it, and this is that something. The failure it catches
+  // is a value the API accepts that no assistant can name: the capability
+  // exists, is documented, and is unreachable through the surface built to
+  // reach it.
+  const { ANALYZERS, RUN_SOURCES } = await import("../src/handlers/runs.js");
+  const { TOOLS } = await import("../src/mcp/tools/index.js");
+  const listRuns = TOOLS.find((t) => t.name === "algosize_list_runs");
+  const props = (listRuns && listRuns.inputSchema && listRuns.inputSchema.properties) || {};
+
+  const same = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
+  expect(same([...ANALYZERS], props.analyzer.enum),
+    `the analyzer enum matches handlers/runs.js (tool: ${props.analyzer.enum.join(",")})`);
+  expect(same([...RUN_SOURCES], props.source.enum),
+    `the source enum matches handlers/runs.js (tool: ${props.source.enum.join(",")})`);
+  expect(props.source.enum.includes("monitor"),
+    "…and includes monitor, without which a scheduled audit is unaskable-for");
+}
+
 console.log("");
 if (failures) {
   console.log(`\x1b[31m  ${failures} mcp-purity check(s) failed\x1b[0m`);

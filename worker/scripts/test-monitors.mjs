@@ -849,6 +849,83 @@ console.log("\nthe optimizer CI snippet\n");
     "and skips itself with a notice while the secret is missing — never a red build");
 }
 
+// ---------------------------------------------------------------------------
+// A sweep files its audit as a run
+// ---------------------------------------------------------------------------
+// Until this existed, "what did the nightly monitor find" had no answer that
+// outlived the next sweep: the result went onto the monitor row, which holds
+// only the latest one. A CI audit and a scheduled audit are the same work on
+// the same repository, and only one of them was answerable.
+{
+  const { listRuns, listRunsHandler } = await import("../src/handlers/runs.js");
+  const { peekUsage } = await import("../src/quota.js");
+
+  const env = makeEnv();
+  const orgId = await seedOrg(env, { userId: "usr_file", email: "file@example.com" });
+  const m = await createMonitor(env, { orgId, repoUrl: "https://github.com/a/b" });
+
+  const mailbox = makeMailbox();
+  env.FETCH = makeAuditFetch({ vulns: [{ id: "GHSA-f1", package: "lodash", fixedIn: "4.17.21" }] });
+  const r1 = await runMonitorCheck(env, m.monitorId, {}, { now: NOW, sendTransactional: mailbox.send });
+
+  expect(r1.runIds && typeof r1.runIds.vuln === "string",
+    `the sweep reports the run id it filed (got ${JSON.stringify(r1.runIds)})`);
+
+  const all = await listRuns(env, { orgId }, { limit: 20 });
+  const filed = all.items.find((x) => x.id === r1.runIds.vuln);
+  expect(!!filed, "the audit is in run history like any other run");
+  expect(filed && filed.source === "monitor",
+    `…tagged monitor, not ci and not manual (got ${filed && filed.source})`);
+  expect(filed && filed.analyzer === "vuln", "…under the analyzer that produced it");
+  expect(filed && filed.repo === "https://github.com/a/b",
+    `…naming the repository it read (got ${filed && filed.repo})`);
+  expect(filed && filed.monitorId === m.monitorId,
+    "…and the monitor that scheduled it, so a run nobody started can say why it happened");
+
+  // The whole reason a sweep is worth filing: the history survives the next
+  // sweep, which the monitor row's single last_* result never did.
+  env.FETCH = makeAuditFetch({ vulns: [
+    { id: "GHSA-f1", package: "lodash", fixedIn: "4.17.21" },
+    { id: "GHSA-f2", package: "express", fixedIn: "4.18.0" },
+  ] });
+  const r2 = await runMonitorCheck(env, m.monitorId, {}, { now: NOW + DAY, sendTransactional: mailbox.send });
+  const after = await listRuns(env, { orgId }, { limit: 20, source: "monitor" });
+  expect(after.items.length === 2,
+    `a second sweep adds a second run rather than overwriting the first (got ${after.items.length})`);
+  expect(after.items.some((x) => x.id === r1.runIds.vuln) &&
+         after.items.some((x) => x.id === r2.runIds.vuln),
+    "…and both are still readable");
+
+  // Scheduled work must not spend the allowance the customer is keeping for
+  // work they are actually doing. A nightly monitor would empty a free plan
+  // inside a week and the first symptom would be an unexplained refusal.
+  expect(await peekUsage(env, orgId) === 0 && await peekUsage(env, "usr_file") === 0,
+    "a sweep consumes no quota — neither the org's meter nor the owner's");
+
+  // The filter, from the outside. This is the request an assistant makes.
+  const req = authed("usr_file", { url: "https://algosize.com/api/runs?source=monitor&limit=20" });
+  const res = await listRunsHandler(req, env);
+  const body = await res.json();
+  expect(res.status === 200 && body.items.length === 2,
+    `?source=monitor returns the swept runs (got ${res.status}, ${body.items && body.items.length})`);
+  expect(body.items.every((x) => x.source === "monitor"), "…and only those");
+
+  const manual = await listRuns(env, { orgId }, { limit: 20, source: "manual" });
+  expect(manual.items.length === 0,
+    "a swept run is not 'manual' either — manual means a person started it");
+
+  // An unrecognised filter must not quietly widen to everything. That failure
+  // reads as "there are no runs of that kind", which is the opposite of true
+  // and is exactly what ?source=monitor did before monitor was a real value.
+  const bad = await listRunsHandler(
+    authed("usr_file", { url: "https://algosize.com/api/runs?source=nightly" }), env);
+  expect(bad.status === 400,
+    `an unknown source is refused rather than ignored (got ${bad.status})`);
+  const badBody = await bad.json();
+  expect(/monitor/.test(badBody.message || ""),
+    "…and the refusal names the values that do work");
+}
+
 // ---------- summary ----------
 console.log("");
 if (failures === 0) {

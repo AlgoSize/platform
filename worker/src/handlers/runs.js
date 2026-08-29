@@ -80,6 +80,17 @@ export function newRunId() {
 export const ANALYZERS = Object.freeze(["cost", "vuln", "algo", "arch", "estimate"]);
 
 /**
+ * Where a run came from. `manual` is the odd one: it means source IS NULL,
+ * because dashboard runs predate the column and never wrote one — a NULL that
+ * has to be read as a value rather than as missing data.
+ *
+ * Exported because two other places have to agree with it exactly: the MCP
+ * `algosize_list_runs` enum, and the dashboard's feed filter. A source the
+ * handler accepts but a tool cannot name is a capability nobody can reach.
+ */
+export const RUN_SOURCES = Object.freeze(["ci", "monitor", "manual"]);
+
+/**
  * One-line headline metric for the dashboard list. Kept analyzer-specific
  * because the three analyzers don't have a common shape — but each one has
  * an obvious "what's the verdict?" number.
@@ -270,8 +281,9 @@ export async function listRuns(env, scope, { limit = 20, cursor = null, source =
   // first page, so the feed filters server-side rather than over-fetching.
   // "manual" means a NULL source — dashboard runs predate the column and
   // never write one.
-  if (source === "ci")     scopeSql += " AND source = 'ci'";
-  if (source === "manual") scopeSql += " AND source IS NULL";
+  if (source === "ci")      scopeSql += " AND source = 'ci'";
+  if (source === "monitor") scopeSql += " AND source = 'monitor'";
+  if (source === "manual")  scopeSql += " AND source IS NULL";
 
   // Analyzer filter. Needed by the architecture X-ray's run-over-run diff,
   // which has to find the PREVIOUS architecture run — filtering client-side
@@ -315,7 +327,13 @@ export async function listRuns(env, scope, { limit = 20, cursor = null, source =
   const items = slice.map((r) => {
     let input;
     try { input = r.input_json ? JSON.parse(r.input_json) : null; } catch { input = null; }
-    const isCi = r.source === "ci";
+    // A CI run and a scheduled sweep both know which repository they read;
+    // only CI knows which commit. Gating `repo` on "is this CI" was correct
+    // when CI was the only origin that had one, and became a bug the moment
+    // monitor sweeps started filing runs — the row would name no repository
+    // for a run whose entire subject is a repository.
+    const hasRepo   = r.source === "ci" || r.source === "monitor";
+    const isCi      = r.source === "ci";
     return {
       id:        r.id,
       analyzer:  r.analyzer,
@@ -330,12 +348,17 @@ export async function listRuns(env, scope, { limit = 20, cursor = null, source =
       // this run. Pulled from the already-parsed input rather than a new
       // column — the values were stored at ingest and never change. Null on
       // dashboard runs, where there is no commit to name.
-      repo:      isCi && input && typeof input.repo === "string" ? input.repo : null,
+      repo:      hasRepo && input && typeof input.repo === "string" ? input.repo : null,
       commitSha: isCi && input && typeof input.commitSha === "string" ? input.commitSha : null,
       // Re-run depends on the input still being there. Disabled for CUR
       // uploads (input was too big to keep) so the dashboard can grey out
       // the button without having to fetch the full record first.
       hasInput:  !!(input && !input._omitted),
+      // Which monitor scheduled this, when one did. Null everywhere else —
+      // the field is the answer to "why did this run happen without me", and
+      // a run nobody scheduled has no answer to give.
+      monitorId: r.source === "monitor" && input && typeof input.monitorId === "string"
+        ? input.monitorId : null,
       // How this run was authenticated (migrations/0019), so the feed can
       // label a row "via MCP" or "via API key". Null on every run recorded
       // before the column existed — which is NOT the same as "session", and
@@ -411,9 +434,20 @@ export async function listRunsHandler(request, env) {
   const rawLimit = parseInt(url.searchParams.get("limit") || "20", 10);
   const limit = Number.isFinite(rawLimit) ? Math.min(50, Math.max(1, rawLimit)) : 20;
   const cursor = url.searchParams.get("cursor") || null;
-  // ?source=ci|manual — anything else (including absent) means no filter.
+  // ?source=ci|monitor|manual. Absent means no filter; anything ELSE is
+  // refused rather than ignored. Silently dropping an unrecognised filter is
+  // the worst available behaviour: the caller asked to narrow the list and got
+  // the whole list back, which reads as "there are no other kinds of run" —
+  // exactly the wrong conclusion, and exactly the one `?source=monitor`
+  // produced before monitor became a real value.
   const rawSource = url.searchParams.get("source");
-  const source = rawSource === "ci" || rawSource === "manual" ? rawSource : null;
+  if (rawSource !== null && !RUN_SOURCES.includes(rawSource)) {
+    return json({
+      error: "invalid_source",
+      message: `Unknown source "${rawSource}". Use one of: ${RUN_SOURCES.join(", ")}.`,
+    }, 400);
+  }
+  const source = rawSource;
   // ?analyzer=cost|vuln|algo|arch|estimate — anything else (including absent) means no
   // filter. Whitelisted against ANALYZERS rather than passed through, because
   // the value reaches a SQL predicate.
