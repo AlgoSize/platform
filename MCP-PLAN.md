@@ -228,12 +228,6 @@ Deferred by choice, with the reasoning recorded rather than lost:
   unauthenticated `authorize` resumes without the interstitial. Now that
   `#/mcp` exists it could host the consent UI directly, which is the cleaner
   version of this.
-- **A tighter rate limit on metered `tools/call`** than the 120/min envelope
-  limit.
-- **Admin panel MCP adoption** section reading `mcp_tool_calls`.
-- **`GET /api/mcp` as a real SSE stream**, once progress notifications exist.
-- **Rate limits** beyond the 120/min envelope limit — a tighter one on metered
-  `tools/call`.
 
 ---
 

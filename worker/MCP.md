@@ -168,6 +168,30 @@ model can read and act on. A 402 for an exhausted allowance must be the
 second kind, or "you are out of runs this month" reads to the user as "the
 integration is down".
 
+## Two rate limits, not one
+
+The envelope limiter on `/api/mcp` allows **120 requests a minute** per
+credential. That is sized for a conversational client, which does a dozen
+reads in a turn and should never feel it.
+
+It is the wrong number for analyses. 120 metered calls in a minute would burn
+a free plan's whole monthly allowance twenty-four times over before the
+customer could notice, so `tools/call` on a tool with `metered: true` also
+passes a **20 a minute** bucket, keyed on the org and namespaced separately
+(`mcp_metered`) so reads and analyses never share a counter.
+
+The distinction matters in both directions. Sharing one bucket would mean a
+retry loop on an analyzer locks the model out of `algosize_list_runs` — the
+very tool it needs to discover it already has the result it is retrying for.
+Having no second bucket would mean the 120/min limit is, in practice, a
+spending limit set at twenty-four months of a free plan.
+
+This limit protects the **customer's allowance**, not the server, which is why
+the refusal is an `isError` result rather than a 429: the model should read
+it, wait the interval it names, and carry on with reads meanwhile. The
+refusal is recorded in `mcp_tool_calls` with status `rate_limited` and no
+`run_id`, because no run was spent.
+
 ## Telemetry
 
 One row per `tools/call` in `mcp_tool_calls`, written through `ctx.waitUntil`.

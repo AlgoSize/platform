@@ -300,6 +300,69 @@ group("tools/call");
 }
 
 // ---------------------------------------------------------------------------
+group("metered tools carry a tighter limit than the envelope");
+{
+  const env = makeEnv(); await seed(env);
+  // A ctx that can be awaited, because the assertions below read the row that
+  // ctx.waitUntil writes. The shared ctx swallows the promise, which would
+  // make this test pass or fail on scheduler timing.
+  const waits = [];
+  const wctx = { waitUntil: (p) => { waits.push(Promise.resolve(p).catch(() => {})); } };
+
+  const init = await worker.fetch(rpc(INIT), env, wctx);
+  const sid = init.headers.get("Mcp-Session-Id");
+
+  // Seed the bucket at its limit rather than driving twenty real analyses
+  // through it. The guard runs before dispatch, so the guard is what is under
+  // test; twenty analyzer round-trips would test the analyzers instead and
+  // take a minute of wall clock to do it. Both the current window and the
+  // next one, so a run that crosses a minute boundary mid-test asserts the
+  // same thing it would have a millisecond earlier.
+  const w = Math.floor(Math.floor(Date.now() / 1000) / 60);
+  await env.SESSIONS.put(`rl:org:${ORG}:mcp_metered:${w}`, "20");
+  await env.SESSIONS.put(`rl:org:${ORG}:mcp_metered:${w + 1}`, "20");
+
+  const res = await worker.fetch(rpc({
+    jsonrpc: "2.0", id: 20, method: "tools/call",
+    params: { name: "algosize_analyze_cost",
+              arguments: { services: [{ name: "RDS", monthlyCost: 900 }] } },
+  }, { sessionId: sid }), env, wctx);
+  const body = await res.json();
+  const text = body.result && body.result.content && body.result.content[0].text || "";
+
+  expect(!body.error,
+    "a rate-limited analysis is not a JSON-RPC error — that renders as a dead connection");
+  expect(body.result && body.result.isError === true,
+    "…it is an isError result the model can read, wait on, and retry");
+  expect(/rate limited/i.test(text), "…and says so in words rather than a bare code");
+  expect(/\b\d+s\b/.test(text), "…including how long to wait");
+
+  // The whole point of a separate bucket: a full metered bucket must not stop
+  // the model checking what it already has. Sharing the envelope bucket would
+  // have locked the connection out entirely.
+  const read = await worker.fetch(rpc({
+    jsonrpc: "2.0", id: 21, method: "tools/call",
+    params: { name: "algosize_list_runs", arguments: { limit: 5 } },
+  }, { sessionId: sid }), env, wctx);
+  const readBody = await read.json();
+  expect(readBody.result && readBody.result.isError === false,
+    "a read-only tool is untouched by the metered bucket");
+
+  // And a refusal is not silence: an org hitting this needs it to show up in
+  // the usage feed, or the connection just looks intermittently broken.
+  await Promise.all(waits);
+  const row = await env.DB.prepare(
+    `SELECT tool_name, status, error_code, run_id FROM mcp_tool_calls
+      WHERE org_id = ? AND status = 'rate_limited' ORDER BY id DESC LIMIT 1`,
+  ).bind(ORG).first();
+  expect(row && row.tool_name === "algosize_analyze_cost",
+    "the refusal is recorded against the tool that was refused");
+  expect(row && row.error_code === "rate_limited", "…with an error code the usage feed can group on");
+  expect(row && row.run_id == null,
+    "…and no run id, because no run was spent — that is the entire point of refusing");
+}
+
+// ---------------------------------------------------------------------------
 group("scope enforcement");
 {
   const env = makeEnv(); await seed(env);

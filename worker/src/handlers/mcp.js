@@ -27,6 +27,26 @@ import { listConnections, revokeClientTokens } from "../mcp/tokens.js";
 import { resolveEntitlementForOrg } from "../entitlement.js";
 import { captureException } from "../observability.js";
 import { isFlagEnabled } from "../flags.js";
+import { makeApiKeyRateLimit } from "../middleware/rate-limit.js";
+
+// A second, tighter bucket for calls that spend money.
+//
+// The envelope limiter in index.js allows 120 requests a minute per
+// credential, which is right for a conversational client doing a dozen reads
+// per turn. It is the wrong number for ANALYSES: 120 metered calls in a minute
+// would burn a free plan's entire monthly allowance twenty-four times over,
+// and a paid plan's real compute along with it.
+//
+// So this exists to protect the CUSTOMER'S allowance from a looping client,
+// not to protect the server. A well-behaved assistant never comes near 20
+// analyses a minute — that rate only happens when something is retrying in a
+// loop, which is exactly when the bill should stop growing.
+//
+// Its own keyName, so it counts separately from the envelope limit rather
+// than sharing a bucket with the reads.
+const meteredToolRateLimit = makeApiKeyRateLimit({
+  keyName: "mcp_metered", limit: 20, windowSec: 60,
+});
 
 /**
  * Is the MCP surface on for this org?
@@ -296,6 +316,32 @@ async function callTool(msg, cx, entitled) {
       text: `${name} requires a paid plan. See ${siteOrigin(env)}/#pricing.`,
       isError: true,
     }));
+  }
+
+  // Only metered tools pay this toll. A read that happens to be slow is not
+  // the thing being guarded against, and limiting reads here would break the
+  // "check your existing runs before analysing" behaviour the tool
+  // descriptions actively encourage.
+  if (tool.metered) {
+    const limited = await meteredToolRateLimit(request, env, ctx);
+    if (limited instanceof Response) {
+      let retryAfterSec = 60;
+      try { retryAfterSec = (await limited.clone().json()).retryAfterSec ?? 60; } catch { /* keep the default */ }
+      ctx.waitUntil(logToolCall(env, {
+        orgId: identity.orgId, toolName: name, authMethod: identity.authMethod,
+        scopeUsed: tool.scope, status: OUTCOME.RATE_LIMITED, errorCode: "rate_limited",
+      }));
+      // An isError RESULT, not an RPC error: the model can read this, wait,
+      // and carry on. An RPC error would surface as a broken connection.
+      return rpcResult(msg.id, toolResult({
+        text:
+          `${name} is rate limited: at most 20 analyses a minute per organisation. ` +
+          `Wait ${retryAfterSec}s and try again. This limit exists to stop a retry loop ` +
+          `from spending the monthly run allowance — read-only tools are unaffected ` +
+          `and can be used meanwhile.`,
+        isError: true,
+      }));
+    }
   }
 
   const started = Date.now();
