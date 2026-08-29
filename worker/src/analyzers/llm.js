@@ -4,7 +4,8 @@
 //
 // Provider chain, first configured one wins:
 //
-//   1. Workers AI binding (env.AI) — Kimi K2.6 by default. Keyless: the
+//   1. Workers AI binding (env.AI) — Kimi K3 when an AI Gateway is
+//      configured, else Kimi K2.6. Keyless: the
 //      binding is granted by wrangler.toml's [ai] block, so the deployed
 //      Worker needs no external API secret at all — nothing to provision,
 //      and nothing for a secret wipe to take out.
@@ -22,14 +23,50 @@
 
 const ENDPOINT = "https://api.openai.com/v1/chat/completions";
 const DEFAULT_MODEL = "gpt-4o-mini";
-// The Workers AI catalog slug for Kimi K2.6. Was K2.5 until Cloudflare
-// deprecated it on 2026-05-30 (see the Workers AI changelog); calls using
-// the K2.5 slug now auto-alias to K2.6 anyway, at K2.6's higher price —
-// this makes that explicit instead of leaving it as a silent alias. Costs
-// more per call than K2.5 did, on Workers AI's paid tier. Overridable via
-// env.WORKERS_AI_MODEL because catalog ids shift as Cloudflare promotes
-// models — verify against `wrangler ai models list` before changing.
-const DEFAULT_WORKERS_AI_MODEL = "@cf/moonshotai/kimi-k2.6";
+// Kimi K3 is Moonshot's flagship — 2.8T parameters, a 1M-token context, and
+// always-on reasoning — and it is NOT a drop-in replacement for the K2.x
+// slugs, for three reasons that each break something if missed:
+//
+//   1. The slug has NO `@cf/` prefix. Cloudflare lists K3 as
+//      `moonshotai/kimi-k3`, a THIRD-PARTY catalog entry, whereas K2.5/K2.6/
+//      K2.7 are first-party `@cf/moonshotai/...` models. The prefix is the
+//      marker: `@cf/` means Workers AI runs it, `{author}/{model}` means
+//      Cloudflare brokers it.
+//   2. Third-party models require an AI Gateway and bill through Unified
+//      Billing. A binding call without a gateway id does not fall back to
+//      anything — it fails.
+//   3. The REST leg needs a different URL. First-party models are invoked at
+//      /ai/run/<model>; third-party ones go to the OpenAI-compatible
+//      /ai/v1/chat/completions with the model named in the BODY. Sending a
+//      third-party slug to /ai/run/ 404s.
+//
+// So the default is conditional rather than a constant: K3 when a gateway is
+// configured to carry it, and the proven K2.6 path otherwise. That ordering
+// is deliberate — an unconfigured account keeps working exactly as it does
+// today instead of silently losing refactor suggestions to a model it cannot
+// reach. Override either way with env.WORKERS_AI_MODEL.
+const KIMI_K3            = "moonshotai/kimi-k3";
+const KIMI_K2_6          = "@cf/moonshotai/kimi-k2.6";
+const DEFAULT_WORKERS_AI_MODEL = KIMI_K2_6;
+
+/** A third-party catalog entry is anything without the `@cf/` prefix. */
+function isThirdPartyModel(model) {
+  return typeof model === "string" && !model.startsWith("@cf/");
+}
+
+/**
+ * Which model to use, and how to reach it.
+ *
+ * An explicit env.WORKERS_AI_MODEL always wins — including when it names a
+ * third-party model and no gateway is set, because an operator who typed a
+ * slug deserves the real error rather than a silent substitution.
+ */
+function resolveModel(env) {
+  const gateway  = (env && env.AI_GATEWAY_ID) || null;
+  const explicit = env && env.WORKERS_AI_MODEL;
+  const model    = explicit || (gateway ? KIMI_K3 : DEFAULT_WORKERS_AI_MODEL);
+  return { model, gateway, thirdParty: isThirdPartyModel(model) };
+}
 const MAX_TEXT_CHARS = 1500;            // hard ceiling on rendered prose
 const TIMEOUT_MS = 15000;
 // Kimi (and reasoning models generally) spend part of their token budget on
@@ -78,9 +115,21 @@ export async function llmChat({ system, user, maxTokens = 800, temperature = 0.2
   if (env && env.AI && typeof env.AI.run === "function") {
     configured = true;
     try {
-      const out = await env.AI.run(env.WORKERS_AI_MODEL || DEFAULT_WORKERS_AI_MODEL, {
-        messages, max_tokens: workersAiMaxTokens, temperature,
-      });
+      const { model, gateway, thirdParty } = resolveModel(env);
+      const input = { messages, max_tokens: workersAiMaxTokens, temperature };
+      // K3 replaced K2.x's `thinking` parameter with `reasoning_effort`.
+      // Sent only for third-party (K3) calls: a first-party K2.x model would
+      // reject the unknown key.
+      if (thirdParty && env.WORKERS_AI_REASONING_EFFORT) {
+        input.reasoning_effort = env.WORKERS_AI_REASONING_EFFORT;
+      }
+      // Third-party models are only reachable THROUGH a gateway. Passing the
+      // option unconditionally would be wrong for the @cf/ path, where a
+      // stale gateway id turns a working call into a failing one.
+      const opts = gateway && thirdParty ? { gateway: { id: gateway } } : undefined;
+      const out = opts
+        ? await env.AI.run(model, input, opts)
+        : await env.AI.run(model, input);
       const reply = extractWorkersAiReply(out);
       if (reply.trim()) return { ok: true, provider: "workers-ai", reply };
       reason = "Workers AI returned an empty reply";
@@ -96,14 +145,27 @@ export async function llmChat({ system, user, maxTokens = 800, temperature = 0.2
     if (!fetchImpl) {
       reason = "no fetch implementation available";
     } else {
-      const model = env.WORKERS_AI_MODEL || DEFAULT_WORKERS_AI_MODEL;
-      const url = `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/ai/run/${model}`;
+      const { model, thirdParty } = resolveModel(env);
+      const base = `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}`;
+      // Two different endpoints, and the wrong one 404s. First-party models
+      // are invoked by name in the PATH; third-party ones go to the
+      // OpenAI-compatible route with the model named in the BODY.
+      const url  = thirdParty ? `${base}/ai/v1/chat/completions` : `${base}/ai/run/${model}`;
+      const body = { messages, max_tokens: workersAiMaxTokens, temperature };
+      if (thirdParty) body.model = model;
+      if (thirdParty && env.WORKERS_AI_REASONING_EFFORT) {
+        body.reasoning_effort = env.WORKERS_AI_REASONING_EFFORT;
+      }
       const r = await timedJsonFetch(fetchImpl, url, {
         headers: { authorization: `Bearer ${env.CLOUDFLARE_AI_TOKEN}` },
-        body: { messages, max_tokens: workersAiMaxTokens, temperature },
+        body,
       });
       if (r.ok) {
-        const reply = extractWorkersAiReply(r.json && r.json.result);
+        // The two endpoints nest their payload differently: /ai/run wraps the
+        // model output in `result`, while the chat-completions route returns
+        // it at the top level. Reading only `.result` against K3 would find
+        // undefined and report an empty reply for a call that worked.
+        const reply = extractWorkersAiReply(thirdParty ? r.json : (r.json && r.json.result));
         if (reply.trim()) return { ok: true, provider: "workers-ai", reply };
         reason = "Workers AI returned an empty reply";
       } else {
