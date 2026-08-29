@@ -17,20 +17,36 @@
 // rather than returning a confusing 200 with empty fields. Entitlement is a
 // separate question and is NOT guessed — see below.
 
-import { resolveEntitlement } from "../entitlement.js";
+import { resolveEntitlement, resolveEntitlementForOrg } from "../entitlement.js";
 import { peekUsage, FREE_MONTHLY_LIMIT } from "../quota.js";
 import { isAdmin } from "./admin.js";
 import { initialsFor } from "./account.js";
 
 export async function meHandler(request, env, ctx) {
   const sessionUser = request.user || {};
+  const org         = request.org  || null;
 
   // Entitlement comes from the one resolver the analyzer gate also uses, so
   // the pill in the dashboard and the 402 from the API can never disagree.
   // This previously defaulted to "paid" whenever a session existed, which
   // told users with no row that they had "Unlimited" runs — and the quota
   // wrapper agreed with it, so they did.
-  const entitlement = await resolveEntitlement(env, sessionUser.userId, { ctx, request });
+  //
+  // Org-first when there is no session user — mirrors enforceQuota in
+  // quota.js. resolveEntitlement's NO_USER_ID branch is a safety net for
+  // requireAuth failing to run upstream, not a real account state: it always
+  // returns plan "free", active false, no matter what the organisation
+  // actually pays for. Before this, an API-key or OAuth caller — which by
+  // definition has no session user — hit that safety net on every call,
+  // so algosize_whoami told every org connected that way it was on a free,
+  // inactive plan, including a genuinely paying one. Caught by testing
+  // against an org that happened to actually be free, where the wrong
+  // mechanism produced a right-looking answer.
+  const entitlement = sessionUser.userId
+    ? await resolveEntitlement(env, sessionUser.userId, { ctx, request })
+    : org
+      ? await resolveEntitlementForOrg(env, org.orgId, { ctx, request })
+      : await resolveEntitlement(env, sessionUser.userId, { ctx, request });
   const stored = entitlement.user;
 
   const email     = (stored && stored.email)     || sessionUser.email     || null;
