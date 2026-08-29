@@ -1,9 +1,10 @@
 # MCP-PLAN.md — Algosize Model Context Protocol server
 
-Status: **in progress.** The server, its 22 tools and OAuth 2.1 are built and
-tested, as are the dashboard view and the admin adoption panel. What follows describes
-what is actually in the tree, not what was intended — where the original plan
-was wrong, the correction is recorded rather than the plan quietly edited.
+Status: **built.** The server, its 22 tools, OAuth 2.1, the `#/mcp` dashboard
+view and the admin adoption panel are all implemented and tested. What follows
+describes what is actually in the tree, not what was intended — where the
+original plan was wrong, the correction is recorded rather than the plan
+quietly edited.
 
 Merged to `main` and deployed, but **not live**: the whole surface is behind a
 flag that defaults off and fails shut, so `/api/mcp` returns 404 until the
