@@ -111,9 +111,15 @@ charged twice, and this layer cannot tell which calls are safe to repeat.
 
 ## Troubleshooting
 
-**"ALGOSIZE_API_KEY is not set"** — the env block did not reach the process.
-Check it is inside the server's own `env` object in your client config, not
-your shell.
+**The server connects but lists no tools** — it is running in its
+unconfigured state, which is what you see when `ALGOSIZE_API_KEY` did not
+reach the process. The reason is in the server's `instructions`, and any tool
+call returns it as the error text. Check the variable is inside the server's
+own `env` object in your client config, not just exported in your shell.
+
+The bridge deliberately stays up rather than exiting when it is misconfigured:
+a server that exits at startup is reported by every host as "Connection
+closed", which tells you nothing about what to fix.
 
 **A 401 mentioning the keys page** — the key was rejected. It may have been
 revoked, or belong to a different environment than `ALGOSIZE_BASE_URL`.

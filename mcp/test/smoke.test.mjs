@@ -12,7 +12,7 @@ import { Readable, Writable } from "node:stream";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readConfig, runBridge, forward, DEFAULT_BASE_URL } from "../src/bridge.mjs";
+import { readConfig, runBridge, runDegradedBridge, forward, DEFAULT_BASE_URL } from "../src/bridge.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -167,6 +167,38 @@ group("end to end over streams");
   expect(lines[0].id === 1 && lines[1].id === 2, "replies come back in order");
   expect(f.calls[2].headers["MCP-Protocol-Version"] === "2025-06-18",
     "the negotiated revision rides on later requests");
+}
+
+group("a misconfigured bridge explains itself instead of dying");
+{
+  // Exiting at startup is what this used to do, and an MCP host renders that
+  // as "Connection closed" — the stderr line naming the missing variable never
+  // reaches the person who has to set it. Staying up and answering is what
+  // makes the explanation visible.
+  const out = collector();
+  const input = Readable.from([
+    JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } }) + "\n",
+    JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }) + "\n",
+    JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n",
+    JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "algosize_list_runs" } }) + "\n",
+  ]);
+  const { done } = runDegradedBridge({
+    input, output: out, problems: readConfig({}).problems,
+  });
+  await done;
+  const lines = out.lines();
+
+  expect(lines.length === 3, `answers the three requests and ignores the notification (got ${lines.length})`);
+  expect(lines[0].result && lines[0].result.serverInfo.name === "algosize",
+    "initialize succeeds, so the host connects and shows the server at all");
+  expect(/ALGOSIZE_API_KEY/.test(lines[0].result.instructions),
+    "…and the instructions name the variable that is missing");
+  expect(/dashboard\/#\/account\/keys/.test(lines[0].result.instructions),
+    "…and where to get a value for it");
+  expect(lines[1].result && lines[1].result.tools.length === 0,
+    "tools/list is empty, so no model is offered a tool that cannot work");
+  expect(lines[2].error && /ALGOSIZE_API_KEY/.test(lines[2].error.message),
+    "any real call fails with the configuration problem as its text");
 }
 
 group("malformed client input");

@@ -145,6 +145,63 @@ function rpcError(id, code, message) {
 }
 
 /**
+ * Serve a misconfigured bridge, instead of dying.
+ *
+ * The obvious thing to do without an API key is print the problem and
+ * exit(1). That is what this did, and it is wrong: an MCP host reports a
+ * server that exits at startup as "Connection closed", and the carefully
+ * worded stderr line explaining exactly which variable to set never reaches
+ * the person who needs it. They see a dead connector and no reason.
+ *
+ * So a misconfigured bridge stays up and answers honestly. `initialize`
+ * succeeds, so the host connects and shows the server; everything else
+ * returns the configuration problem as its error text, which is where a user
+ * actually looks. The server is visibly present and visibly explaining
+ * itself, rather than invisibly absent.
+ *
+ * It advertises no tools, so a model is never offered something that cannot
+ * work.
+ */
+export function runDegradedBridge({ input, output, problems }) {
+  const explanation = problems.join(" ");
+  const rl = createInterface({ input, crlfDelay: Infinity });
+
+  rl.on("line", (line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    let message;
+    try { message = JSON.parse(trimmed); } catch { return; }
+    if (message.id === undefined || message.id === null) return;   // notification
+
+    if (message.method === "initialize") {
+      output.write(JSON.stringify({
+        jsonrpc: "2.0", id: message.id,
+        result: {
+          protocolVersion: (message.params && message.params.protocolVersion) || "2025-06-18",
+          capabilities: { tools: {} },
+          serverInfo: { name: "algosize", version: "1.0.0" },
+          instructions: `Algosize is not configured. ${explanation}`,
+        },
+      }) + "\n");
+      return;
+    }
+    // An empty catalog rather than an error: a host that cannot list tools
+    // often retries or reports a protocol fault, whereas zero tools plus the
+    // instructions above reads as "connected, nothing available yet".
+    if (message.method === "tools/list") {
+      output.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { tools: [] } }) + "\n");
+      return;
+    }
+    output.write(JSON.stringify({
+      jsonrpc: "2.0", id: message.id,
+      error: { code: -32001, message: explanation },
+    }) + "\n");
+  });
+
+  return { done: new Promise((resolve) => rl.on("close", resolve)) };
+}
+
+/**
  * Run the bridge over a pair of streams.
  *
  * Split out from the binary so the smoke test can drive it with ordinary
