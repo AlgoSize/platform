@@ -612,6 +612,12 @@ export async function monitorResultHandler(request, env, ctx) {
       reason:   inspection.reason,
       message:  explainUnavailable(inspection.reason),
       baseline: inspection.baseline,
+      // Present when the analyzer knows WHICH entries failed and why. The
+      // optimizer's no_entries_ran is the case that needs it: without the
+      // per-entry reasons, "check the file and function names" is the only
+      // thing anyone can be told, and it is advice rather than information.
+      ...(inspection.skipped && inspection.skipped.length
+        ? { skipped: inspection.skipped } : {}),
     });
   }
 
@@ -637,7 +643,7 @@ function explainUnavailable(reason) {
     no_compose:         "No compose file was found in this repository, so there is nothing to price.",
     no_config:          "No optimizer.config.json was found at the repository root, so no function is being watched.",
     config_invalid:     "optimizer.config.json is present but is not valid JSON.",
-    no_entries_ran:     "Every entry in optimizer.config.json was skipped — check the file and function names.",
+    no_entries_ran:     "Every entry in optimizer.config.json was skipped. Each one's reason is listed below.",
     github_throttled:   "GitHub rate-limited the request. This clears on its own; try again shortly.",
     sandbox_unreachable:"The measurement sandbox is unreachable right now. The nightly sweep will retry.",
     bad_repo_url:       "This monitor's repository URL could not be parsed.",

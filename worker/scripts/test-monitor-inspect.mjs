@@ -173,6 +173,55 @@ group("a repo that cannot be read never renders as an empty result");
 }
 
 // ===========================================================================
+group("a total optimizer failure says WHICH entry failed, and why");
+// ===========================================================================
+// The partial-failure path always reported per-entry reasons; the total
+// failure — the case a reader most needs help with — threw them away and
+// rendered one sentence telling them to go and check the names themselves.
+// Three different defects (wrong path, renamed function, rejected code) all
+// produced that same sentence.
+{
+  const env = makeEnv();
+  await seedOrg(env, "org_sk", "u_sk", "sk@acme.test");
+  const m = await createMonitor(env, {
+    orgId: "org_sk", repoUrl: "https://github.com/acme/skips", createdBy: "u_sk",
+    analyzers: ["vuln", "algo"],
+  });
+
+  // A config whose entries cannot possibly run: one names a file that is not
+  // in the repo, the other names a function that is not in the file.
+  const cfg = JSON.stringify({ entries: [
+    { name: "ghost-file", file: "nope/missing.js", functionName: "whatever", sampleInput: [1] },
+    { name: "ghost-fn",   file: "real.js",         functionName: "notThere",  sampleInput: [1] },
+  ]});
+  const gh = fakeGithub({
+    "optimizer.config.json": cfg,
+    "real.js": "export function somethingElse(a) { return a; }\n",
+  });
+  env.FETCH = gh;
+
+  const insp = await inspectMonitor(env, null, m, "algo", gh);
+  expect(insp.status === "unavailable" && insp.reason === "no_entries_ran",
+    `every entry failing is still reported as unavailable/no_entries_ran (got ${insp.status}/${insp.reason})`);
+  expect(Array.isArray(insp.skipped) && insp.skipped.length === 2,
+    `…and both entries' reasons survive (got ${insp.skipped && insp.skipped.length})`);
+
+  const byName = Object.fromEntries((insp.skipped || []).map((x) => [x.name, x.reason || ""]));
+  expect(/not found in the repo/.test(byName["ghost-file"] || ""),
+    `…a missing file says so, naming the path (got "${byName["ghost-file"]}")`);
+  expect(/function notThere not found/.test(byName["ghost-fn"] || ""),
+    `…a missing function says so, naming the function (got "${byName["ghost-fn"]}")`);
+
+  // And it reaches the wire, because the handler is where it was dropped.
+  const res = await monitorResultHandler(authed("u_sk", m.monitorId, "algo"), env, null);
+  const body = await res.json();
+  expect(res.status === 200 && Array.isArray(body.skipped) && body.skipped.length === 2,
+    "the endpoint ships the reasons rather than only a sentence about them");
+  expect(!/check the file and function names/.test(body.message || ""),
+    "…and no longer tells the reader to go and work it out themselves");
+}
+
+// ===========================================================================
 group("inspecting NEVER advances a baseline");
 // ===========================================================================
 {

@@ -473,7 +473,13 @@ export async function runAlgoForMonitor(monitor, env, fetchImpl) {
   }
 
   if (!Object.keys(grades).length && skippedEntries.length) {
-    return { status: "skipped", reason: "no_entries_ran" };
+    // Carry the per-entry reasons. This function already knows exactly why
+    // each entry failed — "bigo.js not found in the repo", "function mean not
+    // found", "sandbox rejected the function" — and dropping them here made
+    // the total-failure case the ONLY one a reader could not diagnose, while
+    // a partial failure showed every reason. The caller renders them; nobody
+    // has to guess which of file, path or function name is wrong.
+    return { status: "skipped", reason: "no_entries_ran", skippedEntries };
   }
   // `entries` is the committed optimizer.config.json, capped the same way the
   // grades were. It rides along so the optimizer page can show each measured
