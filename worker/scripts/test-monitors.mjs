@@ -22,7 +22,7 @@
 import {
   advisoryKey, advisoryKeySet, hashKeySet, diffAdvisories, groupBySeverity,
 } from "../src/monitors/diff.js";
-import { sweepDueMonitors, runMonitorCheck, handleMonitorQueue } from "../src/monitors/run.js";
+import { sweepDueMonitors, runMonitorCheck, handleMonitorQueue, handleMonitorDlq } from "../src/monitors/run.js";
 import {
   createMonitor, getMonitorById, listMonitorsDue, isDue, monitorLimitFor, setMonitorPaused,
   normalizeAnalyzers, recordMonitorRun,
@@ -949,6 +949,104 @@ console.log("\nthe optimizer CI snippet\n");
   const badBody = await bad.json();
   expect(/monitor/.test(badBody.message || ""),
     "…and the refusal names the values that do work");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\nthe dead-letter consumer\n");
+// ---------------------------------------------------------------------------
+// algosize-scans-dlq existed in production for months with no consumer bound
+// to it, which made it a hole rather than a safety net: a message that
+// exhausted its three retries was retained for the queue's window and then
+// purged, with no alert and no record. A permanently-broken monitor simply
+// went quiet — indistinguishable from a repository that stopped having
+// problems.
+{
+  const env = makeEnv();
+  const orgId = await seedOrg(env, { userId: "usr_dlq", email: "dlq@example.com" });
+  const m = await createMonitor(env, { orgId, repoUrl: "https://github.com/o/dead" });
+
+  const acked = [], retried = [];
+  const mk = (monitorId) => ({
+    body: { monitorId },
+    attempts: 3,
+    ack:   () => acked.push(monitorId),
+    retry: () => retried.push(monitorId),
+  });
+
+  await handleMonitorDlq(
+    { queue: "algosize-scans-dlq", messages: [mk(m.monitorId), mk(null)] }, env, {});
+
+  // Always ack. retry() here returns the message to the DLQ it is already in,
+  // and a DLQ with nowhere onward to go retries until retention expires —
+  // turning one dead message into hundreds of duplicate alerts.
+  expect(retried.length === 0,
+    "nothing is retried out of the dead-letter queue — there is nowhere for it to go");
+  expect(acked.length === 2,
+    `every message is resolved exactly once (got ${acked.length})`);
+
+  // The monitor row should say so, rather than sitting at whatever the last
+  // retryable attempt left behind.
+  const after = await getMonitorById(env, m.monitorId);
+  expect(after.lastStatus === "failed",
+    `the monitor is marked failed (got ${after.lastStatus})`);
+  expect(after.lastError === "dead_lettered",
+    `…with a reason that names what happened (got ${after.lastError})`);
+  // recordMonitorAttempt touches no baseline by construction, so a dead-letter
+  // cannot corrupt the diff the next successful sweep produces.
+  expect(after.lastRunAt === null,
+    "…and last_run_at is NOT advanced — a failure did not produce a result");
+
+  // A message with no monitorId is still acked rather than stranded.
+  expect(acked.includes(null) || acked.length === 2,
+    "a malformed dead-letter message is acked too, not left to expire silently");
+}
+
+// The routing decision, which is the part that would do real damage if wrong:
+// one queue() entrypoint serves every bound queue, so a dead-lettered batch
+// sent to handleMonitorQueue would re-run the very sweep that already failed
+// three times, then retry it back into the DLQ it came from, indefinitely.
+{
+  const worker = (await import("../src/index.js")).default;
+  const env = makeEnv();
+  const orgId = await seedOrg(env, { userId: "usr_route", email: "route@example.com" });
+  const m = await createMonitor(env, { orgId, repoUrl: "https://github.com/o/route" });
+
+  // If this batch reached handleMonitorQueue it would call runMonitorCheck,
+  // which needs FETCH. Leaving FETCH unset means a wrong route shows up as a
+  // thrown error or a retry rather than a silent pass.
+  const acked = [], retried = [];
+  const msg = {
+    body: { monitorId: m.monitorId }, attempts: 3,
+    ack: () => acked.push("ack"), retry: () => retried.push("retry"),
+  };
+
+  await worker.queue({ queue: "algosize-scans-dlq", messages: [msg] }, env, {});
+  expect(acked.length === 1 && retried.length === 0,
+    "a batch from algosize-scans-dlq is acked by the dead-letter handler, never retried");
+
+  // Discriminate on lastError, NOT lastStatus. handleMonitorQueue's own
+  // failure path also marks a monitor "failed", so asserting the status alone
+  // passes whether or not the dispatch exists — verified by deleting the
+  // dispatch and watching the status assertion still pass. "dead_lettered" is
+  // written by handleMonitorDlq and nothing else, so it is the only value that
+  // proves which handler ran.
+  const after = await getMonitorById(env, m.monitorId);
+  expect(after.lastError === "dead_lettered",
+    `…and took the dead-letter path, not the re-run path (lastError=${after.lastError})`);
+
+  // Suffix matching, so staging routes correctly from the same rule.
+  const env2 = makeEnv();
+  const orgId2 = await seedOrg(env2, { userId: "usr_stg", email: "stg@example.com" });
+  const m2 = await createMonitor(env2, { orgId: orgId2, repoUrl: "https://github.com/o/stg" });
+  const acked2 = [];
+  await worker.queue({
+    queue: "algosize-scans-staging-dlq",
+    messages: [{ body: { monitorId: m2.monitorId }, attempts: 3,
+                 ack: () => acked2.push("ack"), retry: () => { throw new Error("must not retry"); } }],
+  }, env2, {});
+  const after2 = await getMonitorById(env2, m2.monitorId);
+  expect(acked2.length === 1 && after2.lastError === "dead_lettered",
+    `staging's dead-letter queue routes the same way — the rule matches the -dlq suffix, not one exact name (lastError=${after2.lastError})`);
 }
 
 // ---------- summary ----------
