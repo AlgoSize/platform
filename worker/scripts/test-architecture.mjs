@@ -408,6 +408,111 @@ function analyzeRequest(body) {
     "naming clusters and findings, like the other analyzers name their verdict");
 }
 
+// ---------------------------------------------------------------------------
+console.log("\na URL is a dependency only when something actually calls it\n");
+// ---------------------------------------------------------------------------
+//
+// Every quoted URL in every scanned file used to become an `external_api` node
+// and an http edge tagged `via: "fetch"`. On this repository that produced 21
+// of 25 findings: 174 "call sites" to algosize.com, 96 to a host literally
+// named `x` (the `http://x/…` origin its own test scripts use), 8 to
+// www.hetzner.com (a `sourceUrl` in a frozen pricing table), 6 to claude.ai (a
+// CORS allowlist in a file containing no request primitive at all).
+//
+// Both directions are asserted. A filter that removed the noise by also
+// removing the real edges would be a worse analyzer that merely looks calmer.
+{
+  const hostsOf = (result) =>
+    (result.graph.nodes || []).filter((n) => n.kind === "external_api").map((n) => n.name);
+
+  // Kept: the URL is built then fetched, which is how real call sites in this
+  // codebase are written — the literal is never inside the call parentheses.
+  // A deployable unit has to exist for an edge to start from, so every
+  // fixture below carries the wrangler.toml that declares one.
+  const WRANGLER = { path: "worker/wrangler.toml", content: 'name = "app"\nmain = "src/index.js"\n' };
+  const withApp = (file) => run([WRANGLER, file]).result;
+
+  const REAL_CALL = `
+    const url = \`https://api.github.com/repos/\${owner}/\${repo}/git/trees/main\`;
+    export async function load() { return fetch(url, { headers: {} }); }
+  `;
+  expect(hostsOf(withApp({ path: "worker/src/gh.js", content: REAL_CALL })).includes("api.github.com"),
+    "a URL assigned to a variable and then fetched is still an outbound dependency");
+
+  // Dropped: data, not a call. The file has no request primitive at all.
+  const PRICING_DATA = `
+    export default Object.freeze({
+      "sourceUrl": "https://www.hetzner.com/cloud/",
+      "plans": [{ "sourceUrl": "https://www.hetzner.com/cloud/" }]
+    });
+  `;
+  expect(hostsOf(withApp({ path: "worker/pricing/hetzner.js", content: PRICING_DATA })).length === 0,
+    "a pricing table's sourceUrl is a citation, not a service this system calls");
+
+  // Dropped: an allowlist is a list of origins we ACCEPT, not ones we call.
+  const ALLOWLIST = `export const ORIGINS = ["https://claude.ai", "https://www.claude.ai"];`;
+  expect(hostsOf(withApp({ path: "worker/src/transport.js", content: ALLOWLIST })).length === 0,
+    "a CORS allowlist in a file with no request primitive is not an outbound call");
+
+  // Dropped: test scenarios describe inputs, not the system's architecture.
+  const TEST_FIXTURE = `await fetch("http://x/api/stripe/webhook", { method: "POST" });`;
+  expect(hostsOf(withApp({ path: "worker/scripts/test-stripe.mjs", content: TEST_FIXTURE })).length === 0,
+    "a stand-in origin inside a test script is not part of the architecture");
+
+  // Dropped: the reserved documentation domain, including its subdomains —
+  // the anchored ignore-list matched example.com but not cdn.example.com.
+  const DOC_DOMAIN = `await fetch("https://cdn.example.com/x.js"); await fetch("https://api.example.com/y");`;
+  expect(hostsOf(withApp({ path: "worker/src/doc.js", content: DOC_DOMAIN })).length === 0,
+    "subdomains of the reserved documentation domain are ignored too");
+
+  // Dropped: prose. A quoted URL inside a doc block is still prose.
+  const IN_COMMENT = `
+    /*
+     * See "https://www.digitalocean.com/pricing" for the table this mirrors.
+     */
+    export const N = 1;
+  `;
+  expect(hostsOf(withApp({ path: "worker/src/note.js", content: IN_COMMENT })).length === 0,
+    "a URL quoted inside a block comment is documentation, not a call");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\na committed placeholder is not a leaked credential\n");
+// ---------------------------------------------------------------------------
+//
+// The placeholder rule was anchored, so it only matched a value that was
+// EXACTLY "placeholder". Real placeholders are compound, and all four of these
+// were reported CRITICAL with "rotate the credential now" against a CI
+// workflow that boots a local test Worker. Telling someone to rotate
+// `whsec_placeholder` is how a security rule gets skimmed past.
+{
+  const WORKFLOW = [
+    "env:",
+    "  JWT_SECRET: local-dev-only-jwt-secret-32-chars-min-not-for-prod-xxxxx",
+    "  STRIPE_SECRET_KEY: sk_test_placeholder_set_real_key_in_local_only",
+    "  STRIPE_WEBHOOK_SECRET: whsec_placeholder",
+    "  E2E_TEST_SECRET: local-e2e-seed-secret-do-not-use-in-prod",
+  ].join("\n");
+  const placeholders = of(run([{ path: ".github/workflows/e2e.yml", content: WORKFLOW }]).result.findings,
+                          "committed_secret");
+  expect(placeholders.length === 0,
+    `four self-describing placeholders raise nothing (got ${placeholders.length})`);
+
+  // The other direction, and the one that matters more: a value with none of
+  // those markers is still a leak, and must still be critical. A rule that
+  // went quiet everywhere would pass the assertion above on its own.
+  // Deliberately NOT shaped like any provider's real key format. The first
+  // draft of this fixture used a convincing `sk_live_51…` and GitHub's push
+  // protection blocked the push — correctly, and it is the same judgement this
+  // rule is being taught to make. A generic high-entropy value exercises the
+  // rule without minting something a scanner has to reason about.
+  const REAL = "env:\n  DATABASE_PASSWORD: 3f9a1c7e5b2d8046af13c9e2b7d4508e\n";
+  const leaked = of(run([{ path: ".github/workflows/deploy.yml", content: REAL }]).result.findings,
+                    "committed_secret");
+  expect(leaked.length === 1 && leaked[0].severity === "critical",
+    `a real committed credential is still one critical finding (got ${leaked.length})`);
+}
+
 // ---------- summary ----------
 console.log("");
 if (failures === 0) {

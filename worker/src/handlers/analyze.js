@@ -710,7 +710,31 @@ export async function runInSandbox(env, code, input) {
       return { ok: false, error: "sandbox_bad_response", message: "sandbox returned non-JSON" };
     }
   }
-  return runUserCode(code, input);
+  // No service binding. The in-process runner compiles the submitted function
+  // with `new Function`, which works in Node — the Replit server, the CI
+  // entrypoint, the test suite — and which a Cloudflare Workers isolate
+  // forbids outright. So inside a deployed Worker this fallback cannot run at
+  // all, and what came back was V8's own sentence wearing the wrong label:
+  //
+  //   { error: "compile_error",
+  //     message: "Code generation from strings disallowed for this context" }
+  //
+  // `compile_error` blames the user's function for something the runtime
+  // refused to do to any input, and the message names nothing anyone can act
+  // on. The nightly optimizer sweep surfaced exactly that, once per entry —
+  // "bigo-mean — Code generation from strings disallowed for this context" —
+  // so a monitor with a perfectly valid config read as a config problem.
+  const fallback = await runUserCode(code, input);
+  if (fallback && fallback.ok === false && /code generation from strings/i.test(fallback.message || "")) {
+    return {
+      ok: false,
+      error: "sandbox_not_configured",
+      message: "The SANDBOX service binding is not available, and this runtime cannot " +
+               "execute submitted code without it. Deploy the algosize-sandbox Worker " +
+               "and bind it as SANDBOX (see worker/wrangler.toml).",
+    };
+  }
+  return fallback;
 }
 
 async function runAlgoSandbox(body, env) {

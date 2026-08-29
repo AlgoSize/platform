@@ -466,6 +466,15 @@ export async function runAlgoForMonitor(monitor, env, fetchImpl) {
       if (run.error === "sandbox_unreachable") {
         return { status: "skipped", reason: "sandbox_unreachable" };
       }
+      // Same shape, different cause: the sandbox is not merely unreachable,
+      // it is not configured, so every remaining entry will fail identically.
+      // Listing one per entry turned an environment problem into what looked
+      // like N problems with the user's optimizer.config.json — the reason
+      // this sweep reported "Every entry in optimizer.config.json was skipped"
+      // against a config in which nothing was wrong.
+      if (run.error === "sandbox_not_configured") {
+        return { status: "skipped", reason: "sandbox_not_configured" };
+      }
       skippedEntries.push({ name, reason: run.message || run.error || "sandbox rejected the function" });
       continue;
     }

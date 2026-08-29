@@ -652,6 +652,12 @@ export function explainUnavailable(reason) {
     no_entries_ran:     "Every entry in optimizer.config.json was skipped. Each one's reason is listed below.",
     github_throttled:   "GitHub rate-limited the request. This clears on its own; try again shortly.",
     sandbox_unreachable:"The measurement sandbox is unreachable right now. The nightly sweep will retry.",
+    // Deliberately says whose problem it is. The previous behaviour reported
+    // this as every entry in the config failing, which reads as "your config
+    // is wrong" — and sent people to check a file in which nothing was wrong.
+    sandbox_not_configured:
+      "The measurement sandbox is not configured on this deployment, so no function can be " +
+      "graded. This is a deployment setting, not a problem with your optimizer.config.json.",
     bad_repo_url:       "This monitor's repository URL could not be parsed.",
     analyzer_failed:    "The analyzer could not process this repository's files.",
   };

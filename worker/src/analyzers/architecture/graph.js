@@ -572,7 +572,45 @@ const IMPORT_RE = /(?:^|\s)(?:import\s[\s\S]{0,200}?from\s*|import\s*\(\s*|requi
 const URL_RE    = /["'`](https?:\/\/([A-Za-z0-9._-]+)(?::\d+)?[^"'`]*)["'`]/g;
 
 // Hosts that are infrastructure noise rather than architecture.
-const IGNORED_HOSTS = /^(localhost|127\.0\.0\.1|0\.0\.0\.0|example\.com|example\.org|schema\.org|www\.w3\.org)$/i;
+//
+// Subdomain-aware on purpose. The anchored form matched `example.com` but not
+// `cdn.example.com` or `api.example.com`, so the reserved documentation domain
+// — whose entire purpose is to appear in examples — was being reported as two
+// third-party services this system depends on.
+const IGNORED_HOSTS =
+  /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|(.+\.)?(example\.(com|org|net)|test|invalid|localhost)|schema\.org|www\.w3\.org)$/i;
+
+// A URL in source is only an outbound dependency if the file it lives in
+// actually makes requests. Without this every quoted URL anywhere became an
+// `external_api` node and an http edge tagged `via: "fetch"` — with no fetch
+// involved — which is how this analyzer came to report a repository calling
+// `www.hetzner.com` (a `sourceUrl` field in a frozen pricing table),
+// `claude.ai` (a CORS allowlist in a file with no request primitive at all),
+// and `cdn.example.com` (a test fixture) as services in its architecture.
+//
+// Checked per FILE rather than per line because real call sites in this
+// codebase build the URL first and fetch it after:
+//
+//   const url = `https://api.github.com/repos/${owner}/${repo}/git/trees/...`;
+//   ... await fetch(url, { headers });
+//
+// so requiring the literal to sit inside the call parentheses would discard
+// the genuine edges along with the noise.
+const REQUEST_PRIMITIVE_RE =
+  /\b(fetch|axios|got|ky|superagent|XMLHttpRequest|https?\.(get|request)|\.(get|post|put|patch|delete|head)\s*\()/;
+
+// Test and fixture files describe scenarios, not the system. `http://x/api/…`
+// is a stand-in origin used across this repo's own test scripts; counted as
+// architecture it produced a service literally named "x" with 96 call sites.
+const TEST_PATH_RE = /(^|\/)(tests?|__tests__|__mocks__|spec|fixtures?|mocks?)\//i
+;
+const TEST_FILE_RE = /(^|\/)[^/]*\.(test|spec)\.[a-z]+$|(^|\/)test-[^/]*$/i;
+
+// A URL that is the value of a documentation or provenance field is a citation,
+// not a call — `"sourceUrl": "https://www.hetzner.com/cloud/"` records where a
+// price was read, and `helpUri` points a reader at an advisory.
+const CITATION_KEY_RE =
+  /["']?\b(\w*(source|help|docs?|advisory|reference|info|learn|website|homepage|issue|repo(sitory)?)\w*(url|uri))\b["']?\s*[:=]\s*$/i;
 
 // Markers that some form of authentication exists on a code path. Used only
 // to decide whether we have ANY evidence of auth in a cluster we actually
@@ -586,6 +624,14 @@ function parseSource(file, content, b, pending) {
   pending.sourceFiles.push(file.path);
   if (AUTH_MARKER_RE.test(content)) pending.authFiles.push(file.path);
 
+  // Imports are still read from every file — a test importing a module is
+  // real coupling. Only the OUTBOUND-HTTP claim needs the evidence below,
+  // because that is the one this analyzer was asserting without any.
+  const isTest = TEST_PATH_RE.test(file.path) || TEST_FILE_RE.test(file.path);
+  const collectUrls = !isTest && REQUEST_PRIMITIVE_RE.test(content);
+
+  let inBlockComment = false;
+
   lines.forEach((raw, i) => {
     const line = i + 1;
 
@@ -594,11 +640,26 @@ function parseSource(file, content, b, pending) {
       pending.imports.push({ from: file.path, spec: imp[1], line });
     }
 
+    // Block-comment tracking, so a quoted URL inside a doc block is read as
+    // prose rather than as a dependency. Deliberately coarse: it only looks
+    // at whole lines, which is enough for the documentation blocks this
+    // codebase writes and cannot mangle a URL the way splitting on "//"
+    // would — every URL contains "//" of its own.
+    const trimmed = raw.trim();
+    const wasInBlock = inBlockComment;
+    if (inBlockComment) { if (trimmed.includes("*/")) inBlockComment = false; }
+    else if (/^\/\*/.test(trimmed) && !trimmed.includes("*/")) inBlockComment = true;
+
+    if (!collectUrls) return;
+    if (wasInBlock || /^(\/\/|\*|#)/.test(trimmed)) return;
+
     URL_RE.lastIndex = 0;
     let m;
     while ((m = URL_RE.exec(raw)) !== null) {
       const host = m[2];
       if (IGNORED_HOSTS.test(host)) continue;
+      // A citation records where a fact came from; it is not a call.
+      if (CITATION_KEY_RE.test(raw.slice(0, m.index))) continue;
       pending.urls.push({ from: file.path, host, url: m[1], line });
     }
   });
@@ -614,6 +675,29 @@ const SECRET_KEY_RE = /(SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|PRIVATE_?KEY|ACCES
 // template, not a leak, and flagging it teaches people to ignore the rule.
 const PLACEHOLDER_RE = /^(|""|''|changeme|change_me|your[-_].*|<.*>|\$\{.*\}|\$[A-Za-z_].*|x{3,}|\.{3,}|placeholder|example|todo|replace[-_]?me|secret|password|null|none|test)$/i;
 
+// The rule above is anchored, so it only ever matched a value that was
+// EXACTLY "placeholder" or "example". Real placeholders are compound, and the
+// anchored form let all four of these through as CRITICAL "committed secret,
+// rotate it now" findings against a CI workflow that sets up a local test
+// Worker:
+//
+//   JWT_SECRET=local-dev-only-jwt-secret-32-chars-min-not-for-prod-xxxxx
+//   STRIPE_SECRET_KEY=sk_test_placeholder_set_real_key_in_local_only
+//   STRIPE_WEBHOOK_SECRET=whsec_placeholder
+//   E2E_TEST_SECRET=local-e2e-seed-secret-do-not-use-in-prod
+//
+// Telling someone to rotate `whsec_placeholder` is how a security rule earns
+// the reputation that gets every one of its findings skimmed past — which
+// costs far more than the rule was ever worth.
+//
+// Matched as a SUBSTRING, because that is how these values are written: the
+// word that marks it as a stand-in sits inside a longer string. No marker here
+// occurs by chance in a random key — deliberately no `x{4,}` and no `sk_test_`,
+// since a real Stripe test-mode key is still a credential and base64 can
+// produce a run of x's.
+const PLACEHOLDER_MARKER_RE =
+  /(placeholder|example|dummy|sample|redacted|changeme|change[-_]me|replace[-_]?me|your[-_]|not[-_]?for[-_]?prod|do[-_]?not[-_]?use|local[-_]?dev|dev[-_]?only|local[-_]?only|test[-_]?only|<[^>]+>|\$\{[^}]+\})/i;
+
 function scanSecrets(file, content) {
   const hits = [];
   content.split(/\r?\n/).forEach((raw, i) => {
@@ -623,6 +707,7 @@ function scanSecrets(file, content) {
     if (!SECRET_KEY_RE.test(m[1])) return;
     const value = unquote(m[2].trim());
     if (PLACEHOLDER_RE.test(value)) return;
+    if (PLACEHOLDER_MARKER_RE.test(value)) return;
     if (value.length < 8) return;
     hits.push({ key: m[1], line: i + 1, file: file.path });
   });
