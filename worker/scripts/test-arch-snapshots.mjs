@@ -328,6 +328,37 @@ group("the endpoints");
 
   const noTo = await archDiffHandler(authed("https://algosize.com/api/arch/diff"), env);
   expect(noTo.status === 400, "diff without `to` is a 400");
+
+  // A reduced input must be NAMED by the diff, not merely recorded on the
+  // snapshot row. The drift view cites file:line for what changed; when an
+  // input lost its evidence to fit, the reader has to be told before they ask
+  // why the citations are missing. Migration 0018's comment is explicit that
+  // a snapshot silently losing citations breaks the X-ray's core promise.
+  const big = { nodes: [], edges: [], clusters: [] };
+  for (let i = 0; i < 4000; i++) {
+    big.nodes.push({
+      id: `n${i}`, kind: "service", name: `service-number-${i}`,
+      evidence: { file: `services/really/quite/deeply/nested/path/service-${i}.ts`, line: i },
+    });
+  }
+  const r1 = await recordSnapshot(env, null, {
+    orgId: ORG, repoUrl: "https://github.com/acme/big", branch: "main",
+    source: "monitor", graph: big, capturedAt: NOW });
+  const big2 = { nodes: big.nodes.concat([{ id: "extra", kind: "service", name: "extra" }]), edges: [], clusters: [] };
+  const r2 = await recordSnapshot(env, null, {
+    orgId: ORG, repoUrl: "https://github.com/acme/big", branch: "main",
+    source: "monitor", graph: big2, capturedAt: NOW + 10 });
+
+  if (r1 && r2) {
+    const rd = await (await archDiffHandler(
+      authed(`https://algosize.com/api/arch/diff?to=${r2.snapshotId}`), env)).json();
+    const anyReduced = (await getSnapshot(env, ORG, r1.snapshotId)).reduced ||
+                       (await getSnapshot(env, ORG, r2.snapshotId)).reduced;
+    expect(!anyReduced || (rd.reducedInputs && rd.reducedInputs.length > 0),
+      "a reduced input is named in the diff response, not left for the reader to discover");
+  } else {
+    ok("the oversized pair was refused outright — nothing to diff, which is the other honest outcome");
+  }
 }
 
 // ===========================================================================

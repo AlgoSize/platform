@@ -263,9 +263,17 @@ the approved build scope (§4), and nothing in it is designed by Part 3.
 
 Each item is independently shippable.
 
-**Approved for build: items 1-3 — now shipped.** Item 4 was not approved and
-is not designed by Part 3. Item 5 is unblocked by the §3.1 decision but is not
-in scope.
+**Items 1-4 are shipped.** Item 5 is unblocked by the §3.1 decision but is not
+built: it needs the runtime-signal work of (a) or (b), which is a feature in
+its own right rather than a rendering change, and (c) still carries the two
+prerequisites in §3.1.
+
+The drift view (item 4) renders three outcomes the endpoint already
+distinguishes and the UI must not collapse: no snapshot history at all, a
+comparison that could not run (earliest snapshot, or a baseline that aged out
+— the endpoint's own wording is passed through rather than re-derived in the
+browser), and a diff that ran and found nothing. A reduced input is named, so
+a reader knows why a change carries no file:line.
 
 Built as specified, with one addition the audit's §1 findings implied but this
 plan did not list: `algosize_xray_architecture` resolves as an alias to
@@ -278,7 +286,7 @@ logged under the canonical name.
 | 1 | ~~Migration 0021: `session_ref` + index; pass session id (hashed) at all five `logToolCall` sites~~ **shipped** | S | — |
 | 2 | ~~Log unknown-tool-name calls (`mcp.js:292`)~~ **shipped** | XS | — |
 | 3 | ~~`usageSummary` groups the activity feed by session~~ **shipped**, with the dashboard panel | S | 1 |
-| 4 | Drift view: render `GET /api/arch/diff` in `dash-arch.js`, with `reduced` and dangling-`prev` honesty states | M | — |
+| 4 | ~~Drift view: render `GET /api/arch/diff` in `dash-arch.js`, with `reduced` and dangling-`prev` honesty states~~ **shipped** | M | — |
 | 5 | `origin: "observed"` | — | **§3 decision (a/b/c) — do not start** |
 
 Tests, per this repo's standing discipline: every new guard verified by

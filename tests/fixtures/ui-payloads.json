@@ -2009,6 +2009,10 @@
   "/api/mcp/clients": {
     "connections": []
   },
+  "/api/arch/snapshots": {
+    "snapshots": [],
+    "basis": "One row per architecture run — manual, CI or nightly sweep — since snapshot history was added."
+  },
   "__runs": [
     {
       "id": "run_arch",

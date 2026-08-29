@@ -4972,6 +4972,27 @@ a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
   .mcp-session-head { align-items: flex-start; }
   .mcp-session-who { flex: 1 1 100%; }
 }
+/* Structural drift, in the X-ray side column. Deliberately quiet: it sits
+   under the findings, and its job is to be readable, not to compete with the
+   canvas for attention. */
+.xray-drift {
+  border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--bg-card); padding: var(--s-3); margin-top: var(--s-3);
+}
+.xray-drift-head { margin: 0 0 var(--s-2); font-size: var(--fs-md); }
+.xray-drift-list { list-style: none; margin: var(--s-2) 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.xray-drift-item {
+  display: flex; align-items: baseline; gap: var(--s-2);
+  padding: var(--s-1) 0; border-bottom: 1px solid var(--border); font-size: 0.82rem;
+}
+.xray-drift-item:last-child { border-bottom: 0; }
+.xray-drift-sign { width: 1ch; font-weight: 700; }
+.xray-drift-added   .xray-drift-sign { color: var(--accent); }
+.xray-drift-removed .xray-drift-sign { color: var(--danger); }
+/* The kind word carries the state so the sign is never the only cue. */
+.xray-drift-kind { color: var(--text-muted); white-space: nowrap; }
+.xray-drift-name { min-width: 0; word-break: break-all; }
+.xray-drift-reduced { margin-top: var(--s-2); }
 .mcp-spark-wrap { display: flex; flex-direction: column; gap: var(--s-2); }
 .mcp-spark-label { font-size: var(--fs-xs); }
 .mcp-spark {

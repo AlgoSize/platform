@@ -187,6 +187,50 @@ group("the design commitments hold in the source");
 }
 
 // ===========================================================================
+group("structural drift is rendered, and never invents a comparison");
+// ===========================================================================
+{
+  expect(/\/api\/arch\/diff/.test(js),
+    "the X-ray reads the diff endpoint Phase 1 shipped with nothing that drew it");
+  expect(/\/api\/arch\/snapshots\?limit=1/.test(js),
+    "…finding the latest snapshot rather than assuming an id");
+
+  // The three outcomes must stay three. Collapsing "no history", "the
+  // baseline aged out" and "nothing changed" into one empty state is the
+  // exact failure the endpoint's own `note` was written to prevent: it would
+  // report a brand-new repository and a lost baseline as a clean bill of
+  // health.
+  expect(/no_history/.test(js), "an org with no snapshots is its own state");
+  expect(/incomparable/.test(js), "…distinct from a comparison that could not run");
+  expect(/No structural change since the previous snapshot/.test(js),
+    "…and both distinct from a diff that ran and found nothing");
+
+  // The note is passed through, not re-derived. The endpoint distinguishes
+  // "earliest snapshot" from "comparison point is gone"; re-deriving that in
+  // the browser is how the two get conflated.
+  expect(/d\.note \|\|/.test(js),
+    "the endpoint's own wording is shown rather than a message guessed at in the client");
+
+  expect(/reducedInputs/.test(js) && /no longer carries its/.test(js),
+    "a reduced snapshot tells the reader its citations are gone");
+
+  // Sign plus word, never colour alone — the rule the rest of the product
+  // already follows.
+  expect(/xray-drift-kind/.test(js) && /aria-hidden/.test(js),
+    "the +/− sign is decorative and paired with a word that carries the state");
+  expect(/\.xray-drift-kind/.test(css), "the drift panel is styled");
+
+  // Everything above is satisfied by a panel that is written and never shown.
+  // These two are the ones that bind it to the page: the loader has to run on
+  // both paths that produce a result, and render() has to append what it
+  // built. Verified by deleting each and watching this fail.
+  expect((js.match(/loadDrift\(\)/g) || []).length >= 2,
+    "the drift load runs on both result paths — a fresh analysis and a stored run");
+  expect(/var drift = driftPanel\(\);[\s\S]{0,80}side\.appendChild\(drift\)/.test(js),
+    "…and render() actually appends the panel it built");
+}
+
+// ===========================================================================
 console.log("");
 if (failures) {
   console.log(`\x1b[31m  ${failures} arch-frontend test(s) failed\x1b[0m`);

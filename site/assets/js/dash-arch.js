@@ -135,6 +135,12 @@
     newKeys: null,     // { findingKey: true } for findings absent from the previous run
     resolvedItems: null, // previous-run findings absent from this one
     prevRunAt: null,
+    // Structural drift, from the snapshot history (/api/arch/diff). Distinct
+    // from the findings diff above: that one answers "what did the analyzer
+    // start or stop saying", this one answers "what changed in the
+    // architecture itself". null = not loaded; an object always carries its
+    // own honesty state rather than being flattened to an empty diff.
+    drift: null,
     files: [],
     // Keys that have already had their one-shot pulse. A lens switch or a
     // zoom re-renders the same finding; pulsing it again on every repaint
@@ -296,6 +302,124 @@
         render();
       })
       .catch(function () { /* no diff is a fine outcome; leave both null */ });
+  }
+
+  /**
+   * Load the structural drift for the most recent architecture snapshot.
+   *
+   * Deliberately never invents a comparison: the endpoint distinguishes "this
+   * is the earliest snapshot" from "the comparison point is gone", and both
+   * are carried through to the reader as themselves. A drift view that
+   * rendered either as "nothing changed" would report a brand-new repository
+   * and a lost baseline as a clean bill of health.
+   */
+  function loadDrift() {
+    state.drift = null;
+    callApi("/api/arch/snapshots?limit=1", null, "GET")
+      .then(function (res) {
+        var snaps = (res && res.snapshots) || [];
+        if (!snaps.length || !snaps[0].snapshotId) {
+          // No history yet. Distinct from "history exists and shows nothing".
+          state.drift = { state: "no_history" };
+          render();
+          return null;
+        }
+        return callApi("/api/arch/diff?to=" + encodeURIComponent(snaps[0].snapshotId), null, "GET");
+      })
+      .then(function (res) {
+        if (!res) return;
+        if (res.error) { state.drift = { state: "error" }; render(); return; }
+        state.drift = {
+          state: res.diff && res.diff.comparable ? "ok" : "incomparable",
+          diff: res.diff || null,
+          note: res.note || null,
+          reducedInputs: res.reducedInputs || [],
+          from: res.from || null,
+          to: res.to || null,
+        };
+        render();
+      })
+      .catch(function () { state.drift = { state: "error" }; render(); });
+  }
+
+  /**
+   * The drift panel.
+   *
+   * Two honesty states the stored data forces, both stated rather than
+   * styled around:
+   *
+   *   - a `reduced` snapshot dropped its evidence arrays to fit, so the diff
+   *     is structurally right but cannot cite a file and line. Migration 0018
+   *     says outright that a snapshot which silently loses its citations
+   *     breaks the X-ray's core promise, so the reader is told before they
+   *     ask why the evidence is missing.
+   *   - a dangling prev_snapshot_id means the baseline aged out. That is not
+   *     the same as having no baseline, and it must never re-point silently
+   *     at an older graph.
+   */
+  function driftPanel() {
+    var d = state.drift;
+    if (!d) return null;
+
+    var card = el("section", { class: "xray-drift", "aria-label": "Architecture drift" });
+    card.appendChild(el("h3", { class: "xray-drift-head" }, "Structural drift"));
+
+    if (d.state === "no_history") {
+      card.appendChild(el("p", { class: "panel-input-help" },
+        "No snapshot history yet. Every architecture run from now on is stored and " +
+        "chained to the one before it, so the next run has something to compare against."));
+      return card;
+    }
+    if (d.state === "error") {
+      card.appendChild(el("p", { class: "panel-input-help" },
+        "The drift history could not be read. The map above is unaffected."));
+      return card;
+    }
+    if (d.state === "incomparable") {
+      // The endpoint already distinguishes the two reasons in words. Passing
+      // its note through beats re-deriving it here and getting it wrong.
+      card.appendChild(el("p", { class: "panel-input-help" },
+        d.note || "There is nothing to compare this snapshot against."));
+      return card;
+    }
+
+    var diff = d.diff || {};
+    var total = diff.changed || 0;
+    card.appendChild(el("p", { class: "panel-input-help" },
+      total === 0
+        ? "No structural change since the previous snapshot — same services, same edges."
+        : total + " structural change" + (total === 1 ? "" : "s") + " since the previous snapshot."));
+
+    if (total > 0) {
+      var list = el("ul", { class: "xray-drift-list" });
+      var rows = [
+        ["+", "added",   "Service", diff.nodesAdded],
+        ["−", "removed", "Service", diff.nodesRemoved],
+        ["+", "added",   "Edge",    diff.edgesAdded],
+        ["−", "removed", "Edge",    diff.edgesRemoved],
+      ];
+      rows.forEach(function (r) {
+        (r[3] || []).slice(0, 8).forEach(function (item) {
+          var li = el("li", { class: "xray-drift-item xray-drift-" + r[1] });
+          // The sign is paired with a word: colour alone never carries a
+          // state anywhere else in this product either.
+          li.appendChild(el("span", { class: "xray-drift-sign", "aria-hidden": "true" }, r[0]));
+          li.appendChild(el("span", { class: "xray-drift-kind" }, r[2] + " " + r[1]));
+          li.appendChild(el("span", { class: "mono xray-drift-name" },
+            item.name || item.id || (item.from && item.from + " → " + item.to) || "—"));
+          list.appendChild(li);
+        });
+      });
+      card.appendChild(list);
+    }
+
+    if (d.reducedInputs && d.reducedInputs.length) {
+      card.appendChild(el("p", { class: "field-msg field-msg-error xray-drift-reduced" },
+        "One of the two snapshots was stored in reduced form and no longer carries its " +
+        "evidence. What changed is still accurate; where it changed cannot be cited " +
+        "from this comparison."));
+    }
+    return card;
   }
 
   function worstSeverity(findings) {
@@ -1224,6 +1348,8 @@
     }
 
     side.appendChild(findingsPanel(scope));
+    var drift = driftPanel();
+    if (drift) side.appendChild(drift);
     var recs = recommendationsPanel(scope);
     if (recs) side.appendChild(recs);
     layoutRow.appendChild(side);
@@ -1367,6 +1493,7 @@
         // Fired after render so the map appears immediately and the "new"
         // markers arrive when the comparison lands.
         loadDiff(result && result.runId);
+        loadDrift();
       })
       .catch(function (e) {
         var out = document.getElementById("output-arch");
@@ -1455,6 +1582,7 @@
             resetView();
             render();
             loadDiff(state.runId);
+            loadDrift();
             var panel = document.getElementById("panel-arch");
             if (panel && typeof panel.scrollIntoView === "function") {
               panel.scrollIntoView({ behavior: "smooth", block: "start" });
