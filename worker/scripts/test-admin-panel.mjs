@@ -521,6 +521,48 @@ group("automation");
     "to completely different places");
   expect(body.email.items.length === 1 && body.email.items[0].outcome === "skipped",
     "a skipped send is shown as skipped, not as sent and not as failed");
+
+  // --- MCP adoption -------------------------------------------------------
+  expect(body.mcp && typeof body.mcp === "object", "the automation view reports MCP adoption");
+  expect(body.mcp.enabled === false,
+    "…and says the surface is disabled rather than leaving a zero to be misread");
+  expect(body.mcp.calls === 0, "…with no calls in a fresh environment");
+  // The distinction that makes this readable at all: nothing has been called,
+  // so there is no error rate — not a 0% one, which would describe an
+  // untested surface as a healthy one.
+  expect(body.mcp.errorRate === null,
+    "…and a NULL error rate over zero calls, never 0%");
+  expect(body.mcp.windowDays === 30, "…over a stated window, so the figures can be read against each other");
+  expect(Array.isArray(body.mcp.topTools) && Array.isArray(body.mcp.byDay),
+    "…with per-tool and per-day breakdowns present but empty");
+  expect(body.mcp.oauth && body.mcp.oauth.orgsWithGrant === 0, "…and no OAuth grants yet");
+
+  // Now with traffic, to prove the aggregates are real rather than shaped.
+  const now = Math.floor(Date.now() / 1000);
+  const calls = [
+    ["org_a", "algosize_list_runs", "ok", null],
+    ["org_a", "algosize_list_runs", "ok", null],
+    ["org_a", "algosize_analyze_cost", "quota_exceeded", "quota_exceeded"],
+    ["org_b", "algosize_get_run", "error", "not_found"],
+  ];
+  for (const [org, tool, status, code] of calls) {
+    await env.DB.prepare(
+      `INSERT INTO mcp_tool_calls (org_id, tool_name, auth_method, scope_used, status, duration_ms, error_code, created_at)
+       VALUES (?, ?, 'api_key', 'algosize:read', ?, 10, ?, ?)`,
+    ).bind(org, tool, status, code, now - 60).run();
+  }
+  const { body: after } = await call(env, "/api/admin/automation", { token });
+  expect(after.mcp.calls === 4, `calls are counted (got ${after.mcp.calls})`);
+  expect(after.mcp.orgsCalling === 2, `distinct orgs are counted (got ${after.mcp.orgsCalling})`);
+  expect(after.mcp.quotaRefused === 1, "quota refusals are counted separately from other errors");
+  expect(Math.abs(after.mcp.errorRate - 0.5) < 1e-9,
+    `the error rate counts every non-ok outcome (got ${after.mcp.errorRate})`);
+  expect(after.mcp.topTools[0].tool === "algosize_list_runs" && after.mcp.topTools[0].calls === 2,
+    "the busiest tool leads the list");
+  // Aggregate only. Naming customers in a summary somebody leaves open on a
+  // second monitor is not what this view is for.
+  expect(!JSON.stringify(after.mcp).includes("org_a"),
+    "no organisation is named — the per-customer view is the account drawer");
 }
 
 // ===========================================================================

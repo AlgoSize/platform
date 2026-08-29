@@ -122,6 +122,22 @@ resolves a credential when there is one and stays silent when there is not,
 leaving `mcpAuth` to answer — either by resolving an `ask_mcp_` token, or by
 returning the 401 that actually starts the flow. It grants nothing on its own.
 
+## RFC 8707 resource indicators
+
+The metadata advertises `resource_indicators_supported: true`, and both
+`authorize` and `token` validate the `resource` parameter against this
+server's own MCP endpoint.
+
+That pairing is the point. Advertising the capability and ignoring the
+parameter — which is what shipped first — tells a client its token is
+audience-bound when it is not. Since this server has exactly one resource,
+honouring it completely means refusing any value that names something else;
+there is no second audience to issue for, so nothing needs storing.
+
+It is checked on refresh as well as on the initial grant: a refresh is a fresh
+token issuance, and a client that could not widen the audience at
+authorization time should not be able to at renewal time either.
+
 ## Scopes
 
 | Scope | Grants |

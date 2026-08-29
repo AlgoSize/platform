@@ -681,10 +681,80 @@
             ". A skipped send is not a failure and not a delivery — nothing left the building.",
       );
       mount.appendChild(emailRegion);
+
+      if (data.mcp) mount.appendChild(mcpRegion(data.mcp));
     }).catch(function (err) {
       if (blocked) return;
       clear(mount); mount.appendChild(errorBox(err, renderAutomation));
     });
+  }
+
+  /**
+   * MCP adoption over the last 30 days.
+   *
+   * Aggregate only — no organisation is named. The per-customer view is the
+   * account drawer, where an operator is already looking at one customer on
+   * purpose; a list of who is using a beta does not belong in a summary
+   * somebody leaves open on a second monitor.
+   */
+  function mcpRegion(m) {
+    var body = el("div", { class: "adm-mcp" });
+
+    // "Off" and "on but unused" are different facts about a flagged surface,
+    // and only one of them is a product problem. Said in words rather than
+    // left to be inferred from a zero.
+    var head = el("div", { class: "adm-mcp-state" }, [
+      pill(m.enabled ? "enabled" : "disabled", m.enabled ? "ok" : ""),
+      el("span", { class: "adm-region-meta",
+        text: m.enabled
+          ? (m.calls === 0 ? "on, and nothing has called it yet" : "on")
+          : "off environment-wide; per-org flags may still enable it" }),
+    ]);
+    body.appendChild(head);
+
+    var stats = el("div", { class: "adm-mcp-stats" }, [
+      statCell("Calls", String(m.calls)),
+      statCell("Orgs calling", String(m.orgsCalling)),
+      statCell("Runs consumed", String(m.runsConsumed)),
+      statCell("Refused for quota", String(m.quotaRefused)),
+      // null is "no calls", not zero. A 0% error rate over zero calls
+      // describes an untested surface, not a healthy one.
+      statCell("Error rate", m.errorRate == null ? "no calls" : Math.round(m.errorRate * 100) + "%"),
+      statCell("Avg duration", m.avgDurationMs == null ? "—" : m.avgDurationMs + "ms"),
+      statCell("Orgs with a grant", String(m.oauth.orgsWithGrant)),
+      statCell("Live tokens", String(m.oauth.liveTokens)),
+    ]);
+    body.appendChild(stats);
+
+    if (m.topTools && m.topTools.length) {
+      var list = el("div", { class: "adm-mcp-tools" });
+      m.topTools.forEach(function (t) {
+        list.appendChild(el("div", { class: "adm-mcp-tool" }, [
+          el("span", { class: "adm-mono", text: t.tool }),
+          el("span", { class: "adm-region-meta", text: t.calls + " calls" }),
+          t.errors
+            ? el("span", { class: "adm-region-meta", "data-tone": "warn",
+                style: "color:var(--adm-warn)", text: t.errors + " failed" })
+            : null,
+        ]));
+      });
+      body.appendChild(list);
+    }
+
+    return region(
+      "MCP",
+      "last " + m.windowDays + " days",
+      body,
+      "Aggregate across all accounts. Tool arguments and results are never stored, " +
+      "so this counts calls and outcomes only.",
+    );
+  }
+
+  function statCell(label, value) {
+    return el("div", { class: "adm-mcp-stat" }, [
+      el("span", { class: "adm-mcp-stat-label", text: label }),
+      el("span", { class: "adm-mcp-stat-value", text: value }),
+    ]);
   }
 
   function deltaText(delta) {

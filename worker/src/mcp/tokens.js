@@ -107,19 +107,31 @@ export async function issueTokenPair(env, { clientId, orgId, userId, scope, pare
   const accessId  = newTokenId();
   const refreshId = newTokenId();
 
+  // The access token is recorded as a CHILD of the refresh token issued
+  // alongside it, not as its sibling.
+  //
+  // Both used to carry the same parent, which made them siblings — and
+  // revokeTokenChain only walks parent→child. So revoking a refresh token, the
+  // thing that happens when someone disconnects a client, left the access
+  // token issued with it alive and working for up to a full hour. The grant
+  // looked revoked and was not.
+  //
+  // Parenting the access token to its own refresh token makes the chain
+  // oldRefresh → newRefresh → newAccess, so revoking any refresh token reaches
+  // every credential descended from it, including its own access token.
   await env.DB.batch([
-    env.DB.prepare(
-      `INSERT INTO mcp_tokens
-         (token_id, token_hash, token_type, client_id, org_id, user_id, scope, expires_at, parent_token_id)
-       VALUES (?, ?, 'access', ?, ?, ?, ?, ?, ?)`,
-    ).bind(accessId, await sha256Hex(access), clientId, orgId, userId ?? null, scope,
-           issuedAt + ACCESS_TTL_SECONDS, parentTokenId),
     env.DB.prepare(
       `INSERT INTO mcp_tokens
          (token_id, token_hash, token_type, client_id, org_id, user_id, scope, expires_at, parent_token_id)
        VALUES (?, ?, 'refresh', ?, ?, ?, ?, ?, ?)`,
     ).bind(refreshId, await sha256Hex(refresh), clientId, orgId, userId ?? null, scope,
            issuedAt + REFRESH_TTL_SECONDS, parentTokenId),
+    env.DB.prepare(
+      `INSERT INTO mcp_tokens
+         (token_id, token_hash, token_type, client_id, org_id, user_id, scope, expires_at, parent_token_id)
+       VALUES (?, ?, 'access', ?, ?, ?, ?, ?, ?)`,
+    ).bind(accessId, await sha256Hex(access), clientId, orgId, userId ?? null, scope,
+           issuedAt + ACCESS_TTL_SECONDS, refreshId),
   ]);
 
   return {
