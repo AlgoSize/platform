@@ -214,6 +214,68 @@ group("the Worker's own pull-request gate actually covers the Worker");
 }
 
 // ===========================================================================
+group("every committed workflow is YAML GitHub will actually run");
+// ===========================================================================
+// Added after shipping a workflow that GitHub silently refused to parse. The
+// gate did not fail — it VANISHED from the checks list, which looks identical
+// to a passing PR unless you count the checks. Every other guard in this file
+// was written for a failure mode I had already seen; this one existed in the
+// gap between them, because bash -n only inspects `run:` blocks and never
+// asks whether the document around them is well-formed.
+//
+// The specific fault: a JS string in a `script:` block picked up a literal
+// newline, because the generator is a template literal and a lone backslash-n
+// becomes a real newline before it ever reaches the YAML. The same escaping
+// bug this file already guards for in bash, in a language it did not cover.
+{
+  const { execFileSync } = await import("node:child_process");
+  const { readdirSync } = await import("node:fs");
+  const dir = join(REPO, ".github", "workflows");
+
+  // Every workflow in the repository, not only the generated ones: a file
+  // that does not parse is invisible whoever wrote it.
+  for (const f of readdirSync(dir).filter((x) => /\.ya?ml$/.test(x))) {
+    let parsed = true, why = "";
+    try {
+      execFileSync("python3", ["-c",
+        "import sys,yaml; yaml.safe_load(open(sys.argv[1]))", join(dir, f)],
+        { stdio: "pipe" });
+    } catch (err) {
+      // No python or no pyyaml is not a failing workflow; say so rather than
+      // reporting a false alarm the reader cannot act on.
+      const msg = String(err.stderr || err);
+      if (/ModuleNotFoundError|No such file|not found/.test(msg)) {
+        ok(`${f} — YAML check skipped (no python3+pyyaml available)`);
+        continue;
+      }
+      parsed = false;
+      why = msg.split("\n").filter(Boolean).slice(-2).join(" ").slice(0, 160);
+    }
+    expect(parsed, `${f} — parses as YAML, so GitHub will run it${parsed ? "" : ": " + why}`);
+  }
+}
+
+// Every `script:` block is JavaScript, and github-script runs it verbatim.
+// This is the JS half of the bash -n check below — the half whose absence let
+// a broken string literal reach production.
+for (const g of GATES) {
+  const blocks = [...g.yaml.matchAll(/script: \|\n([\s\S]*?)(?=\n {6}[-#]|\n *$)/g)]
+    .map((m) => m[1].replace(/\$\{\{[^}]*\}\}/g, "X"))
+    .map((b) => b.split("\n").map((l) => l.replace(/^ {12}/, "")).join("\n"));
+  if (!blocks.length) continue;
+
+  let bad = null;
+  for (const b of blocks) {
+    // github-script wraps the body in an async function, so top-level await
+    // is legal there. Checking it bare reports every real script as broken.
+    try { new Function(`async function __gs(){ ${b} }`); }
+    catch (err) { if (!bad) bad = String(err.message).slice(0, 120); }
+  }
+  expect(bad === null,
+    `${g.name} — every script: block is valid JavaScript (${bad || "ok"})`);
+}
+
+// ===========================================================================
 group("a spent allowance is a warning, never a red build");
 // ===========================================================================
 // The free tier is five runs a month and an active repository reaches that
@@ -293,7 +355,7 @@ group("every generated gate is valid bash, and its jq actually interpolates");
     // Every `run: |` block, dedented, with GitHub expressions blanked — they
     // are substituted before bash ever sees them, and `${{ ... }}` is not
     // valid shell on its own.
-    const blocks = [...g.yaml.matchAll(/run: \|\n([\s\S]*?)(?=\n {6}- name:|\n {6}- uses:|\n *$)/g)]
+    const blocks = [...g.yaml.matchAll(/run: \|\n([\s\S]*?)(?=\n {6}[-#]|\n *$)/g)]
       .map((m) => m[1].replace(/\$\{\{[^}]*\}\}/g, "X"))
       .map((b) => b.split("\n").map((l) => l.replace(/^ {10}/, "")).join("\n"));
 
