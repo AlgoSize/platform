@@ -419,14 +419,35 @@
     }
   }
 
+  // One table, read by both the legend and the rows.
+  //
+  // Two things go wrong when these are written twice. A legend that covers
+  // three of the five badges is worse than no legend: the reader learns it is
+  // complete, meets "deletes" on a row, and has no way to know they were not
+  // told. And a legend whose chip says "destructive" beside a row whose chip
+  // says "deletes" is a second vocabulary to learn for no gain.
+  //
+  // There is deliberately no entry for "no badge": an unbadged tool is free
+  // and changes state, and a "free" badge would mark nineteen of them.
+  var BADGES = [
+    { key: "metered",     label: "metered",     means: "consumes one run" },
+    { key: "read",        label: "read",        means: "read-only and free" },
+    { key: "public",      label: "public link", means: "creates a public link" },
+    { key: "destructive", label: "deletes",     means: "deletes something" },
+    { key: "plan",        label: "paid plan",   means: "needs a paid plan" },
+  ];
+
+  function badgeChip(key) {
+    var b = BADGES.filter(function (x) { return x.key === key; })[0];
+    return el("span", { class: "chip mcp-badge mcp-badge-" + key }, b.label);
+  }
+
   function legend() {
     var l = el("div", { class: "mcp-legend" });
-    [["metered", "consumes one run"],
-     ["read", "read-only and free"],
-     ["public", "creates a public link"]].forEach(function (pair) {
+    BADGES.forEach(function (b) {
       var i = el("span", { class: "mcp-legend-item" });
-      i.appendChild(el("span", { class: "chip mcp-badge mcp-badge-" + pair[0] }, pair[0]));
-      i.appendChild(el("span", { class: "acct-dim" }, pair[1]));
+      i.appendChild(badgeChip(b.key));
+      i.appendChild(el("span", { class: "acct-dim" }, b.means));
       l.appendChild(i);
     });
     return l;
@@ -440,21 +461,21 @@
 
     var badges = el("span", { class: "mcp-badges" });
     if (meta["algosize/metered"]) {
-      badges.appendChild(el("span", { class: "chip mcp-badge mcp-badge-metered" }, "metered"));
+      badges.appendChild(badgeChip("metered"));
     } else if (t.annotations && t.annotations.readOnlyHint) {
-      badges.appendChild(el("span", { class: "chip mcp-badge mcp-badge-read" }, "read"));
+      badges.appendChild(badgeChip("read"));
     }
     if (t.annotations && t.annotations.openWorldHint) {
       // The share tool. Flagged in the list, not only inside the expanded
       // view, because "this one publishes a link" is exactly the property a
       // firm owner is scanning for.
-      badges.appendChild(el("span", { class: "chip mcp-badge mcp-badge-public" }, "public link"));
+      badges.appendChild(badgeChip("public"));
     }
     if (t.annotations && t.annotations.destructiveHint) {
-      badges.appendChild(el("span", { class: "chip mcp-badge mcp-badge-destructive" }, "deletes"));
+      badges.appendChild(badgeChip("destructive"));
     }
     if (meta["algosize/paidOnly"]) {
-      badges.appendChild(el("span", { class: "chip mcp-badge mcp-badge-plan" }, "paid plan"));
+      badges.appendChild(badgeChip("plan"));
     }
     sum.appendChild(badges);
     row.appendChild(sum);

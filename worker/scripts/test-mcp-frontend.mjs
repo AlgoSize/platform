@@ -91,6 +91,22 @@ group("the catalog comes from the server, not a hard-coded copy");
     "…and it renders the server's own grouping");
 }
 
+group("the badge legend is complete and speaks one vocabulary");
+{
+  // A legend covering some of the badges is worse than none: the reader
+  // learns it is complete, then meets an unexplained one on a row.
+  expect(/var BADGES = \[/.test(js),
+    "badges come from one table, read by both the legend and the rows");
+  const keys = [...new Set((js.match(/key: "([a-z]+)"/g) || []).map((m) => m.slice(6, -1)))];
+  const used = [...new Set((js.match(/badgeChip\("([a-z]+)"\)/g) || []).map((m) => m.slice(11, -2)))];
+  expect(used.length > 0 && used.every((k) => keys.includes(k)),
+    `every badge a row can show is in the legend table (rows use: ${used.join(", ")})`);
+  expect(keys.length === used.length,
+    "…and the legend explains no badge that no row can show");
+  expect(!/mcp-badge-[a-z]+" }, "/.test(js),
+    "…so no chip label is written a second time next to its class");
+}
+
 group("states that are easy to render dishonestly");
 {
   expect(/errorRate == null/.test(js),
