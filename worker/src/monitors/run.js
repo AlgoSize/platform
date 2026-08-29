@@ -36,7 +36,8 @@ import {
 } from "./diff.js";
 import {
   runArchForMonitor, diffArchFindings,
-  runEstimateForMonitor, diffEstimate,
+  runEstimateForMonitor,
+  runCostForMonitor, diffEstimate,
   runAlgoForMonitor, diffAlgoGrades,
 } from "./analyzers.js";
 import { recordEmailSend } from "../oplog.js";
@@ -301,6 +302,21 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
       skips.push({ analyzer: "estimate", reason: "no_compose" });
     } else {
       skips.push({ analyzer: "estimate", reason: est.reason });
+    }
+  }
+
+  // Cloud spend. Files a run and shows a standing result; deliberately keeps
+  // no baseline and raises no alert — a bill differs every day, so a diff
+  // would report Tuesday differing from Monday as a finding. See
+  // runCostForMonitor for the whole argument.
+  if (analyzers.includes("cost")) {
+    const cost = await runCostForMonitor(monitor, env, ctx, fetchImpl);
+    if (cost.status === "ok") {
+      filings.push({ analyzer: "cost", result: cost.result });
+    } else if (cost.status === "no_cur") {
+      skips.push({ analyzer: "cost", reason: "no_cur" });
+    } else {
+      skips.push({ analyzer: "cost", reason: cost.reason });
     }
   }
 

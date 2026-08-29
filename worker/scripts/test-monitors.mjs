@@ -1162,6 +1162,93 @@ function makeTreeFetch({ tree, raw = {}, treeStatus = 200, rawThrottle = false }
     "a repo the tree API cannot list still maps from its root manifests — no regression");
 }
 
+
+// ---------------------------------------------------------------------------
+console.log("\ncloud spend can be watched, which it could not be before\n");
+// ---------------------------------------------------------------------------
+//
+// The cost analyzer was the only one that could not be scheduled. The
+// dashboard said so: "This one reads a file you upload and keeps nothing, so
+// there is no standing result to show." Every other tool had a nightly half
+// because every other tool reads something a repository already contains; a
+// CUR is a billing export nobody commits by default, so it needed a way to be
+// pointed AT one.
+{
+  const CUR = [
+    "lineItem/ProductCode,lineItem/UsageType,lineItem/UnblendedCost",
+    "AmazonEC2,BoxUsage:m5.large,120.50",
+    "AmazonEC2,BoxUsage:m5.large,118.25",
+    "AmazonS3,TimedStorage-ByteHrs,45.10",
+  ].join("\n");
+
+  // Named and committed: a standing result.
+  const env = makeEnv();
+  const orgId = await seedOrg(env, { userId: "usr_cur", email: "cur@example.com" });
+  const m = await createMonitor(env, {
+    orgId, repoUrl: "https://github.com/o/spend", analyzers: ["vuln", "cost"],
+  });
+  env.FETCH = makeMultiFetch({ vulns: [], repoFiles: {
+    "algosize.budget.json": JSON.stringify({ cur: "billing/cur.csv" }),
+    "billing/cur.csv": CUR,
+  } });
+  const mailbox = makeMailbox();
+  const res = await runMonitorCheck(env, m.monitorId, {}, { now: NOW, sendTransactional: mailbox.send });
+  expect(!res.skips.some((s) => s.analyzer === "cost"),
+    `a committed CUR is read rather than skipped (got ${JSON.stringify(res.skips)})`);
+
+  // The whole ask was a STANDING RESULT — so the run has to be filed, not
+  // merely computed and dropped.
+  const { listRuns } = await import("../src/handlers/runs.js");
+  const runs = await listRuns(env, { orgId }, { limit: 10 });
+  const costRuns = runs.items.filter((r) => r.analyzer === "cost");
+  expect(costRuns.length === 1, `the sweep files a cost run (got ${costRuns.length})`);
+  expect(costRuns[0] && costRuns[0].source === "monitor",
+    `marked source=monitor, not ci (got ${costRuns[0] && costRuns[0].source})`);
+
+  // Deliberately no baseline and no alert: a bill differs every day, so a diff
+  // would report Tuesday differing from Monday as a finding.
+  expect(mailbox.sent.length === 0, "and sends no email — a bill changing is not an alert");
+}
+
+{
+  // Not named at all. That is consent, not an error: a repository that has not
+  // named a CUR is telling us not to read its billing data.
+  const env = makeEnv();
+  const orgId = await seedOrg(env, { userId: "usr_nocur", email: "nocur@example.com" });
+  const m = await createMonitor(env, {
+    orgId, repoUrl: "https://github.com/o/nocur", analyzers: ["vuln", "cost"],
+  });
+  env.FETCH = makeMultiFetch({ vulns: [], repoFiles: {} });
+  const res = await runMonitorCheck(env, m.monitorId, {}, { now: NOW, sendTransactional: makeMailbox().send });
+  const skip = res.skips.find((s) => s.analyzer === "cost");
+  expect(skip && skip.reason === "no_cur",
+    `an unnamed CUR is a quiet skip, not a failure (got ${JSON.stringify(skip)})`);
+  expect(res.status !== "failed", `and the sweep still succeeds (got ${res.status})`);
+}
+
+{
+  // Named but missing is a DIFFERENT answer from never named, and the reader
+  // needs to know which: one repo opted out, the other meant to opt in.
+  const env = makeEnv();
+  const orgId = await seedOrg(env, { userId: "usr_gone", email: "gone@example.com" });
+  const m = await createMonitor(env, {
+    orgId, repoUrl: "https://github.com/o/gone", analyzers: ["vuln", "cost"],
+  });
+  env.FETCH = makeMultiFetch({ vulns: [], repoFiles: {
+    "algosize.budget.json": JSON.stringify({ cur: "billing/missing.csv" }),
+  } });
+  const res = await runMonitorCheck(env, m.monitorId, {}, { now: NOW, sendTransactional: makeMailbox().send });
+  const skip = res.skips.find((s) => s.analyzer === "cost");
+  expect(skip && skip.reason === "cur_missing",
+    `a named-but-absent export says so distinctly (got ${JSON.stringify(skip)})`);
+
+  const { explainUnavailable } = await import("../src/handlers/monitors.js");
+  expect(explainUnavailable("no_cur") !== explainUnavailable("cur_missing"),
+    "and the two read differently in the panel, because the fixes differ");
+  expect(explainUnavailable("cur_missing") !== explainUnavailable("__unknown__"),
+    "rather than falling through to the generic sentence");
+}
+
 console.log("");
 if (failures === 0) {
   console.log("\x1b[32m  all monitor tests passed\x1b[0m\n");

@@ -728,6 +728,10 @@ permalink: /dashboard/
                 <span class="analyzer-name">Algorithm optimizer</span>
                 <span class="analyzer-hint">re-grades functions named in optimizer.config.json</span>
               </button>
+              <button type="button" class="analyzer-opt" data-analyzer="cost" aria-pressed="false">
+                <span class="analyzer-name">Cloud spend</span>
+                <span class="analyzer-hint">reads the CUR export named in algosize.budget.json — never a cloud account</span>
+              </button>
             </div>
             <p class="field-msg" id="monitor-analyzers-note">Extra analyzers read only committed files. A repo missing the file an analyzer needs reports that in the email — it never fails the sweep.</p>
 

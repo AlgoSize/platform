@@ -33,17 +33,18 @@
     // Secondary analyzers ticked in the new-monitor form. The dependency
     // audit is not in here because it is not a choice — the Worker forces
     // "vuln" into every set it stores.
-    analyzers: { arch: false, estimate: false, algo: false },
+    analyzers: { arch: false, estimate: false, algo: false, cost: false },
   };
 
   // Order and labels for the secondary analyzers, everywhere they render.
-  var SECONDARY_ANALYZERS = ["arch", "estimate", "algo"];
+  var SECONDARY_ANALYZERS = ["arch", "estimate", "algo", "cost"];
   var ANALYZER_LABEL = {
     arch: "Architecture X-ray",
     estimate: "Cost estimate",
     algo: "Algorithm optimizer",
+    cost: "Cloud spend",
   };
-  var ANALYZER_SHORT = { arch: "x-ray", estimate: "cost", algo: "algo" };
+  var ANALYZER_SHORT = { arch: "x-ray", estimate: "estimate", algo: "algo", cost: "spend" };
 
   /**
    * How a monitor's hour renders.

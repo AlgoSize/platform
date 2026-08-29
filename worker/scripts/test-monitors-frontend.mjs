@@ -43,7 +43,17 @@ group("selectors resolve — the silent-null failure");
 
   // The analyzer picker's buttons are reached by data-analyzer, not id: every
   // key the form state tracks must have a button, and vice versa.
-  const stateKeys = ["arch", "estimate", "algo"];
+  //
+  // Derived from dash-monitors.js rather than hand-listed. The literal list
+  // that used to live here went stale the moment a fifth analyzer was added,
+  // and a stale list fails in the unhelpful direction: it reports the NEW
+  // button as the error rather than the missing one, which is the opposite of
+  // what the reader needs.
+  const stateKeys = matchAll(js, /var SECONDARY_ANALYZERS = \[([^\]]+)\]/g)
+    .flatMap((list) => list.match(/"([a-z]+)"/g) || [])
+    .map((q) => q.replace(/"/g, ""));
+  expect(stateKeys.length > 0,
+    `read the secondary-analyzer list out of dash-monitors.js (got ${stateKeys.join(", ") || "none"})`);
   const formBtns = matchAll(html, /data-analyzer="([a-z]+)"/g);
   expect(stateKeys.every((k) => formBtns.includes(k)) && formBtns.length === stateKeys.length,
     `the form has exactly one toggle per secondary analyzer (got ${formBtns.join(", ") || "none"})`);

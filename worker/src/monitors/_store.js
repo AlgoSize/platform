@@ -12,7 +12,7 @@ export const SCHEDULES = Object.freeze(["daily", "weekly"]);
 //
 // "vuln" is mandatory: the API refuses a set without it, because a monitor
 // row that watches nothing still occupies a plan slot and reads as coverage.
-export const MONITOR_ANALYZERS = Object.freeze(["vuln", "arch", "estimate", "algo"]);
+export const MONITOR_ANALYZERS = Object.freeze(["vuln", "arch", "estimate", "algo", "cost"]);
 
 /**
  * Normalise a requested analyzer set.
