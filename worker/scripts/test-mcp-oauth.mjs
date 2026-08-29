@@ -306,6 +306,56 @@ group("token — the full PKCE exchange");
 }
 
 // ---------------------------------------------------------------------------
+group("RFC 8707 resource indicator");
+{
+  const env = makeEnv(); await seed(env);
+  const { body: client } = await register(env);
+  const base = {
+    client_id: client.client_id, redirect_uri: REDIRECT, response_type: "code",
+    code_challenge: await s256("v"), code_challenge_method: "S256", state: "st",
+  };
+  const loc = async (q) => {
+    const res = await worker.fetch(
+      new Request("https://algosize.com/api/mcp/oauth/authorize?" + form(q)), env, ctx);
+    return { status: res.status, url: new URL(res.headers.get("Location") || "https://x/") };
+  };
+
+  // The metadata advertises resource_indicators_supported, so the parameter
+  // has to actually do something. It did not: it was advertised and ignored,
+  // which told a client its token was audience-bound when it was not.
+  const meta = await (await worker.fetch(
+    new Request("https://algosize.com/.well-known/oauth-authorization-server"), env, ctx)).json();
+  expect(meta.resource_indicators_supported === true, "the metadata advertises resource indicators");
+
+  const wrong = await loc({ ...base, resource: "https://someone-else.example/api/mcp" });
+  expect(wrong.url.searchParams.get("error") === "invalid_target",
+    "…so a resource this server does not serve is refused, not ignored");
+  expect(wrong.url.searchParams.get("state") === "st", "…with state echoed");
+
+  const right = await loc({ ...base, resource: "https://algosize.com/api/mcp" });
+  expect(right.status === 401,
+    "…and the correct resource passes validation (reaching the sign-in prompt)");
+  const slash = await loc({ ...base, resource: "https://algosize.com/api/mcp/" });
+  expect(slash.status === 401,
+    "…including with a trailing slash, which names the same resource");
+  const absent = await loc(base);
+  expect(absent.status === 401, "…and omitting it is fine, since the parameter is optional");
+
+  // The token endpoint checks it too: a refresh is a fresh issuance, so a
+  // client could otherwise widen the audience at renewal time.
+  const { issueTokenPair } = await import("../src/mcp/tokens.js");
+  const pair = await issueTokenPair(env, {
+    clientId: client.client_id, orgId: ORG, userId: USER, scope: "algosize:read",
+  });
+  const badTok = await worker.fetch(postForm("/api/mcp/oauth/token", {
+    grant_type: "refresh_token", client_id: client.client_id,
+    refresh_token: pair.refreshToken, resource: "https://elsewhere.example/api/mcp",
+  }), env, ctx);
+  expect((await badTok.json()).error === "invalid_target",
+    "the token endpoint refuses a foreign resource on refresh too");
+}
+
+// ---------------------------------------------------------------------------
 group("token — refresh rotation");
 {
   const env = makeEnv(); await seed(env);

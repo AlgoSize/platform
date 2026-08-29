@@ -81,6 +81,34 @@ export function validRedirectUri(raw) {
   return false;
 }
 
+/**
+ * RFC 8707 resource indicator.
+ *
+ * The metadata advertises `resource_indicators_supported: true`, so a client
+ * is entitled to send `resource` and to expect the token it gets back to be
+ * bound to that audience. Advertising it and then ignoring the parameter
+ * would claim a security property we do not provide — a token the client
+ * believes is audience-restricted, and is not.
+ *
+ * This server has exactly one resource: its own MCP endpoint. So honouring
+ * the parameter completely means checking that any value supplied names that
+ * endpoint, and refusing otherwise. There is no second audience we could
+ * issue for, which is why nothing needs storing: "bound to the only resource
+ * that exists" is the same statement as "issued by this server".
+ *
+ * Absent is fine — the parameter is optional, and a client that omits it gets
+ * the same token it would have got before.
+ */
+function resourceAccepted(request, env, supplied) {
+  if (!supplied) return true;
+  const expected = `${issuerFor(request, env)}/api/mcp`;
+  // Compared after trimming a trailing slash: a client sending ".../api/mcp/"
+  // is naming the same resource, and refusing it would be pedantry that
+  // breaks a working integration.
+  const norm = (u) => String(u).replace(/\/+$/, "");
+  return norm(supplied) === norm(expected);
+}
+
 // ---------------------------------------------------------------------------
 // POST /api/mcp/oauth/register — RFC 7591 dynamic client registration
 // ---------------------------------------------------------------------------
@@ -197,6 +225,10 @@ export async function mcpAuthorizeHandler(request, env, ctx) {
   }
   if (p.code_challenge_method !== "S256") {
     return back("invalid_request", "Only S256 is accepted for code_challenge_method; plain is not a challenge.");
+  }
+  if (!resourceAccepted(request, env, p.resource)) {
+    return back("invalid_target",
+      "The requested resource is not served by this authorization server.");
   }
 
   // Is there a signed-in person? requireAuth returns a Response on failure.
@@ -332,6 +364,14 @@ export async function mcpTokenHandler(request, env, ctx) {
     if (!presented || (await sha256Hex(presented)) !== client.client_secret_hash) {
       return oauthError("invalid_client", "Client authentication failed.", 401);
     }
+  }
+
+  // Checked for both grants: a refresh is a fresh token issuance, so a client
+  // could otherwise widen the audience at renewal time even though it could
+  // not at authorization time.
+  if (!resourceAccepted(request, env, get("resource"))) {
+    return oauthError("invalid_target",
+      "The requested resource is not served by this authorization server.");
   }
 
   if (grantType === "authorization_code") return await exchangeCode(request, env, ctx, client, get);
