@@ -32,20 +32,49 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Collect source
+      - name: Collect manifests and source
         if: steps.key.outputs.skip != 'true'
         id: collect
         run: |
-          # Source only, and bounded. Build output and vendored dependencies
-          # carry no signal about YOUR architecture and would dominate the graph.
+          # MANIFESTS FIRST, then source. This order is the whole point: the
+          # analyzer builds its clusters and services from manifests
+          # (wrangler.toml, compose, Dockerfile, Terraform, k8s) and uses
+          # source only for the import edges between them. Collecting source
+          # alone returns a graph with zero clusters and zero findings, which
+          # renders as "worst: none" — a clean bill of health for a repository
+          # nobody actually mapped. That is the failure this ordering exists
+          # to prevent, and truncation at the cap must never cost a
+          # manifest to make room for one more source file.
+          #
+          # Build output and vendored dependencies carry no signal about YOUR
+          # architecture and would dominate the graph, so they are pruned.
           find . \
-            -path ./node_modules -prune -o \
-            -path ./.git -prune -o \
-            -path ./dist -prune -o \
-            -path ./build -prune -o \
-            -path ./vendor -prune -o \
+            -name node_modules -prune -o \
+            -name .git -prune -o \
+            -name dist -prune -o \
+            -name build -prune -o \
+            -name vendor -prune -o \
+            -name _site -prune -o \
+            -type f \( -name 'wrangler.toml' -o -name 'docker-compose.y*ml' -o -name 'compose.y*ml' -o -name 'Dockerfile*' -o -name '*.tf' -o -name '_config.y*ml' \) \
+            -size -200k -print | sed 's|^./||' > manifests.txt
+
+          find . \
+            -name node_modules -prune -o \
+            -name .git -prune -o \
+            -name dist -prune -o \
+            -name build -prune -o \
+            -name vendor -prune -o \
+            -name _site -prune -o \
             -type f \( -name '*.js' -o -name '*.mjs' -o -name '*.ts' -o -name '*.tsx' -o -name '*.py' -o -name '*.go' \) \
-            -size -200k -print | head -400 | sed 's|^./||' > files.txt
+            -size -200k -print | sed 's|^./||' > source.txt
+
+          # Manifests are never truncated; source fills whatever budget is left.
+          MANIFESTS=$(wc -l < manifests.txt | tr -d ' ')
+          BUDGET=$((400 - MANIFESTS))
+          [ "$BUDGET" -lt 0 ] && BUDGET=0
+          cat manifests.txt > files.txt
+          head -"$BUDGET" source.txt >> files.txt
+          echo "::notice::Collected $MANIFESTS manifest(s) and $(( $(wc -l < files.txt) - MANIFESTS )) source file(s)."
 
           COUNT=$(wc -l < files.txt | tr -d ' ')
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
