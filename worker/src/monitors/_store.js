@@ -77,6 +77,10 @@ function rowToMonitor(row) {
     // Per-analyzer baselines, same contract as lastAdvisoryIds: null means
     // "never ran", never "ran and found nothing".
     lastArchKeys:    parseIdList(row.last_arch_keys),
+    // Which analyzers declined to produce a result last sweep, and why.
+    // null = no sweep has recorded this yet; [] = a sweep ran and nothing
+    // was skipped. Readers must keep those apart — see migration 0022.
+    lastSkips:       parseSkips(row.last_skips_json),
     lastEstimate:    parseEstimateBaseline(row.last_estimate_json),
     lastAlgo:        parseAlgoBaseline(row.last_algo_json),
     // Per-severity tally of the last completed run's advisories
@@ -155,6 +159,19 @@ function parseSeverities(raw) {
       out[k] = typeof d[k] === "number" && Number.isFinite(d[k]) ? d[k] : 0;
     }
     return out;
+  } catch {
+    return null;
+  }
+}
+
+/** The stored skip list. Same null-vs-empty discipline as parseIdList. */
+function parseSkips(raw) {
+  if (typeof raw !== "string" || !raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((x) => x && typeof x.analyzer === "string")
+      : null;
   } catch {
     return null;
   }
@@ -312,6 +329,9 @@ export async function recordMonitorRun(env, monitorId, {
   // analyzer that could not run this sweep keeps its old baseline and diffs
   // correctly next time, instead of having its history wiped by an outage.
   archKeys = undefined, estimate = undefined, algo = undefined,
+  // Per-analyzer skips for this sweep (migrations/0022). Same `undefined`
+  // contract: a caller that did not compute them leaves the column alone.
+  skips = undefined,
   // Per-severity tally of the advisories this run saw (migrations/0017).
   // Same `undefined` contract as the baselines above.
   severities = undefined,
@@ -336,6 +356,10 @@ export async function recordMonitorRun(env, monitorId, {
   if (algo !== undefined) {
     sets.push("last_algo_json = ?");
     binds.push(algo === null ? null : JSON.stringify(algo));
+  }
+  if (skips !== undefined) {
+    sets.push("last_skips_json = ?");
+    binds.push(skips === null ? null : JSON.stringify(skips));
   }
   if (severities !== undefined) {
     sets.push("last_severity_json = ?");

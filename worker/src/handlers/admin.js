@@ -278,6 +278,10 @@ const MIGRATIONS = Object.freeze([
     // Absence is silent in the same way as §1.10: calls still log without the
     // column's index-side twin, they just never group into sessions.
     checks: [{ table: "mcp_tool_calls", column: "session_ref" }] },
+  { id: "0022", name: "monitor_skips",
+    // Absence is silent too, and in the worst direction: without it a skipped
+    // analyzer's empty baseline renders as a measured zero.
+    checks: [{ table: "monitors", column: "last_skips_json" }] },
 ]);
 
 /** Plain SQLite identifier — the only shape we will interpolate into a PRAGMA. */

@@ -411,6 +411,69 @@ group("running a monitor on demand");
   expect(queued.length === 1, "…and nothing extra reached the queue");
 }
 
+// ---------------------------------------------------------------------------
+console.log("\na skipped analyzer is never graded as a zero\n");
+// ---------------------------------------------------------------------------
+// The scorecard reported "Architecture 0 — No findings in the last sweep" for
+// a repository whose X-ray had never read a single file. On `no_manifests`
+// the sweep records an EMPTY baseline on purpose, so a repo that later gains
+// a manifest baselines from nothing — and an empty array is indistinguishable
+// from "we looked and found none". A zero that cannot be trusted poisons
+// every other number in the grid.
+{
+  const env = makeEnv();
+  await seedOrg(env, "org_sk", [{ userId: "u_sk", email: "sk@acme.test", role: "owner" }]);
+  const m = await createMonitor(env, {
+    orgId: "org_sk", repoUrl: "https://github.com/acme/noman", branch: "main",
+    createdBy: "u_sk", analyzers: ["vuln", "arch", "estimate", "algo"],
+  });
+
+  // Exactly what a sweep writes when every secondary analyzer declines: an
+  // empty arch baseline, plus the skip list migration 0022 added.
+  await recordMonitorRun(env, m.monitorId, {
+    ranAt: NOW, resultHash: "h", advisoryIds: [],
+    severities: { critical: 0, high: 0, medium: 0, low: 0 },
+    archKeys: [],
+    skips: [
+      { analyzer: "arch",     reason: "no_manifests" },
+      { analyzer: "estimate", reason: "no_compose" },
+      { analyzer: "algo",     reason: "no_config" },
+    ],
+  });
+
+  const body = await (await scorecardHandler(authed("u_sk"), env)).json();
+  const row  = body.rows.find((r) => /noman/.test(r.repo));
+  expect(Boolean(row), "the monitored repo appears in the scorecard");
+
+  expect(row.cells.architecture.kind === "unmeasured",
+    `a skipped X-ray reads as unmeasured, not a grade (got ${row.cells.architecture.kind})`);
+  expect(row.cells.architecture.value === null,
+    `…and carries no number at all (got ${JSON.stringify(row.cells.architecture.value)})`);
+  expect(/manifests/i.test(row.cells.architecture.note || ""),
+    `…and says why, in the same words the analyzer panel uses (got "${row.cells.architecture.note}")`);
+  expect(row.cells.cost.kind === "unmeasured" && row.cells.complexity.kind === "unmeasured",
+    "the estimator and optimizer get the same treatment — one rule, not three");
+
+  // Security genuinely ran: its zero is a measurement and must survive.
+  expect(row.cells.security.kind === "grade",
+    `an analyzer that DID run keeps its grade (got ${row.cells.security.kind})`);
+
+  // A monitor swept before 0022 has null skips — unknown, not empty. It must
+  // keep its old rendering rather than claim every analyzer ran.
+  const legacy = await createMonitor(env, {
+    orgId: "org_sk", repoUrl: "https://github.com/acme/legacy", branch: "main",
+    createdBy: "u_sk", analyzers: ["vuln", "arch"],
+  });
+  await recordMonitorRun(env, legacy.monitorId, {
+    ranAt: NOW, resultHash: "h2", advisoryIds: [], archKeys: ["a|speed|rule"],
+  });
+  const body2 = await (await scorecardHandler(authed("u_sk"), env)).json();
+  const legacyRow = body2.rows.find((r) => /legacy/.test(r.repo));
+  expect(legacyRow.cells.architecture.kind === "grade" &&
+         legacyRow.cells.architecture.value === "1",
+    "a pre-0022 sweep with real findings still grades normally");
+}
+
 console.log("");
 if (failures) {
   console.log(`\x1b[31m  ${failures} monitor-routing test(s) failed\x1b[0m`);

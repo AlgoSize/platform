@@ -110,6 +110,10 @@
         if (cells[k].kind === "grade")   graded++;
         if (cells[k].kind === "pending") pending++;
         if (cells[k].kind === "stale")   stale++;
+        // Counted with pending, not with graded: nothing was measured, so
+        // rolling it into the graded total would inflate the one number a
+        // reader uses to judge how much of the grid is real.
+        if (cells[k].kind === "unmeasured") pending++;
       });
     });
 
@@ -298,6 +302,18 @@
 
     if (cell.kind === "pending") {
       wrap.appendChild(el("span", { class: "scorecard-pending mono" }, "first run pending"));
+      wrap.appendChild(el("span", { class: "scorecard-note mono" }, cell.note || ""));
+      return wrap;
+    }
+
+    // The sweep ran and this analyzer produced nothing — no manifests, no
+    // compose file, no runnable config. Distinct from "pending", which means
+    // no sweep has happened yet, and emphatically distinct from a zero: this
+    // column previously rendered a skipped X-ray's empty baseline as
+    // "0 · No findings in the last sweep", which is a clean bill of health
+    // for a repository nothing ever read.
+    if (cell.kind === "unmeasured") {
+      wrap.appendChild(el("span", { class: "scorecard-unmeasured mono" }, "not measured"));
       wrap.appendChild(el("span", { class: "scorecard-note mono" }, cell.note || ""));
       return wrap;
     }

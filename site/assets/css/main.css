@@ -4994,6 +4994,10 @@ a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
 .xray-drift-name { min-width: 0; word-break: break-all; }
 .xray-drift-reduced { margin-top: var(--s-2); }
 /* Per-entry skip reasons under a total optimizer failure. */
+.scorecard-unmeasured {
+  font-size: var(--fs-xs); color: var(--accent-warm);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
 .night-skip-list {
   list-style: none; margin: var(--s-2) 0 0; padding: 0;
   display: flex; flex-direction: column; gap: 2px;

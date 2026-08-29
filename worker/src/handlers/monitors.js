@@ -636,8 +636,14 @@ export async function monitorResultHandler(request, env, ctx) {
   });
 }
 
-/** A sentence for each way an analyzer can decline to produce a result. */
-function explainUnavailable(reason) {
+/**
+ * A sentence for each way an analyzer can decline to produce a result.
+ *
+ * Exported because the scorecard needs the SAME sentences: a cell that says
+ * "not measured" has to say why, and two independently-worded lists is how
+ * the panel and the grid end up disagreeing about the same sweep.
+ */
+export function explainUnavailable(reason) {
   const MAP = {
     no_manifests:       "No manifests or config files were found in this repository, so there is nothing to map.",
     no_compose:         "No compose file was found in this repository, so there is nothing to price.",
