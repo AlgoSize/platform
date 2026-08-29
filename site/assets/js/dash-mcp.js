@@ -36,6 +36,7 @@
     keyPrefix: null,           // the key row picked, for display only
     filter: "",
     activity: "all",           // "all" | "errors" — the activity feed's filter
+    openSessions: {},          // session ref -> true, survives re-renders
     test: null,                // null | {state, note} — the connection test
   };
 
@@ -620,6 +621,7 @@
     var t = state.usage.totals || {};
     var stats = el("div", { class: "mcp-stats" });
     stat(stats, "Calls", t.calls != null ? String(t.calls) : "—");
+    stat(stats, "Sessions", t.sessions != null ? String(t.sessions) : "—");
     stat(stats, "Runs consumed", t.runsStarted != null ? String(t.runsStarted) : "—");
     stat(stats, "Refused for quota", t.quotaRefused != null ? String(t.quotaRefused) : "—");
     // A null error rate is "no data", NOT zero. Rendering 0% for an unused
@@ -642,32 +644,147 @@
       return p;
     }
 
-    // "Problems only" is everything that is not ok, not only errors: a call
-    // refused for quota or held by a rate limit is exactly what someone
-    // filtering this list is looking for, and neither is an error.
-    var calls = state.activity === "errors"
-      ? all.filter(function (c) { return c.status !== "ok"; })
-      : all;
-    if (!calls.length) {
+    // The feed is a list of WORKING SESSIONS, newest first — "what did this
+    // assistant actually do" answered as a narrative, not reconstructed from
+    // timestamps. "Problems only" selects the SESSIONS that had a refusal or
+    // failure and keeps each one's clean calls visible: a denial reads
+    // differently depending on what came before it, and stripping the context
+    // would hide exactly that.
+    var sessions = state.usage.sessions || [];
+    var troubledOnly = state.activity === "errors";
+    var shown = troubledOnly
+      ? sessions.filter(function (sess) {
+          return sess.totals && sess.totals.calls > sess.totals.ok;
+        })
+      : sessions;
+
+    if (troubledOnly) {
+      p.body.appendChild(el("p", { class: "acct-dim mcp-filter-note" },
+        shown.length
+          ? "Sessions with at least one refused or failed call. Their successful calls stay visible for context."
+          : ""));
+    }
+    if (troubledOnly && !shown.length && !preTroubled().length) {
       p.body.appendChild(el("div", { class: "panel-empty" },
         "No refused or failed calls in this period — every call succeeded."));
       return p;
     }
+
     var list = el("div", { class: "mcp-feed" });
-    calls.slice(0, 30).forEach(function (c) {
-      var r = el("div", { class: "mcp-call" });
-      r.appendChild(el("span", { class: "mono mcp-call-tool" }, c.tool));
-      r.appendChild(el("span", { class: "chip " + statusChip(c.status) }, statusWord(c.status)));
-      r.appendChild(el("span", { class: "acct-dim" },
-        (c.durationMs != null ? c.durationMs + "ms · " : "") + core.formatRelativeTime(c.at * 1000)));
-      if (c.runId) {
-        r.appendChild(el("a", { href: "#/report/" + encodeURIComponent(c.runId), class: "mcp-link" },
-          "View run →"));
-      }
-      list.appendChild(r);
-    });
+    shown.slice(0, 20).forEach(function (sess) { list.appendChild(sessionCard(sess)); });
     p.body.appendChild(list);
+
+    // The seam: rows written before migration 0021 have no session to belong
+    // to — a finite set that ages out of the window. Quiet, factual, and
+    // unmistakably NOT a broken session.
+    var pre = troubledOnly ? preTroubled() : ((state.usage.preGrouping || {}).calls || []);
+    var preTotal = (state.usage.preGrouping || {}).total || 0;
+    if (pre.length || (!troubledOnly && preTotal > 0)) {
+      var seam = el("div", { class: "mcp-pre-seam" });
+      seam.appendChild(el("p", { class: "acct-dim" },
+        preTotal + " earlier call" + (preTotal === 1 ? "" : "s") +
+        " recorded before session grouping existed — shown individually."));
+      pre.slice(0, 15).forEach(function (c) { seam.appendChild(callRow(c)); });
+      p.body.appendChild(seam);
+    }
     return p;
+  }
+
+  function preTroubled() {
+    return (((state.usage || {}).preGrouping || {}).calls || [])
+      .filter(function (c) { return c.status !== "ok"; });
+  }
+
+  /**
+   * One working session, collapsed to a scannable row, expandable to its
+   * calls in CHRONOLOGICAL order — the one place oldest-first is right,
+   * because within a session the list is a story.
+   *
+   * The header never invents a name: a live session is labelled by what the
+   * client itself reported at initialize; once that 24-hour pointer has
+   * expired the session is identified by its time span and credential, which
+   * is a designed state, not a failure. The raw ref is never shown — a short
+   * monospace prefix is enough for "this one, not that one".
+   */
+  function sessionCard(sess) {
+    var totals = sess.totals || {};
+    var bad = Math.max(0, (totals.calls || 0) - (totals.ok || 0));
+    var open = Boolean(state.openSessions[sess.ref]);
+
+    var card = el("div", { class: "mcp-session" + (bad ? " mcp-session-trouble" : "") });
+    var head = el("button", {
+      type: "button", class: "mcp-session-head",
+      "aria-expanded": open ? "true" : "false",
+    });
+    head.addEventListener("click", function () {
+      if (state.openSessions[sess.ref]) delete state.openSessions[sess.ref];
+      else state.openSessions[sess.ref] = true;
+      render();
+    });
+
+    var who = sess.client && sess.client.name
+      ? sess.client.name + (sess.client.version ? " " + sess.client.version : "")
+      : sessionSpanLabel(sess);
+    head.appendChild(el("span", { class: "mcp-session-who" }, who));
+    var auth = (sess.calls && sess.calls[0] && sess.calls[0].authMethod) || null;
+    if (auth) head.appendChild(el("span", { class: "chip" }, authWord(auth)));
+    head.appendChild(el("span", { class: "chip " + (bad ? "chip-danger" : "chip-ok") },
+      bad ? "✗ " + bad + " of " + totals.calls + " refused or failed"
+          : "✓ all " + totals.calls + " ok"));
+    head.appendChild(el("span", { class: "acct-dim" }, core.formatRelativeTime(sess.lastAt * 1000)));
+    head.appendChild(el("span", { class: "mono acct-dim mcp-session-ref" },
+      String(sess.ref || "").slice(0, 6)));
+    head.appendChild(el("span", { class: "mcp-session-chev", "aria-hidden": "true" },
+      open ? "▾" : "▸"));
+    card.appendChild(head);
+
+    if (open) {
+      var body = el("div", { class: "mcp-session-body" });
+      (sess.calls || []).forEach(function (c) { body.appendChild(callRow(c)); });
+      // Per-session totals come from the whole window; the attached calls are
+      // the capped recent subset. When they differ, say so — a list that
+      // reads as complete while it is not would be lying by omission.
+      if ((sess.calls || []).length < (totals.calls || 0)) {
+        body.appendChild(el("p", { class: "acct-dim mcp-session-more" },
+          "Showing the latest " + sess.calls.length + " of " + totals.calls +
+          " calls in this session."));
+      }
+      card.appendChild(body);
+    }
+    return card;
+  }
+
+  function sessionSpanLabel(sess) {
+    // No durable client name — the label pointer expires with the session.
+    // Identify by span; never guess a purpose the data does not support.
+    var from = new Date(sess.firstAt * 1000);
+    var to = new Date(sess.lastAt * 1000);
+    var sameDay = from.toDateString() === to.toDateString();
+    var d = function (x) { return x.toLocaleDateString(undefined, { month: "short", day: "numeric" }); };
+    var tm = function (x) { return x.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }); };
+    return sameDay
+      ? "Session · " + d(from) + " " + tm(from) + "–" + tm(to)
+      : "Session · " + d(from) + " – " + d(to);
+  }
+
+  function authWord(a) {
+    if (a === "api_key") return "API key";
+    if (a === "mcp_oauth") return "OAuth";
+    if (a === "session") return "dashboard";
+    return a;
+  }
+
+  function callRow(c) {
+    var r = el("div", { class: "mcp-call" });
+    r.appendChild(el("span", { class: "mono mcp-call-tool" }, c.tool));
+    r.appendChild(el("span", { class: "chip " + statusChip(c.status) }, statusWord(c.status, c.errorCode)));
+    r.appendChild(el("span", { class: "acct-dim" },
+      (c.durationMs != null ? c.durationMs + "ms · " : "") + core.formatRelativeTime(c.at * 1000)));
+    if (c.runId) {
+      r.appendChild(el("a", { href: "#/report/" + encodeURIComponent(c.runId), class: "mcp-link" },
+        "View run →"));
+    }
+    return r;
   }
 
   function statusChip(s) {
@@ -675,11 +792,19 @@
     if (s === "quota_exceeded") return "chip-warn";
     return "chip-danger";
   }
-  function statusWord(s) {
+  function statusWord(s, errorCode) {
     if (s === "ok") return "✓ ok";
     if (s === "quota_exceeded") return "◷ no runs left";
     if (s === "rate_limited") return "◷ rate limited";
-    if (s === "denied") return "✗ denied";
+    if (s === "denied") {
+      // The three denials are different stories: a grant that does not cover
+      // the ask, a plan that does not include the tool, and a probe for a
+      // tool that does not exist (a host on a stale tool list, or worse).
+      if (errorCode === "unknown_tool") return "✗ no such tool";
+      if (errorCode === "plan_required") return "✗ needs paid plan";
+      if (errorCode === "insufficient_scope") return "✗ outside its grant";
+      return "✗ denied";
+    }
     return "✗ error";
   }
 

@@ -20,8 +20,7 @@ import {
 import { identityOf, requestHasScope } from "../mcp/auth.js";
 import {
   getTool, listTools, publicTool, listResources, listResourceTemplates,
-  matchResource, listPrompts, getPrompt, TOOL_GROUPS, TOOLS,
-} from "../mcp/registry.js";
+  matchResource, listPrompts, getPrompt, TOOL_GROUPS, TOOLS, nearestToolName } from "../mcp/registry.js";
 import { logToolCall, usageSummary, OUTCOME } from "../mcp/telemetry.js";
 import { listConnections, revokeClientTokens } from "../mcp/tokens.js";
 import { resolveEntitlementForOrg } from "../entitlement.js";
@@ -284,20 +283,34 @@ async function isEntitled(env, ctx, orgId, request) {
 // tools/call
 // ---------------------------------------------------------------------------
 async function callTool(msg, cx, entitled) {
-  const { request, env, ctx, identity } = cx;
+  const { request, env, ctx, identity, sessionId } = cx;
   const name = msg.params && msg.params.name;
   const args = (msg.params && msg.params.arguments) || {};
   const tool = getTool(name);
 
   if (!tool) {
-    return rpcError(msg.id, RPC.INVALID_PARAMS, `No tool named "${name}".`);
+    // Recorded, not just refused (audit §1, edge 1): repeated probes for
+    // tools that do not exist are a signal — a host on a stale tool list, or
+    // something worse. The name is model-supplied text; it is stored bounded
+    // and never interpolated anywhere.
+    ctx.waitUntil(logToolCall(env, {
+      orgId: identity.orgId, toolName: String(name || "(unnamed)").slice(0, 120),
+      authMethod: identity.authMethod, scopeUsed: "",
+      status: OUTCOME.DENIED, errorCode: "unknown_tool", sessionId,
+    }));
+    // A near-miss gets pointed at the real name: a model can read the hint
+    // and recover in one turn instead of burning turns re-listing tools.
+    const nearest = nearestToolName(name);
+    return rpcError(msg.id, RPC.INVALID_PARAMS,
+      nearest ? `No tool named "${name}". Did you mean "${nearest}"?`
+              : `No tool named "${name}".`);
   }
 
   // Scope is checked HERE, once, for every tool. A tool never checks its own.
   if (!requestHasScope(request, tool.scope)) {
     ctx.waitUntil(logToolCall(env, {
-      orgId: identity.orgId, toolName: name, authMethod: identity.authMethod,
-      scopeUsed: tool.scope, status: OUTCOME.DENIED, errorCode: "insufficient_scope",
+      orgId: identity.orgId, toolName: tool.name, authMethod: identity.authMethod,
+      scopeUsed: tool.scope, status: OUTCOME.DENIED, errorCode: "insufficient_scope", sessionId,
     }));
     return rpcError(msg.id, RPC.UNAUTHORIZED_SCOPE,
       `This connection does not hold the "${tool.scope}" scope.`,
@@ -309,8 +322,8 @@ async function callTool(msg, cx, entitled) {
   // error would surface as a broken connection instead.
   if (tool.paidOnly && !entitled) {
     ctx.waitUntil(logToolCall(env, {
-      orgId: identity.orgId, toolName: name, authMethod: identity.authMethod,
-      scopeUsed: tool.scope, status: OUTCOME.DENIED, errorCode: "plan_required",
+      orgId: identity.orgId, toolName: tool.name, authMethod: identity.authMethod,
+      scopeUsed: tool.scope, status: OUTCOME.DENIED, errorCode: "plan_required", sessionId,
     }));
     return rpcResult(msg.id, toolResult({
       text: `${name} requires a paid plan. See ${siteOrigin(env)}/#pricing.`,
@@ -328,8 +341,8 @@ async function callTool(msg, cx, entitled) {
       let retryAfterSec = 60;
       try { retryAfterSec = (await limited.clone().json()).retryAfterSec ?? 60; } catch { /* keep the default */ }
       ctx.waitUntil(logToolCall(env, {
-        orgId: identity.orgId, toolName: name, authMethod: identity.authMethod,
-        scopeUsed: tool.scope, status: OUTCOME.RATE_LIMITED, errorCode: "rate_limited",
+        orgId: identity.orgId, toolName: tool.name, authMethod: identity.authMethod,
+        scopeUsed: tool.scope, status: OUTCOME.RATE_LIMITED, errorCode: "rate_limited", sessionId,
       }));
       // An isError RESULT, not an RPC error: the model can read this, wait,
       // and carry on. An RPC error would surface as a broken connection.
@@ -360,9 +373,9 @@ async function callTool(msg, cx, entitled) {
   const durationMs = Date.now() - started;
 
   ctx.waitUntil(logToolCall(env, {
-    orgId: identity.orgId, toolName: name, authMethod: identity.authMethod,
+    orgId: identity.orgId, toolName: tool.name, authMethod: identity.authMethod,
     scopeUsed: tool.scope, durationMs, runId: outcome.runId || null,
-    errorCode: outcome.errorCode || null,
+    errorCode: outcome.errorCode || null, sessionId,
     status: !outcome.isError ? OUTCOME.OK
       : outcome.errorCode === "quota_exceeded" ? OUTCOME.QUOTA_EXCEEDED
       : outcome.errorCode === "rate_limited"   ? OUTCOME.RATE_LIMITED
@@ -406,7 +419,7 @@ function siteOrigin(env) {
 // resources/read
 // ---------------------------------------------------------------------------
 async function readResource(msg, cx, entitled) {
-  const { request, env, ctx, identity } = cx;
+  const { request, env, ctx, identity, sessionId } = cx;
   const uri = msg.params && msg.params.uri;
   const match = matchResource(uri);
   if (!match) return rpcError(msg.id, RPC.INVALID_PARAMS, `No resource at "${uri}".`);
@@ -429,7 +442,8 @@ async function readResource(msg, cx, entitled) {
   ctx.waitUntil(logToolCall(env, {
     orgId: identity.orgId, toolName: `resource:${match.descriptor.tool}`,
     authMethod: identity.authMethod, scopeUsed: match.descriptor.scope,
-    status: outcome.isError ? OUTCOME.ERROR : OUTCOME.OK, errorCode: outcome.errorCode || null,
+    status: outcome.isError ? OUTCOME.ERROR : OUTCOME.OK, errorCode: outcome.errorCode || null, sessionId,
+    sessionId,
   }));
 
   return rpcResult(msg.id, {

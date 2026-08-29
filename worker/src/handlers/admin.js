@@ -274,6 +274,10 @@ const MIGRATIONS = Object.freeze([
   { id: "0020", name: "flag_overrides",
     checks: [{ table: "feature_flag_overrides", column: "flag_key" },
              { table: "feature_flag_overrides", column: "subject" }] },
+  { id: "0021", name: "mcp_session_ref",
+    // Absence is silent in the same way as §1.10: calls still log without the
+    // column's index-side twin, they just never group into sessions.
+    checks: [{ table: "mcp_tool_calls", column: "session_ref" }] },
 ]);
 
 /** Plain SQLite identifier — the only shape we will interpolate into a PRAGMA. */

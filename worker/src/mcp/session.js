@@ -16,6 +16,8 @@
 // more line in DEPLOY.md that can be forgotten on staging. The `mcp:sess:`
 // prefix keeps it clear of the `sess:` keys requireAuth reads.
 
+import { sessionRefFor, sessionLabelKey } from "./telemetry.js";
+
 const KEY_PREFIX = "mcp:sess:";
 
 // 24 hours. Long enough that a working session survives a lunch break, short
@@ -60,6 +62,23 @@ export async function createSession(env, {
   await env.SESSIONS.put(KEY_PREFIX + id, JSON.stringify(record), {
     expirationTtl: TTL_SECONDS,
   });
+  // A second pointer keyed by the session REF (the truncated hash the
+  // tool-call log stores), holding only the client's self-reported name and
+  // version. It exists so the usage feed can label a recent session
+  // "Claude Code 2.1.4" without the log ever storing the raw id — and it
+  // shares the record's TTL on purpose: when it expires, the session's rows
+  // fall back to being identified by time span and credential, which is the
+  // designed behaviour for old sessions, not a failure. Best-effort: a
+  // session without a label is degraded, a session that failed to open is
+  // broken, and this write must never turn the first into the second.
+  try {
+    const ref = await sessionRefFor(id);
+    if (ref) {
+      await env.SESSIONS.put(sessionLabelKey(ref),
+        JSON.stringify({ clientInfo: record.clientInfo }),
+        { expirationTtl: TTL_SECONDS });
+    }
+  } catch { /* label stays absent */ }
   return { id, record };
 }
 

@@ -263,14 +263,21 @@ the approved build scope (§4), and nothing in it is designed by Part 3.
 
 Each item is independently shippable.
 
-**Approved for build: items 1-3.** Item 4 was not approved and is not designed
-by Part 3. Item 5 is unblocked by the §3.1 decision but is not in scope.
+**Approved for build: items 1-3 — now shipped.** Item 4 was not approved and
+is not designed by Part 3. Item 5 is unblocked by the §3.1 decision but is not
+in scope.
+
+Built as specified, with one addition the audit's §1 findings implied but this
+plan did not list: `algosize_xray_architecture` resolves as an alias to
+`algosize_analyze_architecture`, since the audit caught a live session calling
+the marketed name and getting nothing. Aliases are never advertised and are
+logged under the canonical name.
 
 | # | Item | Size | Depends on |
 | --- | --- | --- | --- |
-| 1 | Migration 0021: `session_ref` + index; pass session id (hashed) at all five `logToolCall` sites | S | — |
-| 2 | Log unknown-tool-name calls (`mcp.js:292`) | XS | — |
-| 3 | `usageSummary` groups the activity feed by session | S | 1 |
+| 1 | ~~Migration 0021: `session_ref` + index; pass session id (hashed) at all five `logToolCall` sites~~ **shipped** | S | — |
+| 2 | ~~Log unknown-tool-name calls (`mcp.js:292`)~~ **shipped** | XS | — |
+| 3 | ~~`usageSummary` groups the activity feed by session~~ **shipped**, with the dashboard panel | S | 1 |
 | 4 | Drift view: render `GET /api/arch/diff` in `dash-arch.js`, with `reduced` and dangling-`prev` honesty states | M | — |
 | 5 | `origin: "observed"` | — | **§3 decision (a/b/c) — do not start** |
 

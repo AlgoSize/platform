@@ -578,6 +578,174 @@ group("discovery documents");
     "…and contains no credential material");
 }
 
+// ---------------------------------------------------------------------------
+group("session correlation (migration 0021)");
+{
+  const env = makeEnv(); await seed(env);
+  const waits = [];
+  const wctx = { waitUntil: (p) => { waits.push(Promise.resolve(p).catch(() => {})); } };
+
+  // Two separate working sessions, each making the same two calls. The test
+  // that matters is the NEGATIVE one: if session_ref were always null (the
+  // vacuous-column failure this repo has been bitten by twice), "two distinct
+  // non-null refs" fails — a test asserting only equality-within-a-session
+  // would pass with the plumbing deleted.
+  const initA = await worker.fetch(rpc(INIT), env, wctx);
+  const sidA = initA.headers.get("Mcp-Session-Id");
+  const initB = await worker.fetch(rpc(INIT), env, wctx);
+  const sidB = initB.headers.get("Mcp-Session-Id");
+
+  for (const sid of [sidA, sidB]) {
+    await worker.fetch(rpc({
+      jsonrpc: "2.0", id: 30, method: "tools/call",
+      params: { name: "algosize_list_runs", arguments: { limit: 5 } },
+    }, { sessionId: sid }), env, wctx);
+    await worker.fetch(rpc({
+      jsonrpc: "2.0", id: 31, method: "tools/call",
+      params: { name: "algosize_list_monitors", arguments: {} },
+    }, { sessionId: sid }), env, wctx);
+  }
+  await Promise.all(waits);
+
+  const rows = (await env.DB.prepare(
+    `SELECT session_ref, tool_name FROM mcp_tool_calls WHERE org_id = ? ORDER BY id`,
+  ).bind(ORG).all()).results;
+  const refs = new Set(rows.map((r) => r.session_ref).filter(Boolean));
+
+  expect(rows.length === 4 && rows.every((r) => r.session_ref),
+    "every call written after 0021 carries a session_ref — there is no stateless-call case");
+  expect(refs.size === 2,
+    `two different sessions do NOT group together (got ${refs.size} distinct ref(s))`);
+  expect(rows[0].session_ref === rows[1].session_ref && rows[2].session_ref === rows[3].session_ref,
+    "…and one session's calls share one ref");
+  expect(![...refs].some((r) => r === sidA || r === sidB),
+    "the stored ref is never the raw session id — the row outlives the thing the id resumes");
+  expect([...refs].every((r) => /^[0-9a-f]{16}$/.test(r)),
+    "…it is the truncated hash, 16 hex chars");
+
+  // A call to a tool that does not exist is recorded, not just refused
+  // (AUDIT-REPORT §1 edge 1): repeated probes are a signal worth having.
+  const unknown = await worker.fetch(rpc({
+    jsonrpc: "2.0", id: 32, method: "tools/call",
+    params: { name: "algosize_definitely_not_a_tool", arguments: {} },
+  }, { sessionId: sidA }), env, wctx);
+  expect((await unknown.json()).error.code === -32602,
+    "an unknown tool is still a params error on the wire");
+  await Promise.all(waits);
+  const probe = await env.DB.prepare(
+    `SELECT tool_name, status, error_code, session_ref FROM mcp_tool_calls
+      WHERE org_id = ? AND error_code = 'unknown_tool' ORDER BY id DESC LIMIT 1`,
+  ).bind(ORG).first();
+  expect(probe && probe.tool_name === "algosize_definitely_not_a_tool",
+    "…but it is recorded, against the name that was probed");
+  expect(probe && probe.status === "denied", "…as denied, not as an error the tool made");
+  expect(probe && Boolean(probe.session_ref), "…with the session that probed it");
+
+  // usageSummary groups what was written. Session A now has 3 calls
+  // (2 tools + the unknown probe), B has 2.
+  const { usageSummary } = await import("../src/mcp/telemetry.js");
+
+  // One pre-migration row, inserted with NULL session_ref the way 20 months
+  // of history will look: it must land in preGrouping, never inside a
+  // session and never as a session of its own.
+  await env.DB.prepare(
+    `INSERT INTO mcp_tool_calls (org_id, tool_name, auth_method, scope_used, status, created_at)
+     VALUES (?, 'algosize_list_runs', 'api_key', 'algosize:read', 'ok', ?)`,
+  ).bind(ORG, Math.floor(Date.now() / 1000) - 60).run();
+
+  const summary = await usageSummary(env, ORG, {});
+  expect(Array.isArray(summary.sessions) && summary.sessions.length === 2,
+    `the feed groups into working sessions (got ${summary.sessions && summary.sessions.length})`);
+  expect(summary.totals && summary.totals.sessions === 2,
+    "…and the summary strip can count them without scanning the capped list");
+
+  const byCalls = [...summary.sessions].sort((a, b) => b.totals.calls - a.totals.calls);
+  expect(byCalls[0].totals.calls === 3 && byCalls[1].totals.calls === 2,
+    "per-session totals come from SQL over the whole window, not the capped rows");
+  expect(byCalls[0].totals.denied === 1, "…and count the denied probe where it happened");
+  expect(summary.sessions.every((sess) =>
+      sess.calls.every((c, i, arr) => i === 0 || arr[i - 1].at <= c.at)),
+    "inside a session the calls read chronologically — it is a narrative");
+  expect(summary.sessions.every((sess) => sess.firstAt <= sess.lastAt),
+    "…with a coherent time span");
+
+  expect(summary.preGrouping && summary.preGrouping.total === 1,
+    "a pre-0021 row lands in preGrouping, not in a session");
+  expect(!summary.sessions.some((sess) => sess.calls.some((c) => c.sessionRef == null)),
+    "…and never inside one");
+
+  // The client label rides a ref-keyed pointer with the session's own 24h
+  // TTL. Present → the session is named by what the client itself reported;
+  // absent (an old session) → client is null and the caller identifies the
+  // group by time span and credential. Both are designed states.
+  expect(summary.sessions.every((sess) => sess.client && sess.client.name === "test"),
+    "a live session is labelled by the client's self-reported name");
+  const { sessionRefFor, sessionLabelKey } = await import("../src/mcp/telemetry.js");
+  await env.SESSIONS.delete(sessionLabelKey(await sessionRefFor(sidB)));
+  const aged = await usageSummary(env, ORG, {});
+  const agedB = aged.sessions.find((sess) => sess.totals.calls === 2);
+  expect(agedB && agedB.client === null,
+    "an aged-out label degrades to null — identified by span and credential, not a guess");
+}
+
+// ---------------------------------------------------------------------------
+group("the X-ray answers to its product name");
+{
+  const env = makeEnv(); await seed(env);
+  const waits = [];
+  const wctx = { waitUntil: (p) => { waits.push(Promise.resolve(p).catch(() => {})); } };
+  const init = await worker.fetch(rpc(INIT), env, wctx);
+  const sid = init.headers.get("Mcp-Session-Id");
+
+  // The name a model that has read the product pages actually reaches for.
+  // AUDIT-REPORT §1 caught a real session calling this and getting nothing.
+  const res = await worker.fetch(rpc({
+    jsonrpc: "2.0", id: 40, method: "tools/call",
+    params: { name: "algosize_xray_architecture",
+              arguments: { files: [{ path: "wrangler.toml", content: "name = \"x\"" }] } },
+  }, { sessionId: sid }), env, wctx);
+  const body = await res.json();
+  expect(!body.error, "algosize_xray_architecture dispatches instead of erroring");
+  expect(body.result && Array.isArray(body.result.content),
+    "…and returns a real tool result");
+
+  await Promise.all(waits);
+  const row = await env.DB.prepare(
+    `SELECT tool_name, error_code FROM mcp_tool_calls WHERE org_id = ? ORDER BY id DESC LIMIT 1`,
+  ).bind(ORG).first();
+  expect(row && row.tool_name === "algosize_analyze_architecture",
+    "the call is logged under the canonical name, so usage never splits one tool in two");
+  expect(row && row.error_code !== "unknown_tool", "…and not as an unknown-tool probe");
+
+  const list = await worker.fetch(rpc({
+    jsonrpc: "2.0", id: 41, method: "tools/list", params: {},
+  }, { sessionId: sid }), env, wctx);
+  const names = ((await list.json()).result.tools || []).map((t) => t.name);
+  expect(!names.includes("algosize_xray_architecture"),
+    "the alias is never advertised — a catalog with two names for one tool reads as two tools");
+
+  // A near-miss that is NOT aliased gets a recovery hint…
+  const near = await worker.fetch(rpc({
+    jsonrpc: "2.0", id: 42, method: "tools/call",
+    params: { name: "algosize_estimate_infra", arguments: {} },
+  }, { sessionId: sid }), env, wctx);
+  const nearBody = await near.json();
+  expect(nearBody.error && /did you mean "algosize_estimate_infrastructure"/i.test(nearBody.error.message),
+    "a near-miss error names the real tool, so the model recovers in one turn");
+  // "algosize_architecture" is deliberately NOT hinted: analyze_architecture
+  // and diff_architecture both match it, and guessing between an analysis
+  // and a diff would send the model down the wrong path half the time.
+
+  // …and an ambiguous miss gets none, because a wrong hint is worse than none.
+  const vague = await worker.fetch(rpc({
+    jsonrpc: "2.0", id: 43, method: "tools/call",
+    params: { name: "algosize_analyze", arguments: {} },
+  }, { sessionId: sid }), env, wctx);
+  const vagueBody = await vague.json();
+  expect(vagueBody.error && !/did you mean/i.test(vagueBody.error.message),
+    "an ambiguous miss gets no guess");
+}
+
 console.log("");
 if (failures) {
   console.log(`\x1b[31m  ${failures} mcp-protocol test(s) failed\x1b[0m`);
