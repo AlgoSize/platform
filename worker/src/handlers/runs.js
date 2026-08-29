@@ -158,7 +158,7 @@ function safeInput(input) {
  * instead of throwing, so the caller's `ctx.waitUntil` never surfaces an
  * error to the user.
  */
-export async function persistRun(env, { userId, orgId = null, analyzer, input, result, ms, source = null }) {
+export async function persistRun(env, { userId, orgId = null, analyzer, input, result, ms, source = null, credentialKind = null, credentialId = null }) {
   // A run needs an owner of SOME kind. A dashboard run has a user; a CI run
   // (handlers/ci.js) has only an org, because an API key authenticates as the
   // organisation and there is no human behind it.
@@ -178,13 +178,19 @@ export async function persistRun(env, { userId, orgId = null, analyzer, input, r
     ms: typeof ms === "number" ? ms : null,
     headline: summarize(analyzer, result),
     createdAt: Date.now(),
+    // How this run was authenticated (migrations/0019). Recorded so the runs
+    // feed can say "via MCP" or "via API key" rather than presenting a run
+    // nobody in the dashboard remembers starting as if a person had.
+    credentialKind,
+    credentialId,
   };
 
   try {
     await env.DB.prepare(
       `INSERT INTO runs
-         (id, user_id, org_id, source, analyzer, input_json, result_json, ms, headline, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, user_id, org_id, source, analyzer, input_json, result_json, ms, headline, created_at,
+          credential_kind, credential_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(
       id,
       userId || null,
@@ -196,6 +202,8 @@ export async function persistRun(env, { userId, orgId = null, analyzer, input, r
       record.ms,
       record.headline,
       record.createdAt,
+      credentialKind,
+      credentialId,
     ).run();
   } catch (err) {
     console.error("persistRun: write failed", err);
@@ -283,7 +291,7 @@ export async function listRuns(env, scope, { limit = 20, cursor = null, source =
     // Strictly-after the cursor in DESC order: row.created_at < c.ts, OR
     // (== c.ts AND id < c.id). The compound index makes this cheap.
     result = await env.DB.prepare(
-      `SELECT id, analyzer, headline, ms, created_at, input_json, source
+      `SELECT id, analyzer, headline, ms, created_at, input_json, source, credential_kind
          FROM runs
         WHERE ${scopeSql}
           AND created_at > ?
@@ -293,7 +301,7 @@ export async function listRuns(env, scope, { limit = 20, cursor = null, source =
     ).bind(...scopeArgs, cutoff, c.ts, c.ts, c.id, cap + 1).all();
   } else {
     result = await env.DB.prepare(
-      `SELECT id, analyzer, headline, ms, created_at, input_json, source
+      `SELECT id, analyzer, headline, ms, created_at, input_json, source, credential_kind
          FROM runs
         WHERE ${scopeSql}
           AND created_at > ?
@@ -328,6 +336,11 @@ export async function listRuns(env, scope, { limit = 20, cursor = null, source =
       // uploads (input was too big to keep) so the dashboard can grey out
       // the button without having to fetch the full record first.
       hasInput:  !!(input && !input._omitted),
+      // How this run was authenticated (migrations/0019), so the feed can
+      // label a row "via MCP" or "via API key". Null on every run recorded
+      // before the column existed — which is NOT the same as "session", and
+      // the UI must not render it as one.
+      credentialKind: r.credential_kind || null,
     };
   });
 

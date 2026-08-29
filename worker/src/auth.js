@@ -316,6 +316,30 @@ const API_KEY_TAG = "ask_live_";
  * On success returns undefined so itty-router proceeds to the next handler.
  * On failure returns a 401 Response and short-circuits the route.
  */
+/**
+ * requireAuth, but a failure is not the end of the request.
+ *
+ * Used only by the MCP endpoint. A spec-compliant MCP host discovers how to
+ * authenticate FROM the 401 it gets back — specifically from the
+ * `WWW-Authenticate: Bearer resource_metadata="…"` header, which tells it
+ * where to find the OAuth metadata. requireAuth's own 401 carries no such
+ * header, so a host that hit it would report "unauthorized" and stop, with no
+ * way to discover the flow that would have worked.
+ *
+ * So this resolves the credential when there is one and stays silent when
+ * there is not, leaving `mcpAuth` to answer — either by resolving an
+ * `ask_mcp_` token requireAuth does not know about, or by returning the 401
+ * that actually starts the OAuth dance.
+ *
+ * It grants nothing on its own: a request that fails here arrives at mcpAuth
+ * with no identity fields set, and mcpAuth refuses it.
+ */
+export async function requireAuthSoft(request, env, ctx) {
+  const denial = await requireAuth(request, env, ctx);
+  if (denial instanceof Response) return;   // swallow; mcpAuth decides
+  return denial;
+}
+
 export async function requireAuth(request, env, ctx) {
   requireSecret(env);
 

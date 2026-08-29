@@ -260,6 +260,17 @@ const MIGRATIONS = Object.freeze([
     checks: [{ table: "arch_snapshots", column: "snapshot_id" },
              { table: "arch_snapshots", column: "graph_json" },
              { table: "arch_snapshots", column: "prev_snapshot_id" }] },
+  { id: "0019", name: "mcp",
+    checks: [{ table: "mcp_clients", column: "client_id" },
+             { table: "mcp_authorizations", column: "code_challenge" },
+             { table: "mcp_tokens", column: "token_hash" },
+             { table: "mcp_tokens", column: "parent_token_id" },
+             { table: "mcp_tool_calls", column: "tool_name" },
+             // The §1.10 provenance columns. Checked here because their
+             // absence is silent: runs still persist without them, they just
+             // lose the label saying which credential produced them.
+             { table: "runs", column: "credential_kind" },
+             { table: "runs", column: "credential_id" }] },
 ]);
 
 /** Plain SQLite identifier — the only shape we will interpolate into a PRAGMA. */

@@ -150,10 +150,14 @@ console.log("\nlistRuns() — pagination + filters expired\n");
   // name its provenance without fetching the full record. Both are extracted
   // from the already-parsed input, never the stored result — still no heavy
   // fields in the list view.
+  // `credentialKind` joined with migrations/0019 so the feed can label a run
+  // "via MCP" or "via API key". It is a short enum, not a heavy field, and it
+  // is the reason API-key runs appear in this list at all — before that fix
+  // they were analysed, billed, and never recorded.
   const sampleKeys = Object.keys(page1.items[0]).sort().join(",");
   expect(!("result" in page1.items[0]) && !("input" in page1.items[0]),
          "list items carry no heavy fields");
-  expect(sampleKeys === "analyzer,commitSha,createdAt,hasInput,headline,id,ms,repo,source",
+  expect(sampleKeys === "analyzer,commitSha,createdAt,credentialKind,hasInput,headline,id,ms,repo,source",
          `list-item shape is the summary set (got: ${sampleKeys})`);
   expect(page1.nextCursor && typeof page1.nextCursor === "string", "first page returns nextCursor");
 
