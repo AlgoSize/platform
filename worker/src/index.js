@@ -134,6 +134,10 @@ import { mcpPreflight } from "./mcp/transport.js";
 import {
   authorizationServerMetadata, protectedResourceMetadata, metadataResponse,
 } from "./mcp/metadata.js";
+import {
+  mcpRegisterClientHandler, mcpAuthorizeHandler, mcpAuthorizeConsentHandler,
+  mcpTokenHandler, mcpRevokeHandler,
+} from "./mcp/oauth.js";
 import { makeRateLimit, makeApiKeyRateLimit } from "./middleware/rate-limit.js";
 import { captureException } from "./observability.js";
 import { generateFixHandler } from "./handlers/fix.js";
@@ -488,6 +492,16 @@ router.get(   "/api/arch/snapshots/:id",     requireAuth, getArchSnapshotHandler
 // client is a program and a loop in it would otherwise be unbounded.
 const mcpEnvelopeRateLimit = makeApiKeyRateLimit({ keyName: "mcp", limit: 120, windowSec: 60 });
 
+// Dynamic client registration creates a row with no credential presented, so
+// it is the one MCP endpoint an anonymous caller can make write to the
+// database. Limited per IP rather than per credential, since there is none.
+const mcpRegisterRateLimit = makeRateLimit({ keyName: "mcp_register", limit: 5, windowSec: 3600 });
+
+// The token endpoint is where a stolen code or refresh token would be
+// redeemed, and where an attacker would brute-force one. Per IP, and tighter
+// than the envelope limit because a legitimate client calls it once an hour.
+const mcpTokenRateLimit = makeRateLimit({ keyName: "mcp_token", limit: 30, windowSec: 60 });
+
 // The two discovery documents. Thin wrappers rather than handlers of their
 // own: the documents are pure functions of the request origin, and giving
 // them a handler file would be a file that exists to call one function.
@@ -514,6 +528,24 @@ router.delete("/api/mcp/clients/:id", requireAuth, mcpRevokeClientHandler);
 // what the WWW-Authenticate header advertises; the /api/ alias is what makes
 // the flow exercisable under `wrangler dev`, which has no zone routes at all,
 // and before new zone routes finish propagating.
+// OAuth 2.1, for hosts that cannot take a pasted API key (Claude.ai's remote
+// connectors). PKCE S256 only, exact redirect-URI matching, single-use codes
+// whose replay revokes the whole token chain — see src/mcp/oauth.js.
+//
+// `authorize` (GET) is NOT behind requireAuth: it renders a sign-in prompt of
+// its own when there is no session, because a bare 401 mid-OAuth leaves the
+// user staring at a dead popup with no way forward. It resolves the session
+// internally instead. The POST that records the decision IS behind
+// requireAuth — approving a grant is an authenticated action.
+//
+// Registration is rate-limited per IP: it is the one endpoint here that
+// creates rows without any credential at all.
+router.post("/api/mcp/oauth/register",  mcpRegisterRateLimit, mcpRegisterClientHandler);
+router.get( "/api/mcp/oauth/authorize", mcpAuthorizeHandler);
+router.post("/api/mcp/oauth/authorize", requireAuth, mcpAuthorizeConsentHandler);
+router.post("/api/mcp/oauth/token",     mcpTokenRateLimit, mcpTokenHandler);
+router.post("/api/mcp/oauth/revoke",    mcpTokenRateLimit, mcpRevokeHandler);
+
 router.get("/.well-known/oauth-protected-resource",    mcpProtectedResourceHandler);
 router.get("/.well-known/oauth-authorization-server",  mcpAuthServerHandler);
 router.get("/api/.well-known/oauth-protected-resource",   mcpProtectedResourceHandler);

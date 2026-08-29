@@ -1,12 +1,13 @@
 # MCP-PLAN.md — Algosize Model Context Protocol server
 
-Status: **in progress.** Steps 1–5 and 8–10 are built and tested; step 6
-(OAuth 2.1) is scaffolded but not finished. What follows describes what is
-actually in the branch, not what was intended — where the original plan was
-wrong, the correction is recorded rather than the plan quietly edited.
+Status: **in progress.** The server, its 22 tools and OAuth 2.1 are built and
+tested; the dashboard view and admin panel are not (§7). What follows describes
+what is actually in the tree, not what was intended — where the original plan
+was wrong, the correction is recorded rather than the plan quietly edited.
 
-Branch: `feat/mcp-server`. Nothing here is live: the whole surface is behind a
-flag that defaults off, and the last deliverable is a runbook a human executes.
+Merged to `main` and deployed, but **not live**: the whole surface is behind a
+flag that defaults off and fails shut, so `/api/mcp` returns 404 until the
+runbook in `DEPLOY-mcp.md` flips it.
 
 Protocol revision: **`2025-06-18`** (Streamable HTTP, single endpoint), with
 `2025-03-26` and `2024-11-05` accepted on request.
@@ -40,7 +41,7 @@ route→chain mapping into `src/mcp/chains.js`, one module outside `tools/`.
 Tools import neither handlers nor `enforceQuota`, the guard stays absolute, and
 `enforceQuota` still cannot be dropped from a metered route.
 
-**Kimi K3 is not a slug swap.** See §9.
+**Kimi K3 is not a slug swap.** See §8.
 
 **22 tools, not 20.** The extra two are `algosize_get_monitor_result` and
 `algosize_get_ci_snippet`, both read-only and free.
@@ -65,9 +66,9 @@ would pass every functional test and simply never charge a run.
 
 ## 2. Auth
 
-Two credential types today, a third scaffolded.
+Three credential types.
 
-| | API keys (shipped) | MCP OAuth tokens (scaffolded) |
+| | API keys | MCP OAuth tokens |
 |---|---|---|
 | Format | `ask_live_…` (unchanged) | `ask_mcp_…` |
 | Identity | org only | org + the consenting user |
@@ -177,12 +178,39 @@ token-authenticated, so every MCP analysis would have vanished the same way.
 
 ---
 
-## 6. Still to do
+## 6. OAuth 2.1 — built
 
-- **OAuth 2.1** (`oauth.js`): DCR, PKCE S256-only authorize/token/revoke,
-  consent screen with an explicit org picker, refresh rotation with
-  chain revocation on replay. `tokens.js` and `metadata.js` are built and
-  tested; the endpoints are not.
+DCR, PKCE (S256 only), authorize/token/revoke, a server-rendered consent
+screen with an explicit organisation picker, and refresh rotation with chain
+revocation on replay. 57 assertions in `test-mcp-oauth.mjs`, nearly all of
+them about a refusal.
+
+Two decisions worth recording:
+
+**The consent screen is server-rendered, with no JavaScript and no external
+assets.** It is reached mid-flow from another application, often in a popup or
+a restricted webview; a page depending on the dashboard bundle would fail in
+exactly the contexts where connectors get approved. It also sets
+`x-frame-options: DENY` and `frame-ancestors 'none'` — clickjacking an
+"Approve" button is the obvious attack on this page.
+
+**There is no `return_to` round-trip through the magic-link email.** An
+unauthenticated `authorize` renders a sign-in prompt that preserves the exact
+authorize URL, so the flow resumes rather than restarting. Threading
+`return_to` through the email would mean changing the auth path itself and
+adding an open-redirect surface to it; the prompt costs the user one extra
+click and touches nothing security-sensitive. Worth revisiting when the
+`#/mcp` dashboard view lands, which could host the consent UI directly.
+
+A bug this work surfaced, now fixed: `issueTokenPair` gave the access and
+refresh tokens the same parent, making them siblings — and `revokeTokenChain`
+only walks parent→child. So revoking a refresh token, which is what
+disconnecting a client does, left the access token issued with it alive for up
+to an hour. The grant looked revoked and was not. Access tokens are now
+children of their own refresh token.
+
+## 7. Still to do
+
 - **Dashboard `#/mcp` view** — the design brief is written; no UI yet.
 - **Admin panel MCP adoption** section reading `mcp_tool_calls`.
 - **`GET /api/mcp` as a real SSE stream**, once progress notifications exist.
@@ -191,7 +219,7 @@ token-authenticated, so every MCP analysis would have vanished the same way.
 
 ---
 
-## 7. Kimi K3
+## 8. Kimi K3
 
 `moonshotai/kimi-k3` — **no `@cf/` prefix**, because Cloudflare lists it as a
 third-party catalog entry rather than a first-party Workers AI model. Three
@@ -216,7 +244,7 @@ exists on the account, nothing changes and K2.6 continues to serve.
 
 ---
 
-## 8. Claude Code integration
+## 9. Claude Code integration
 
 - **Remote**: `claude mcp add --transport http algosize
   https://algosize.com/api/mcp --header "Authorization: Bearer ask_live_…"`.
@@ -228,7 +256,7 @@ exists on the account, nothing changes and K2.6 continues to serve.
 
 ---
 
-## 9. Testing
+## 10. Testing
 
 `test-mcp-purity.mjs` (structural), `test-mcp-protocol.mjs` (61 assertions
 driven through `worker.fetch`, not through handler calls, because the likely
@@ -238,11 +266,11 @@ bugs are in the wiring), `test-llm-routing.mjs`, and `mcp/test/smoke.test.mjs`.
 runs on push to main, so without this the MCP suite's first CI exposure would
 be at merge time, when a failure fails a production deploy.
 
-Full worker suite: 58 scripts, green.
+Full worker suite: 59 scripts, green.
 
 ---
 
-## 10. Definition of done
+## 11. Definition of done
 
 No test in the chain fails. No tool bypasses `enforceQuota` on a metered
 route. No SQL read in new code omits an `org_id` filter. No secret appears in
