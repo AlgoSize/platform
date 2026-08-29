@@ -930,6 +930,105 @@ async function withFetch(impl, fn) {
     "legacy code-only payload still routes to heuristic analyzer");
 }
 
+// ---------------------------------------------------------------------------
+// The monorepo case: lockfiles that are not at the repository root.
+// ---------------------------------------------------------------------------
+// This is how AlgoSize/platform itself is laid out — Gemfile.lock at the root,
+// the npm trees under worker/ and tests/e2e/. The root-name fetch found the
+// Ruby lockfile, audited it, found nothing, and graded the repository
+// "A · 0 — no advisories in the last sweep" while the npm packages carrying
+// six high-severity advisories were never fetched. A security scanner
+// reporting a confident clean over dependencies it never read is worse than
+// one reporting an error.
+console.log("\nHandler — lockfiles below the repository root\n");
+{
+  const npmLock = JSON.stringify({
+    name: "w", lockfileVersion: 3,
+    packages: { "": { name: "w", version: "1.0.0" }, "node_modules/lodash": { version: "4.17.20" } },
+  });
+  const tree = {
+    tree: [
+      { path: "Gemfile.lock",                  type: "blob", size: 100 },
+      { path: "worker/package-lock.json",      type: "blob", size: 400 },
+      { path: "tests/e2e/package-lock.json",   type: "blob", size: 400 },
+      { path: "node_modules/dep/package-lock.json", type: "blob", size: 400 },
+      { path: "site/vendor/bundle/Gemfile.lock",    type: "blob", size: 400 },
+      { path: "worker",                        type: "tree" },
+    ],
+  };
+  const seen = [];
+  const fetchImpl = async (url) => {
+    const u = String(url);
+    if (u.includes("api.github.com") && u.includes("/git/trees/")) {
+      return new Response(JSON.stringify(tree), { status: 200 });
+    }
+    if (u.includes("raw.githubusercontent.com")) {
+      const path = decodeURIComponent(u.split("/").slice(6).join("/"));
+      seen.push(path);
+      if (path.endsWith("package-lock.json")) return new Response(npmLock, { status: 200 });
+      if (path === "Gemfile.lock") return new Response("GEM\n  specs:\n", { status: 200 });
+      return new Response("nf", { status: 404 });
+    }
+    if (u.includes("osv.dev") && u.includes("querybatch")) {
+      return new Response(JSON.stringify({ results: [{ vulns: [] }] }), { status: 200 });
+    }
+    return new Response("{}", { status: 200 });
+  };
+
+  const req = new Request("http://x/api/analyze/vuln", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ repoUrl: "https://github.com/owner/repo" }),
+  });
+  req.user = { userId: "u_mono", email: "mono@example.com" };
+  const res = await analyzeVulnHandler(req, { FETCH: fetchImpl }, null);
+  const body = await res.json();
+
+  const fetched = seen.filter((p) => p.endsWith("package-lock.json"));
+  expect(fetched.includes("worker/package-lock.json"),
+    `the audit reads worker/package-lock.json (fetched: ${JSON.stringify(seen)})`);
+  expect(fetched.includes("tests/e2e/package-lock.json"),
+    "…and tests/e2e/package-lock.json — every tree in the repository, not just the root");
+  expect(!seen.some((p) => p.includes("node_modules/")),
+    "…and never a vendored lockfile, which describes somebody else's tree");
+  expect(!seen.some((p) => p.includes("site/vendor/")),
+    "…nor one under a bundled vendor directory");
+  expect(res.status === 200, `the audit still returns 200 (got ${res.status})`);
+  expect(body && body.summary,
+    "…with a summary computed over the lockfiles it actually read");
+}
+
+// A repository whose tree cannot be listed still audits its root lockfiles,
+// so nothing regresses below what shipped before discovery existed.
+{
+  const lock = JSON.stringify({
+    name: "d", lockfileVersion: 3,
+    packages: { "": { name: "d", version: "1.0.0" }, "node_modules/lodash": { version: "4.17.20" } },
+  });
+  const fetchImpl = async (url) => {
+    const u = String(url);
+    if (u.includes("api.github.com")) return new Response("nope", { status: 404 });
+    if (u.includes("raw.githubusercontent.com")) {
+      const path = decodeURIComponent(u.split("/").slice(6).join("/"));
+      if (path === "package-lock.json") return new Response(lock, { status: 200 });
+      return new Response("nf", { status: 404 });
+    }
+    if (u.includes("osv.dev") && u.includes("querybatch")) {
+      return new Response(JSON.stringify({ results: [{ vulns: [] }] }), { status: 200 });
+    }
+    return new Response("{}", { status: 200 });
+  };
+  const req = new Request("http://x/api/analyze/vuln", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ repoUrl: "https://github.com/owner/repo" }),
+  });
+  req.user = { userId: "u_fb", email: "fb@example.com" };
+  const res = await analyzeVulnHandler(req, { FETCH: fetchImpl }, null);
+  expect(res.status === 200,
+    `an unlistable tree falls back to the root-name fetch (got ${res.status})`);
+}
+
 console.log();
 if (failures === 0) console.log("All vuln-analyzer tests passed.");
 else { console.log(`${failures} test(s) failed.`); process.exit(1); }
