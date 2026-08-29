@@ -439,6 +439,19 @@ permalink: /dashboard/
               </div>
             </div>
           </section>
+
+          <section class="panel" id="panel-opt-gate">
+            <header class="panel-head">
+              <div class="panel-heading">
+                <span class="panel-tag">CI</span>
+                <h2>Every pull request</h2>
+                <p class="panel-desc">The gate re-measures each watched function from the PR's own checkout, through the same API as this page — the two grades can never disagree. Red only past a ceiling.</p>
+              </div>
+            </header>
+            <div class="panel-body">
+              <div id="opt-gate-body"><div class="panel-empty">Loading the gate setup…</div></div>
+            </div>
+          </section>
         </div>
 
         <div class="opt-col">
@@ -459,19 +472,6 @@ permalink: /dashboard/
                 <span class="field-msg">Commit this at the repo root — the PR gate and the nightly watch both read it.</span>
               </div>
               <pre id="opt-watch-json" class="sr-only" aria-hidden="true"></pre>
-            </div>
-          </section>
-
-          <section class="panel" id="panel-opt-gate">
-            <header class="panel-head">
-              <div class="panel-heading">
-                <span class="panel-tag">CI</span>
-                <h2>Every pull request</h2>
-                <p class="panel-desc">The gate re-measures each watched function from the PR's own checkout, through the same API as this page — the two grades can never disagree. Red only past a ceiling.</p>
-              </div>
-            </header>
-            <div class="panel-body">
-              <div id="opt-gate-body"><div class="panel-empty">Loading the gate setup…</div></div>
             </div>
           </section>
 
