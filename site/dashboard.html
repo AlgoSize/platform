@@ -861,6 +861,55 @@ permalink: /dashboard/
         </div>
       </section>
 
+      <!-- ============= CI: CLOUD SPEND =============
+           The last analyzer to get a CI half. Its endpoint, its workflow
+           generator and /api/ci/cost-snippet all shipped together; only this
+           card was missing, so the gate existed and nothing in the product
+           offered it. That is why the Cloud cost analyzer was the one tool
+           with no CI section while every other one had one. -->
+      <section class="panel" id="panel-ci-cost">
+        <header class="panel-head">
+          <div class="panel-heading">
+            <span class="panel-tag">CI</span>
+            <h2>Review the cloud bill on every pull request</h2>
+            <p class="panel-desc">The estimator prices what a change <em>will</em> cost; this reads what the last one <em>did</em>. Point it at a committed Cost &amp; Usage export and the spend is reviewed beside the infrastructure that caused it. No cloud account is contacted and no credential is accepted — the gate skips with a notice when no export is committed, so it can never redden a pull request over a file that was never meant to be in the repository.</p>
+          </div>
+        </header>
+        <div class="panel-body">
+          <ol class="wizard" id="ci-cost-wizard">
+            <li class="wizard-step">
+              <div class="wizard-step-head">
+                <span class="wizard-n" aria-hidden="true">1</span>
+                <h3>Reuse the audit's API key</h3>
+              </div>
+              <p class="wizard-copy">Same secret again. Nothing new to create.</p>
+            </li>
+            <li class="wizard-step">
+              <div class="wizard-step-head">
+                <span class="wizard-n" aria-hidden="true">2</span>
+                <h3>Name the export, and a ceiling</h3>
+              </div>
+              <p class="wizard-copy">Add <code class="mono" id="ci-cost-config-filename">algosize.budget.json</code> — the same file the estimator reads, because both answer a question about money and one file holding every threshold is one file to review.</p>
+              <div class="snippet-row">
+                <pre class="result-snippet" id="ci-cost-config">Loading example…</pre>
+                <button type="button" class="btn btn-ghost btn-sm" data-copy-target="ci-cost-config">Copy</button>
+              </div>
+            </li>
+            <li class="wizard-step">
+              <div class="wizard-step-head">
+                <span class="wizard-n" aria-hidden="true">3</span>
+                <h3>Commit the workflow file</h3>
+              </div>
+              <p class="wizard-copy">Save as <code class="mono" id="ci-cost-filename">.github/workflows/algosize-cost.yml</code>.</p>
+              <div class="snippet-row snippet-row-tall">
+                <pre class="result-snippet" id="ci-cost-yaml">Loading workflow…</pre>
+                <button type="button" class="btn btn-ghost btn-sm" data-copy-target="ci-cost-yaml">Copy</button>
+              </div>
+            </li>
+          </ol>
+        </div>
+      </section>
+
       <!-- ============= CI: ARCHITECTURE (D-9) =============
            The endpoint has accepted `files` since the X-ray shipped; there
            was simply no workflow and no snippet, so the capability existed

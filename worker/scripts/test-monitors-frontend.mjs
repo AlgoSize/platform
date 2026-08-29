@@ -138,6 +138,41 @@ group("the analyzer commitments hold in the source");
 }
 
 // ---------- summary ----------
+// ---------------------------------------------------------------------------
+console.log("\nevery CI snippet endpoint the Worker registers has a card that fetches it\n");
+// ---------------------------------------------------------------------------
+//
+// The cloud-spend gate shipped complete on the server — handler, workflow
+// generator, and GET /api/ci/cost-snippet registered in index.js — and with no
+// card and no loader. So the endpoint was reachable by curl and by nothing
+// else, and the Cloud cost analyzer was the only tool in the product with no
+// CI section while every other one had one. Nothing failed; the feature was
+// simply invisible, which is the failure mode a route-registration test cannot
+// see and a screenshot can.
+//
+// Derived from the Worker's own routes rather than a hand-written list, so the
+// next gate added server-side fails here until it is reachable in the product.
+{
+  const registered = [...worker.matchAll(/"\/api\/ci\/([a-z-]*snippet)"/g)].map((m) => m[1]);
+  const uniq = [...new Set(registered)];
+  expect(uniq.length >= 5,
+    `index.js registers the CI snippet endpoints (found ${uniq.length}: ${uniq.join(", ")})`);
+
+  for (const ep of uniq) {
+    expect(js.includes(`/api/ci/${ep}`),
+      `dash-monitors.js fetches /api/ci/${ep} — an endpoint no card calls is invisible`);
+  }
+
+  // Fetching it is not enough: the response has to land somewhere on the page.
+  // Each loader writes into ids, so the ids have to exist in the markup.
+  for (const id of ["ci-cost-yaml", "ci-cost-config", "ci-cost-filename", "ci-cost-config-filename"]) {
+    expect(js.includes(id), `the cost loader targets #${id}`);
+    expect(html.includes(`id="${id}"`), `…and dashboard.html actually has #${id}`);
+  }
+  expect(/id="panel-ci-cost"/.test(html),
+    "the cloud-spend gate has its own card, like the other four");
+}
+
 console.log("");
 if (failures === 0) {
   console.log("\x1b[32m  all monitors-frontend tests passed\x1b[0m\n");
