@@ -1569,26 +1569,14 @@
     });
 
     // "View map" from the runs feed: reload the stored run's result into
-    // the explorer and scroll it into view.
+    // the explorer and scroll it into view. Shares openRun with the
+    // #/arch/<runId> route, so the button and a link pasted into a pull
+    // request cannot drift into rendering the same run two different ways.
     document.addEventListener("click", function (event) {
       var btn = event.target.closest && event.target.closest('button[data-run-action="viewmap"]');
       if (!btn) return;
       setBusy(btn, true, "Loading…");
-      callApi("/api/runs/" + encodeURIComponent(btn.dataset.runId), null, "GET")
-        .then(function (run) {
-          if (run && run.result && run.result.graph) {
-            state.result = run.result;
-            state.runId = run.id || btn.dataset.runId || null;
-            resetView();
-            render();
-            loadDiff(state.runId);
-            loadDrift();
-            var panel = document.getElementById("panel-arch");
-            if (panel && typeof panel.scrollIntoView === "function") {
-              panel.scrollIntoView({ behavior: "smooth", block: "start" });
-            }
-          }
-        })
+      openRun(btn.dataset.runId)
         .catch(function (e) { window.alert(e.message || "Could not load the run"); })
         .then(function () { setBusy(btn, false); });
     });
@@ -1750,5 +1738,52 @@
       .then(function () { setBusy(btn, false); });
   }
 
-  window.DashArch = { load: loadWatch };
+  /**
+   * Open one stored run in the explorer.
+   *
+   * Two entry points share this: the "View map" button in the runs feed, and
+   * the #/arch/<runId> route a CI architecture comment links to. Returns a
+   * promise so the button can restore its label when the load settles.
+   *
+   * A run only carries a graph when the analyzer actually mapped something — a
+   * sweep that skipped on no_manifests, or a run stored before graphs were
+   * kept, has none — while the button is rendered for EVERY arch run. Before
+   * the else below, that mismatch returned silently: the label said "Loading…",
+   * went back to normal, and nothing happened, so a broken button and a run
+   * with nothing to draw looked identical.
+   */
+  function openRun(runId) {
+    if (!runId) return Promise.resolve();
+    return callApi("/api/runs/" + encodeURIComponent(runId), null, "GET")
+      .then(function (run) {
+        var panel = document.getElementById("panel-arch");
+        var scroll = function () {
+          if (panel && typeof panel.scrollIntoView === "function") {
+            panel.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+        };
+        if (run && run.result && run.result.graph) {
+          state.result = run.result;
+          state.runId = run.id || runId || null;
+          resetView();
+          render();
+          loadDiff(state.runId);
+          loadDrift();
+          scroll();
+          return;
+        }
+        var out = document.getElementById("output-arch");
+        if (out) {
+          while (out.firstChild) out.removeChild(out.firstChild);
+          out.appendChild(core.errorState(
+            "This run has no architecture map stored, so there is nothing to open. " +
+            "A run records one only when the analyzer found manifests to map."));
+          scroll();
+        } else {
+          window.alert("This run has no architecture map stored, so there is nothing to open.");
+        }
+      });
+  }
+
+  window.DashArch = { load: loadWatch, openRun: openRun };
 })();

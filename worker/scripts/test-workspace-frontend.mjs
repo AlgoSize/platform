@@ -333,8 +333,14 @@ group("every tool page has a monitored half, not just a manual bench");
 
   // Both new loaders have to be reachable from the router or the section
   // renders its loading placeholder forever.
-  expect(/window\.DashArch\)\s+window\.DashArch\.load\(\)/.test(router),
+  expect(/window\.DashArch\.load\(\)/.test(router),
     "entering #/arch loads its monitored section");
+  // #/arch/<runId> opens ONE stored run — the route a CI architecture comment
+  // links to. Asserted beside the bare route because they share a view name
+  // and it would be easy to add the parameterised form while quietly breaking
+  // the plain one, or the reverse.
+  expect(/route\.runId\)\s*window\.DashArch\.openRun\(route\.runId\)/.test(router),
+    "and #/arch/<runId> opens that run in the explorer");
   expect(/window\.DashScanner\)\s+window\.DashScanner\.load\(\)/.test(router),
     "entering #/scanner loads its monitored section");
   expect(/dash-scanner\.js/.test(html), "dash-scanner.js is loaded by the page");

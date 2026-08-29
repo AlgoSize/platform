@@ -142,6 +142,7 @@ jobs:
                  | "clusters=\(.summary.clusters // 0)",
                    "findings=\(.summary.findings // 0)",
                    "worst=\(.worstSeverity // "none")",
+                   "map_url=\(.mapUrl // "")",
                    "failed=\(.failed)"' response.json >> "$GITHUB_OUTPUT"
 
       - name: Comment
@@ -155,6 +156,12 @@ jobs:
             echo "### Architecture"
             echo
             echo "${{ steps.collect.outputs.count }} files · ${{ steps.run.outputs.clusters }} clusters · ${{ steps.run.outputs.findings }} findings (worst: ${{ steps.run.outputs.worst }})"
+            # A gate that posts counts and no way to see them makes the reader
+            # take the number on faith. The run exists; this is the link to it.
+            if [ -n "${{ steps.run.outputs.map_url }}" ]; then
+              echo
+              echo "[Open the map](${{ steps.run.outputs.map_url }})"
+            fi
           } > comment.md
           gh pr comment "$PR" --body-file comment.md --edit-last || \
             gh pr comment "$PR" --body-file comment.md

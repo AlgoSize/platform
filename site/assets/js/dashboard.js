@@ -974,6 +974,22 @@
       });
       return rowsToCsv(rows3);
     }
+    if (run.analyzer === "arch") {
+      var rows4 = [["severity", "lens", "rule", "target", "evidence", "why", "fix"]];
+      (r.findings || []).forEach(function (f) {
+        rows4.push([f.severity, f.lens, f.rule, f.target, f.evidence, f.why, f.fix]);
+      });
+      return rowsToCsv(rows4);
+    }
+    if (run.analyzer === "estimate") {
+      var rows5 = [["provider_id", "provider_name", "estimated_total_usd", "lower_bound_usd", "upper_bound_usd", "confidence"]];
+      var micro = function (v) { return typeof v === "number" ? (v / 1e6).toFixed(2) : ""; };
+      (r.providers || []).forEach(function (p) {
+        rows5.push([p.providerId, p.providerName, micro(p.estimatedTotalMicroUsd),
+                    micro(p.lowerBoundMicroUsd), micro(p.upperBoundMicroUsd), p.confidence]);
+      });
+      return rowsToCsv(rows5);
+    }
     return "";
   }
   function downloadCsv(filename, csv) {
@@ -1516,6 +1532,17 @@
         setBusy(btn, true, "Exporting…");
         callApi("/api/runs/" + encodeURIComponent(id), null, "GET").then(function (run) {
           var csv = csvForRun(run);
+          // Never hand back an empty file. The button is rendered for every
+          // run, and csvForRun had no branch for arch or estimate — so those
+          // downloaded a 0-byte .csv and said nothing about why. A silent
+          // empty export is indistinguishable from "this run found nothing",
+          // which is the one thing it must not be mistaken for.
+          if (!csv || !csv.trim()) {
+            showOutput(btn.dataset.runAnalyzer || run.analyzer || "algo",
+              errorState("There is no CSV export for a \"" + run.analyzer + "\" run, " +
+                         "so nothing was downloaded."));
+            return;
+          }
           var stamp = new Date(run.createdAt || Date.now()).toISOString().replace(/[:.]/g, "-");
           downloadCsv("algosize-" + run.analyzer + "-" + stamp + ".csv", csv);
         }).catch(function (e) {
@@ -1641,6 +1668,11 @@
       renderCostChart(result && result.suggestions);
     },
     renderAlgo: function (result) { renderAlgo(result); },
+    // Exported so the export itself is testable. The Download CSV button is
+    // offered on every run, so "does this analyzer actually produce rows"
+    // has to be checkable — it silently produced a 0-byte file for arch and
+    // estimate, and source-reading cannot catch that.
+    csvForRun: csvForRun,
   };
 
   if (document.readyState === "loading") {

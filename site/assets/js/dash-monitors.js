@@ -33,17 +33,18 @@
     // Secondary analyzers ticked in the new-monitor form. The dependency
     // audit is not in here because it is not a choice — the Worker forces
     // "vuln" into every set it stores.
-    analyzers: { arch: false, estimate: false, algo: false },
+    analyzers: { arch: false, estimate: false, algo: false, cost: false },
   };
 
   // Order and labels for the secondary analyzers, everywhere they render.
-  var SECONDARY_ANALYZERS = ["arch", "estimate", "algo"];
+  var SECONDARY_ANALYZERS = ["arch", "estimate", "algo", "cost"];
   var ANALYZER_LABEL = {
     arch: "Architecture X-ray",
     estimate: "Cost estimate",
     algo: "Algorithm optimizer",
+    cost: "Cloud spend",
   };
-  var ANALYZER_SHORT = { arch: "x-ray", estimate: "cost", algo: "algo" };
+  var ANALYZER_SHORT = { arch: "x-ray", estimate: "estimate", algo: "algo", cost: "spend" };
 
   /**
    * How a monitor's hour renders.
@@ -606,6 +607,27 @@
     });
   }
 
+  // The cost gate shipped with its handler, its generator and
+  // /api/ci/cost-snippet all in place — and no loader, so the endpoint was
+  // registered and unreachable, and the Cloud cost analyzer was the one tool
+  // in the product with no CI half. Same shape as the estimator's, because it
+  // reads the same algosize.budget.json.
+  function loadCostSnippet() {
+    var yamlEl = document.getElementById("ci-cost-yaml");
+    var cfgEl  = document.getElementById("ci-cost-config");
+    var fileEl = document.getElementById("ci-cost-filename");
+    var cfgNameEl = document.getElementById("ci-cost-config-filename");
+    return callApi("/api/ci/cost-snippet", null, "GET").then(function (res) {
+      if (fileEl && res.filename) fileEl.textContent = res.filename;
+      if (cfgNameEl && res.configFilename) cfgNameEl.textContent = res.configFilename;
+      if (cfgEl) cfgEl.textContent = res.configExample || "";
+      if (yamlEl) yamlEl.textContent = res.workflow || "";
+    }).catch(function (e) {
+      if (yamlEl) yamlEl.textContent = "Could not load the workflow: " + (e.message || "error");
+      if (cfgEl) cfgEl.textContent = "Could not load the example.";
+    });
+  }
+
   function loadArchitectureSnippet() {
     var yamlEl = document.getElementById("ci-arch-yaml");
     var fileEl = document.getElementById("ci-arch-filename");
@@ -817,7 +839,8 @@
       loadAlertRoute(),
     ];
     if (first) jobs.push(loadSnippet(), loadOptimizerSnippet(),
-                         loadEstimateSnippet(), loadArchitectureSnippet());
+                         loadEstimateSnippet(), loadArchitectureSnippet(),
+                         loadCostSnippet());
     return Promise.all(jobs);
   }
 

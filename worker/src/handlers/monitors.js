@@ -647,6 +647,13 @@ export function explainUnavailable(reason) {
   const MAP = {
     no_manifests:       "No manifests or config files were found in this repository, so there is nothing to map.",
     no_compose:         "No compose file was found in this repository, so there is nothing to price.",
+    // Absent config is consent, not an error: a repository that has not named
+    // a CUR is telling us not to read its billing data.
+    no_cur:             "No `cur` is named in algosize.budget.json, so no cost export is being watched.",
+    cur_missing:        "algosize.budget.json names a cost export, but that file is not committed.",
+    cur_too_large:      "The committed cost export is too large to read on a scheduled sweep.",
+    budget_invalid:     "algosize.budget.json is present but is not valid JSON.",
+    cost_failed:        "The cost analyzer could not read the committed export.",
     no_config:          "No optimizer.config.json was found at the repository root, so no function is being watched.",
     config_invalid:     "optimizer.config.json is present but is not valid JSON.",
     no_entries_ran:     "Every entry in optimizer.config.json was skipped. Each one's reason is listed below.",

@@ -210,8 +210,15 @@ console.log("\na valid key creates a run visible to its org\n");
 
   expect(res.status === 200, `a valid key → 200 (got ${res.status})`);
   expect(typeof body.runId === "string" && body.runId.length > 0, "the response carries a runId");
-  expect(body.reportUrl === `https://algosize.com/api/runs/${body.runId}/report`,
+  // The DASHBOARD viewer, not /api/runs/:id/report. That API route is
+  // requireAuth, so the link this gate posts into a pull request answered 401
+  // for any reviewer who was not signed in — and rendered the raw API response
+  // for anyone who was. A URL in a review thread has to land on a page a person
+  // can read, which is the one property asserted here.
+  expect(body.reportUrl === `https://algosize.com/dashboard/#/report/${body.runId}`,
     `and a report URL pointing at that run (got ${body.reportUrl})`);
+  expect(!/\/api\//.test(body.reportUrl || ""),
+    "and never at the API route, which 401s for a signed-out reviewer");
   expect(body.summary && body.summary.high === 1, `the summary counts the advisory (high=${body.summary && body.summary.high})`);
   expect(body.worstSeverity === "high", "worstSeverity is reported");
   expect(body.failed === true, "and the default fail_on=high fails the build");
@@ -583,6 +590,13 @@ const COMPOSE = [
   expect(body.architecture && body.architecture.summary
       && typeof body.architecture.summary.clusters === "number",
     "the architecture block carries the analyzer's own summary");
+  // An architecture run's artefact is the MAP, so it gets its own route rather
+  // than borrowing the report viewer. Before this the gate posted counts and no
+  // link at all: the run it had just created was unreachable from the pull
+  // request that caused it, and a reader had to take the number on faith.
+  expect(body.architecture &&
+      body.architecture.mapUrl === `https://algosize.com/dashboard/#/arch/${body.architecture.runId}`,
+    `and a map URL pointing at that run (got ${body.architecture && body.architecture.mapUrl})`);
 
   // Both rows land, each under its own analyzer, both marked source=ci.
   const scope = { orgId, userId: null };
@@ -668,6 +682,76 @@ const COMPOSE = [
 }
 
 // ---------- summary ----------
+// ---------------------------------------------------------------------------
+console.log("\nthe optimizer gate can file its report, like every other gate\n");
+// ---------------------------------------------------------------------------
+//
+// The optimizer called no Algosize endpoint at all, so a CI regression and a
+// nightly regression lived in two different places and only one of them was
+// the product: "Recent runs" never showed a single optimizer run, ever.
+//
+// It is the one analyzer whose CI measurement happens in the CUSTOMER'S
+// runner — grading a function means executing it, and the gate does that
+// against the pull request's own checkout — so this endpoint receives a
+// finished report rather than input to analyse.
+{
+  const env = makeEnv();
+  const orgId = await seedOrg(env, { userId: "usr_opt", email: "opt@example.com" });
+  const key = await keyFor(env, orgId);
+
+  const report = {
+    summary: { mode: "all", audited: 2, ok: 1, unknown: 0, regressions: 1, errors: 0 },
+    results: [
+      { name: "bigo-mean", functionName: "mean", file: "src/bigo.js",
+        bigO: { label: "O(n)" }, ceiling: "O(n)", verdict: "ok" },
+      { name: "llm-formatMs", functionName: "formatMs", file: "src/llm.js",
+        bigO: { label: "O(n^2)" }, ceiling: "O(n)", verdict: "regression" },
+    ],
+  };
+
+  // Optimizer-only: no lockfiles, no files. Before this that was a 400
+  // no_inputs, so the gate had nothing it could legally post.
+  const res = await worker.fetch(
+    ciRequest(payload({ lockfiles: [], optimizer: report }), { key }), env, {});
+  const body = await res.json();
+
+  expect(res.status === 200, `an optimizer-only submission is accepted (got ${res.status})`);
+  expect(body.optimizer && typeof body.optimizer.runId === "string",
+    "and files a run of its own");
+  expect(body.optimizer && body.optimizer.regressions === 1,
+    `carrying the regression count (got ${body.optimizer && body.optimizer.regressions})`);
+
+  // The whole point: it is in the feed the user was looking at.
+  const history = await listRuns(env, { orgId }, { limit: 10 });
+  const algo = history.items.filter((r) => r.analyzer === "algo");
+  expect(algo.length === 1, `the optimizer run reaches the runs feed (got ${algo.length})`);
+  expect(algo[0] && algo[0].source === "ci", `marked source=ci (got ${algo[0] && algo[0].source})`);
+
+  const stored = await getRun(env, { orgId }, body.optimizer.runId);
+  expect(stored && stored.result && stored.result.measuredBy === "ci_runner",
+    "and records that the CI runner measured it, not us — every other run in " +
+    "this feed was measured here, and a reader comparing the two should see that");
+  expect(stored && stored.result && stored.result.entries
+      && stored.result.entries.length === 2,
+    "the graded entries are stored, so the run says WHICH function regressed");
+
+  // The gate owns its own verdict. Folding it into the top-level `failed`
+  // would give one build two sources of truth about whether it passed.
+  expect(body.failed === false,
+    "a regression does not flip the shared `failed` flag the audit gate reads");
+
+  // Bounded at the boundary: the gate caps what it audits, and so does this.
+  const huge = { results: Array.from({ length: 101 }, (_, i) => ({ name: `f${i}`, verdict: "ok" })) };
+  const tooMany = await worker.fetch(
+    ciRequest(payload({ lockfiles: [], optimizer: huge }), { key }), env, {});
+  expect(tooMany.status === 413, `an oversized report is refused (got ${tooMany.status})`);
+
+  // And a submission with nothing in it at all is still a 400 — accepting the
+  // optimizer must not have opened a path to filing an empty run.
+  const empty = await worker.fetch(ciRequest(payload({ lockfiles: [] }), { key }), env, {});
+  expect(empty.status === 400, `no inputs at all is still refused (got ${empty.status})`);
+}
+
 console.log("");
 if (failures === 0) {
   console.log("\x1b[32m  all ci-ingest tests passed\x1b[0m\n");

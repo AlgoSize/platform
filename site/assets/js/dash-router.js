@@ -36,6 +36,13 @@
     if (h.indexOf("#/report/") === 0) {
       return { view: "report", runId: decodeURIComponent(h.slice("#/report/".length)) };
     }
+    // #/arch/<runId> — the explorer opened on ONE run, which is what a CI
+    // architecture comment links to. An arch run's artefact is the map, not
+    // the report viewer, so it needs its own addressable route rather than
+    // borrowing #/report/. Bare #/arch still opens the live explorer.
+    if (h.indexOf("#/arch/") === 0) {
+      return { view: "arch", runId: decodeURIComponent(h.slice("#/arch/".length)) };
+    }
     // Account sub-routes. Every section is a real link, so someone can be
     // sent straight to Billing and the back button walks back through the
     // sections they opened rather than leaving the area entirely.
@@ -92,7 +99,10 @@
     if (route.view === "workspace" && window.DashWorkspace) window.DashWorkspace.load();
     // The two tool pages whose nightly half arrived later (D-9). Both are
     // idempotent, so re-entering the view costs one cached call.
-    if (route.view === "arch"      && window.DashArch)      window.DashArch.load();
+    if (route.view === "arch"      && window.DashArch) {
+      if (route.runId) window.DashArch.openRun(route.runId);
+      else window.DashArch.load();
+    }
     if (route.view === "scanner"   && window.DashScanner)   window.DashScanner.load();
     if (route.view === "mcp"       && window.DashMcp)       window.DashMcp.load();
 

@@ -90,6 +90,63 @@ export function worstSeverityOf(counts) {
   return null;
 }
 
+// At most this many graded entries per report. The gate already caps what it
+// audits; this is the boundary's own limit so a hand-rolled POST cannot file
+// an unbounded row.
+const MAX_OPTIMIZER_ENTRIES = 100;
+const OPTIMIZER_VERDICTS = ["ok", "unknown", "regression", "error"];
+
+/**
+ * Validate the `optimizer` block: the report scripts/optimizer-ci.mjs writes.
+ *
+ * Returns { value } when present and well-formed, { value: null } when absent,
+ * or { error } — the same shape validate() returns — when present and wrong.
+ * Absent is not an error: most submissions are a dependency audit and say
+ * nothing about the optimizer.
+ *
+ * Only the fields the runs feed renders are kept. The report also carries
+ * per-probe timings, and copying those in would put the customer's measured
+ * performance data in our database for no reader.
+ */
+function validateOptimizerReport(raw) {
+  if (raw === undefined || raw === null) return { value: null };
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    return { error: { ok: false, status: 400, error: "invalid_optimizer",
+      message: "`optimizer` must be the JSON report object written by the optimizer gate." } };
+  }
+  const results = Array.isArray(raw.results) ? raw.results : null;
+  if (!results) {
+    return { error: { ok: false, status: 400, error: "invalid_optimizer",
+      message: "`optimizer.results` must be an array of graded entries." } };
+  }
+  if (results.length > MAX_OPTIMIZER_ENTRIES) {
+    return { error: { ok: false, status: 413, error: "too_many_optimizer_entries",
+      message: `Submit at most ${MAX_OPTIMIZER_ENTRIES} graded entries per run (received ${results.length}).` } };
+  }
+
+  const str = (v, max) => (typeof v === "string" ? v.slice(0, max) : null);
+  const entries = results.map((r) => ({
+    name:         str(r && r.name, 200),
+    functionName: str(r && r.functionName, 200),
+    file:         str(r && r.file, 500),
+    grade:        str(r && r.bigO && r.bigO.label, 40),
+    ceiling:      str(r && r.ceiling, 40),
+    verdict:      OPTIMIZER_VERDICTS.includes(r && r.verdict) ? r.verdict : "unknown",
+  }));
+  const count = (v) => entries.filter((e) => e.verdict === v).length;
+
+  return {
+    value: {
+      audited:     entries.length,
+      ok:          count("ok"),
+      unknown:     count("unknown"),
+      regressions: count("regression"),
+      errors:      count("error"),
+      entries,
+    },
+  };
+}
+
 function validate(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return { ok: false, status: 400, error: "invalid_payload", message: "Request body must be a JSON object." };
@@ -98,11 +155,26 @@ function validate(body) {
   const lockfiles = Array.isArray(body.lockfiles) ? body.lockfiles : [];
   const archFiles = Array.isArray(body.files) ? body.files : [];
 
-  if (lockfiles.length === 0 && archFiles.length === 0) {
+  // The optimizer is the one analyzer whose CI measurement happens in the
+  // CUSTOMER'S runner, not here: grading a function means executing it, and
+  // the gate runs it in-process under Node against the PR's own checkout. So
+  // this endpoint receives a finished report rather than input to analyse —
+  // which is why it is accepted as its own kind of submission, and why the
+  // run it files records that the numbers were measured there.
+  //
+  // Without it the optimizer was the only gate that could not appear in the
+  // runs feed at all: it called no endpoint, so a nightly regression and a CI
+  // regression lived in two different places and only one of them was the
+  // product.
+  const optimizerReport = validateOptimizerReport(body.optimizer);
+  if (optimizerReport.error) return optimizerReport.error;
+
+  if (lockfiles.length === 0 && archFiles.length === 0 && !optimizerReport.value) {
     return {
       ok: false, status: 400, error: "no_inputs",
-      message: "Provide `lockfiles` (dependency audit) and/or `files` (architecture analysis), " +
-               `each an array of { path, content }. Supported lockfiles: ${LOCKFILE_NAMES.join(", ")}.`,
+      message: "Provide `lockfiles` (dependency audit), `files` (architecture analysis) " +
+               "and/or `optimizer` (a complexity report from the optimizer gate). " +
+               `Supported lockfiles: ${LOCKFILE_NAMES.join(", ")}.`,
     };
   }
   if (lockfiles.length > MAX_LOCKFILES) {
@@ -166,8 +238,10 @@ function validate(body) {
   // Only fatal when there is nothing else to do. A workflow that globs the
   // repo can legitimately hand us architecture inputs and no recognisable
   // lockfile — failing that run would report the whole audit as broken over
-  // the half the caller never asked for.
-  if (manifests.length === 0 && archFiles.length === 0) {
+  // the half the caller never asked for. The optimizer gate submits neither:
+  // it posts a finished complexity report and nothing else, so it counts as
+  // something else to do just as architecture inputs do.
+  if (manifests.length === 0 && archFiles.length === 0 && !optimizerReport.value) {
     return {
       ok: false, status: 400, error: "no_supported_lockfiles",
       message: `None of the submitted files is a supported lockfile. Supported: ${LOCKFILE_NAMES.join(", ")}.`,
@@ -197,6 +271,7 @@ function validate(body) {
       archFailOn,
       manifests,
       archInput,
+      optimizer: optimizerReport.value,
     },
   };
 }
@@ -279,7 +354,16 @@ export async function ciRunHandler(request, env, ctx) {
 
     vuln = {
       runId: run ? run.id : null,
-      reportUrl: run ? `${origin}/api/runs/${run.id}/report` : null,
+      // The DASHBOARD viewer, not the raw API route. `/api/runs/:id/report`
+      // is requireAuth (index.js), so the link a pull-request comment showed
+      // every reviewer answered 401 for anyone not signed in — and for anyone
+      // who was, it rendered the bare API response rather than the report they
+      // would have opened from the runs feed. A link in a review thread has to
+      // land somewhere a person can read.
+      //
+      // The API route is unchanged and still serves the machine formats the
+      // workflow itself uses; only what we hand to a human moved.
+      reportUrl: run ? `${origin}/dashboard/#/report/${run.id}` : null,
       summary: pickCounts(counts),
       worstSeverity: worstSeverityOf(counts),
       failed,
@@ -361,12 +445,63 @@ export async function ciRunHandler(request, env, ctx) {
 
       architecture = {
         runId: archRun ? archRun.id : null,
+        // An architecture run opens as the EXPLORER, not the report viewer —
+        // the map is the artefact. Until this existed the gate posted counts
+        // and no link at all, so the run it had just created ("3 clusters, 25
+        // findings") was unreachable from the pull request that caused it.
+        mapUrl: archRun ? `${origin}/dashboard/#/arch/${archRun.id}` : null,
         summary: archResult.summary,
         worstSeverity: worstSeverityOf(bySeverity),
         failed: archFailed,
         ...(archRun ? {} : { warning: "The analysis ran but the result could not be saved, so it will not appear in the dashboard." }),
       };
     }
+  }
+
+  // ---------------------------------------------------------------------
+  // Algorithm optimizer — a finished report, not input to analyse
+  // ---------------------------------------------------------------------
+  let optimizer = null;
+  if (v.value.optimizer) {
+    const rep = v.value.optimizer;
+    let optRun = null;
+    try {
+      optRun = await persistRun(env, {
+        orgId,
+        userId: null,
+        analyzer: "algo",
+        source: "ci",
+        input: { ...ciContext, audited: rep.audited },
+        result: {
+          // `measuredBy` is not decoration. Every other run in this feed was
+          // measured by us; this one was measured by the customer's runner,
+          // because grading a function means executing it and the gate does
+          // that against the pull request's own checkout. A reader comparing
+          // a CI grade with a nightly one should be able to see that they
+          // were produced in different places.
+          measuredBy: "ci_runner",
+          audited: rep.audited,
+          ok: rep.ok,
+          unknown: rep.unknown,
+          regressions: rep.regressions,
+          errors: rep.errors,
+          entries: rep.entries,
+          ci: { ...ciContext, failed: rep.regressions > 0 || rep.errors > 0 },
+        },
+      });
+    } catch (err) {
+      await captureException(env, ctx, err, {
+        request, tags: { source: "ci_ingest", phase: "persist_optimizer" },
+      });
+    }
+    optimizer = {
+      runId: optRun ? optRun.id : null,
+      reportUrl: optRun ? `${origin}/dashboard/#/report/${optRun.id}` : null,
+      audited: rep.audited,
+      regressions: rep.regressions,
+      errors: rep.errors,
+      ...(optRun ? {} : { warning: "The report was accepted but could not be saved, so it will not appear in the dashboard." }),
+    };
   }
 
   // Top-level fields keep describing the dependency audit, so every existing
@@ -382,6 +517,12 @@ export async function ciRunHandler(request, env, ctx) {
     failed:        Boolean((vuln && vuln.failed) || (architecture && architecture.failed)),
     ...(vuln && vuln.warning ? { warning: vuln.warning } : {}),
     ...(architecture ? { architecture } : {}),
+    // Deliberately NOT folded into the top-level `failed`. The optimizer gate
+    // decides its own verdict from the ceilings in optimizer.config.json and
+    // has already exited non-zero by the time it files this; making the
+    // ingest response also assert failure would give one build two sources of
+    // truth about whether it passed.
+    ...(optimizer ? { optimizer } : {}),
   }, 200);
 }
 
@@ -1472,6 +1613,7 @@ jobs:
                  | "clusters=\\(.summary.clusters // 0)",
                    "findings=\\(.summary.findings // 0)",
                    "worst=\\(.worstSeverity // "none")",
+                   "map_url=\\(.mapUrl // "")",
                    "failed=\\(.failed)"' response.json >> "$GITHUB_OUTPUT"
 
       - name: Comment
@@ -1485,6 +1627,12 @@ jobs:
             echo "### Architecture"
             echo
             echo "\${{ steps.collect.outputs.count }} files · \${{ steps.run.outputs.clusters }} clusters · \${{ steps.run.outputs.findings }} findings (worst: \${{ steps.run.outputs.worst }})"
+            # A gate that posts counts and no way to see them makes the reader
+            # take the number on faith. The run exists; this is the link to it.
+            if [ -n "\${{ steps.run.outputs.map_url }}" ]; then
+              echo
+              echo "[Open the map](\${{ steps.run.outputs.map_url }})"
+            fi
           } > comment.md
           gh pr comment "$PR" --body-file comment.md --edit-last || \\
             gh pr comment "$PR" --body-file comment.md

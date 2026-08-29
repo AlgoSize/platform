@@ -32,7 +32,7 @@
 import { analyzeArchitecture, validateArchitectureInput } from "../analyzers/architecture.js";
 import { runOptimizer, extractFunction } from "../analyzers/optimizer.js";
 import { estimateHandler } from "../handlers/estimate.js";
-import { runInSandbox } from "../handlers/analyze.js";
+import { runInSandbox, analyzeCostHandler } from "../handlers/analyze.js";
 
 // Root-level manifests the Architecture X-ray can parse, fetched by name.
 // This list is now the FALLBACK: discovery goes through the repository's git
@@ -53,6 +53,18 @@ export const ARCH_MANIFEST_NAMES = Object.freeze([
 const COMPOSE_NAMES = ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"];
 
 export const OPTIMIZER_CONFIG_NAME = "optimizer.config.json";
+
+// The same file the CI cost gate reads, on purpose. Both answer a question
+// about money, and one file holding every threshold is one file to review —
+// the reasoning already written into buildCostWorkflow.
+export const BUDGET_CONFIG_NAME = "algosize.budget.json";
+
+// A CUR export is a billing file, often enormous. This is the ceiling for one
+// read out of a repository, well under what the manual upload path accepts,
+// because a sweep runs unattended on a schedule and a repo that commits a
+// 200 MB export should degrade to a clear skip rather than to a slow sweep
+// that starves the other monitors behind it in the queue.
+const MAX_CUR_BYTES = 4 * 1024 * 1024;
 
 // Bounds for the optimizer pass. Each entry is two sandbox runs plus three
 // Big-O probes; a config with hundreds of entries would turn one queue
@@ -290,6 +302,77 @@ export function diffArchFindings(findings, keys, previousKeys) {
  *   { status: "no_compose" }                  nothing to price
  *   { status: "skipped", reason }             transient or rejected
  */
+/**
+ * Read a repository's committed Cost & Usage export and price what it spent.
+ *
+ * The cost analyzer was the only one that could not be watched. The dashboard
+ * said so plainly — "This one reads a file you upload and keeps nothing, so
+ * there is no standing result to show" — because its only input path was an
+ * interactive upload. Every other tool had a nightly half.
+ *
+ * It reads `cur` out of algosize.budget.json rather than guessing a filename,
+ * because a CUR has no conventional name and guessing would either miss the
+ * file or pick up an unrelated CSV. Naming it is also consent: a repository
+ * that has not named one is telling us not to read its billing data, which is
+ * why an absent config is a quiet skip and never an error.
+ *
+ * DELIBERATELY NO BASELINE and no alert. Every other analyzer's watch exists
+ * to say "this changed"; a bill changes every single day, so a diff would
+ * alert on Tuesday being different from Monday, which is noise dressed as a
+ * finding. What was asked for, and what this provides, is a standing result.
+ * Alerting on spend wants a threshold — `monthlySpendCeilingUsd` in the same
+ * config is the obvious one — and that is its own change.
+ */
+export async function runCostForMonitor(monitor, env, ctx, fetchImpl) {
+  const repo = parseGithubRepoUrl(monitor.repoUrl);
+  if (!repo) return { status: "skipped", reason: "bad_repo_url" };
+
+  const cfgFetch = await fetchRepoFilesByName(
+    { ...repo, branch: monitor.branch }, [BUDGET_CONFIG_NAME], fetchImpl);
+  if (cfgFetch.throttled) return { status: "skipped", reason: "github_throttled" };
+  if (!cfgFetch.files.length) return { status: "no_cur" };
+
+  let cfg;
+  try { cfg = JSON.parse(cfgFetch.files[0].content); }
+  catch { return { status: "skipped", reason: "budget_invalid" }; }
+
+  const curPath = cfg && typeof cfg.cur === "string" ? cfg.cur.trim() : "";
+  if (!curPath) return { status: "no_cur" };
+
+  const curFetch = await fetchRepoFilesByName(
+    { ...repo, branch: monitor.branch }, [curPath], fetchImpl);
+  if (curFetch.throttled) return { status: "skipped", reason: "github_throttled" };
+  // Named but not committed is a DIFFERENT answer from never named, and the
+  // reader needs to know which: one is a repo that opted out, the other is a
+  // repo that meant to opt in and the file is missing.
+  if (!curFetch.files.length) return { status: "skipped", reason: "cur_missing", detail: curPath };
+
+  const csv = curFetch.files[0].content || "";
+  if (csv.length > MAX_CUR_BYTES) {
+    return { status: "skipped", reason: "cur_too_large", detail: curPath };
+  }
+
+  // Through the same handler the manual upload uses — a nightly result and a
+  // hand-run result must never be produced by two implementations that can
+  // disagree about what a saving is worth.
+  const request = new Request("https://internal/api/analyze/cost", {
+    method: "POST",
+    headers: { "content-type": "text/csv" },
+    body: csv,
+  });
+
+  let body;
+  try {
+    const response = await analyzeCostHandler(request, env, ctx);
+    body = await response.json();
+    if (!response.ok) return { status: "skipped", reason: (body && body.error) || "cost_failed" };
+  } catch (err) {
+    return { status: "skipped", reason: "cost_failed", detail: String((err && err.message) || err) };
+  }
+
+  return { status: "ok", curPath, result: body };
+}
+
 export async function runEstimateForMonitor(monitor, env, ctx, fetchImpl) {
   const repo = parseGithubRepoUrl(monitor.repoUrl);
   if (!repo) return { status: "skipped", reason: "bad_repo_url" };

@@ -192,6 +192,59 @@ if (core) {
     "an empty advisory list renders too, rather than throwing or mounting nothing");
 }
 
+// ---------------------------------------------------------------------------
+console.log("\nevery run type the CSV button is offered on can actually export\n");
+// ---------------------------------------------------------------------------
+//
+// The Download CSV button is rendered for EVERY run, unconditionally, but
+// csvForRun branched on cost, vuln and algo and then `return ""`. An arch run
+// therefore downloaded a 0-byte file and said nothing — and an empty export is
+// indistinguishable from "this run found nothing", which is the one thing it
+// must never be mistaken for.
+//
+// Exercised through the real function rather than by reading the source,
+// because "returns a non-empty string" is the property that matters and it is
+// exactly what a text assertion cannot check.
+if (core && typeof core.csvForRun === "function") {
+  const RUNS = {
+    arch: {
+      analyzer: "arch",
+      result: { findings: [{
+        severity: "critical", lens: "security", rule: "datastore_publicly_published",
+        target: "svc:db", evidence: "docker-compose.yml:10",
+        why: "A database port is published to the host.", fix: "Remove the ports mapping.",
+      }] },
+    },
+    estimate: {
+      analyzer: "estimate",
+      result: { providers: [{
+        providerId: "aws", providerName: "AWS",
+        estimatedTotalMicroUsd: 123_450_000, confidence: "medium",
+      }] },
+    },
+    vuln: { analyzer: "vuln", result: { advisories: [{ severity: "high", package: "undici" }] } },
+    cost: { analyzer: "cost", result: { suggestions: [{ impact: "high", title: "Rightsize" }] } },
+    algo: { analyzer: "algo", result: { bigO: { label: "O(n)" }, wallTimeMs: 3 } },
+  };
+
+  for (const [name, run] of Object.entries(RUNS)) {
+    const csv = core.csvForRun(run);
+    expect(typeof csv === "string" && csv.trim().length > 0,
+      `a ${name} run exports a non-empty CSV (got ${csv ? csv.length : 0} bytes)`);
+    // A header alone is not an export — the row has to carry the finding.
+    const lines = (csv || "").trim().split("\n");
+    expect(lines.length >= 2, `…with a data row, not just a header (${name}: ${lines.length} line(s))`);
+  }
+
+  // The arch export must carry what an arch run is actually about.
+  const archCsv = core.csvForRun(RUNS.arch);
+  expect(/datastore_publicly_published/.test(archCsv) && /docker-compose\.yml:10/.test(archCsv),
+    "and the arch export carries the rule and its file:line evidence");
+} else {
+  fail("DashCore.csvForRun is exported so the export can be tested at all");
+}
+
+// ---------------------------------------------------------------------------
 console.log(failures === 0
   ? "\n\x1b[32mAll dashboard-renderer tests passed\x1b[0m\n"
   : `\n\x1b[31m${failures} dashboard-renderer test(s) failed\x1b[0m\n`);

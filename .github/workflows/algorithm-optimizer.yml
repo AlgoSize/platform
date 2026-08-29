@@ -65,6 +65,51 @@ jobs:
           name: optimizer-report
           path: optimizer-report.json
 
+      # File the report so the run appears in the dashboard's runs feed, the
+      # way every other gate's does. Until this existed the optimizer called
+      # no Algosize endpoint at all, so a CI regression and a nightly
+      # regression lived in two different places and only one of them was the
+      # product — "Recent runs" never showed a single optimizer run.
+      #
+      # `if: always()` on purpose: a run that FAILED is the one most worth
+      # having in the history, and this step runs after the audit has already
+      # set the build's exit code. It never changes that verdict — the gate
+      # decides pass/fail from the ceilings in optimizer.config.json, and a
+      # second opinion from the ingest response would give one build two
+      # sources of truth.
+      #
+      # Skipped silently without a key, like every other gate: filing history
+      # is a convenience, and failing a build because the report could not be
+      # posted would make the gate less safe to adopt, not more.
+      - name: File the report with Algosize
+        if: always()
+        env:
+          ALGOSIZE_API_KEY: ${{ secrets.ALGOSIZE_API_KEY }}
+        run: |
+          if [ -z "$ALGOSIZE_API_KEY" ] || [ ! -f optimizer-report.json ]; then
+            echo "::notice::No ALGOSIZE_API_KEY or no report — skipping the history upload."
+            exit 0
+          fi
+          jq -n --slurpfile r optimizer-report.json \
+                --arg repo "$GITHUB_REPOSITORY" \
+                --arg ref "$GITHUB_REF" \
+                --arg sha "$GITHUB_SHA" \
+             '{repo: $repo, ref: $ref, commit_sha: $sha, optimizer: $r[0]}' > ingest.json
+          HTTP=$(curl -sS -o ingest-response.json -w '%{http_code}' \
+            -X POST "https://algosize.com/api/ci/runs" \
+            -H "Authorization: Bearer $ALGOSIZE_API_KEY" \
+            -H "Content-Type: application/json" \
+            --data @ingest.json)
+          if [ "$HTTP" = "402" ]; then
+            echo "::warning::$(jq -r '.message // "Monthly run allowance exhausted."' ingest-response.json)"
+            exit 0
+          fi
+          if [ "$HTTP" != "200" ]; then
+            echo "::warning::Could not file the optimizer report (HTTP $HTTP). The gate's verdict is unaffected."
+            exit 0
+          fi
+          echo "::notice::Filed: $(jq -r '.optimizer.reportUrl // "(no url)"' ingest-response.json)"
+
       - name: Comment on the pull request
         if: always()
         uses: actions/github-script@v7
