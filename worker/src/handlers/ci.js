@@ -279,7 +279,16 @@ export async function ciRunHandler(request, env, ctx) {
 
     vuln = {
       runId: run ? run.id : null,
-      reportUrl: run ? `${origin}/api/runs/${run.id}/report` : null,
+      // The DASHBOARD viewer, not the raw API route. `/api/runs/:id/report`
+      // is requireAuth (index.js), so the link a pull-request comment showed
+      // every reviewer answered 401 for anyone not signed in — and for anyone
+      // who was, it rendered the bare API response rather than the report they
+      // would have opened from the runs feed. A link in a review thread has to
+      // land somewhere a person can read.
+      //
+      // The API route is unchanged and still serves the machine formats the
+      // workflow itself uses; only what we hand to a human moved.
+      reportUrl: run ? `${origin}/dashboard/#/report/${run.id}` : null,
       summary: pickCounts(counts),
       worstSeverity: worstSeverityOf(counts),
       failed,
@@ -361,6 +370,11 @@ export async function ciRunHandler(request, env, ctx) {
 
       architecture = {
         runId: archRun ? archRun.id : null,
+        // An architecture run opens as the EXPLORER, not the report viewer —
+        // the map is the artefact. Until this existed the gate posted counts
+        // and no link at all, so the run it had just created ("3 clusters, 25
+        // findings") was unreachable from the pull request that caused it.
+        mapUrl: archRun ? `${origin}/dashboard/#/arch/${archRun.id}` : null,
         summary: archResult.summary,
         worstSeverity: worstSeverityOf(bySeverity),
         failed: archFailed,
@@ -1472,6 +1486,7 @@ jobs:
                  | "clusters=\\(.summary.clusters // 0)",
                    "findings=\\(.summary.findings // 0)",
                    "worst=\\(.worstSeverity // "none")",
+                   "map_url=\\(.mapUrl // "")",
                    "failed=\\(.failed)"' response.json >> "$GITHUB_OUTPUT"
 
       - name: Comment
@@ -1485,6 +1500,12 @@ jobs:
             echo "### Architecture"
             echo
             echo "\${{ steps.collect.outputs.count }} files · \${{ steps.run.outputs.clusters }} clusters · \${{ steps.run.outputs.findings }} findings (worst: \${{ steps.run.outputs.worst }})"
+            # A gate that posts counts and no way to see them makes the reader
+            # take the number on faith. The run exists; this is the link to it.
+            if [ -n "\${{ steps.run.outputs.map_url }}" ]; then
+              echo
+              echo "[Open the map](\${{ steps.run.outputs.map_url }})"
+            fi
           } > comment.md
           gh pr comment "$PR" --body-file comment.md --edit-last || \\
             gh pr comment "$PR" --body-file comment.md

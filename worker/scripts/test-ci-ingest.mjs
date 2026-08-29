@@ -210,8 +210,15 @@ console.log("\na valid key creates a run visible to its org\n");
 
   expect(res.status === 200, `a valid key → 200 (got ${res.status})`);
   expect(typeof body.runId === "string" && body.runId.length > 0, "the response carries a runId");
-  expect(body.reportUrl === `https://algosize.com/api/runs/${body.runId}/report`,
+  // The DASHBOARD viewer, not /api/runs/:id/report. That API route is
+  // requireAuth, so the link this gate posts into a pull request answered 401
+  // for any reviewer who was not signed in — and rendered the raw API response
+  // for anyone who was. A URL in a review thread has to land on a page a person
+  // can read, which is the one property asserted here.
+  expect(body.reportUrl === `https://algosize.com/dashboard/#/report/${body.runId}`,
     `and a report URL pointing at that run (got ${body.reportUrl})`);
+  expect(!/\/api\//.test(body.reportUrl || ""),
+    "and never at the API route, which 401s for a signed-out reviewer");
   expect(body.summary && body.summary.high === 1, `the summary counts the advisory (high=${body.summary && body.summary.high})`);
   expect(body.worstSeverity === "high", "worstSeverity is reported");
   expect(body.failed === true, "and the default fail_on=high fails the build");
@@ -583,6 +590,13 @@ const COMPOSE = [
   expect(body.architecture && body.architecture.summary
       && typeof body.architecture.summary.clusters === "number",
     "the architecture block carries the analyzer's own summary");
+  // An architecture run's artefact is the MAP, so it gets its own route rather
+  // than borrowing the report viewer. Before this the gate posted counts and no
+  // link at all: the run it had just created was unreachable from the pull
+  // request that caused it, and a reader had to take the number on faith.
+  expect(body.architecture &&
+      body.architecture.mapUrl === `https://algosize.com/dashboard/#/arch/${body.architecture.runId}`,
+    `and a map URL pointing at that run (got ${body.architecture && body.architecture.mapUrl})`);
 
   // Both rows land, each under its own analyzer, both marked source=ci.
   const scope = { orgId, userId: null };
