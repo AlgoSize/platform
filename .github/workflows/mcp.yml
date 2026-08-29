@@ -1,24 +1,39 @@
-name: MCP server and bridge
+name: Worker suite and MCP
 
-# The MCP surface's own gate.
+# The Worker's pull-request gate.
 #
 # It exists separately from worker.yml because worker.yml only runs on push to
 # main and staging — it is the deploy pipeline, so the full worker suite gets
 # its first CI exposure at merge time, when a failure fails a production
-# deploy. That is the wrong moment to learn a tool adapter is broken.
+# deploy. That is the wrong moment to learn anything is broken.
 #
-# This one runs on PULL REQUESTS, so anything touching the MCP surface is
-# tested before it can be merged, not while it is deploying.
-
+# This one runs on PULL REQUESTS, so a change is tested before it can be
+# merged rather than while it is deploying.
+#
+# ---------------------------------------------------------------------------
+# Why the path filter is `worker/**` and not a list of MCP paths
+# ---------------------------------------------------------------------------
+# It was that list, and the list was the bug. The filter named
+# worker/src/mcp/**, handlers/mcp.js, analyzers/llm.js, migrations/** and the
+# MCP test scripts — so a pull request touching src/index.js (the router),
+# src/monitors/**, src/quota.js, src/auth.js or anything else under worker/
+# matched nothing here, ran no tests, and went green on the four analyzer
+# checks alone. Those scan the repository; they do not execute the suite.
+#
+# The gap was found the honest way: a PR rewriting the QUEUE ENTRYPOINT —
+# where getting it wrong redelivers dead messages forever — reported six green
+# checks having run zero worker tests. A narrow filter on the only workflow
+# that runs `npm test` is indistinguishable from having no pull-request gate
+# at all for most of the Worker.
+#
+# So: anything under worker/ runs the suite. The MCP-specific steps below stay
+# and stay first, because they are fast and they name their failures precisely;
+# running them on a monitors change costs seconds and occasionally catches a
+# real coupling.
 on:
   pull_request:
     paths:
-      - "worker/src/mcp/**"
-      - "worker/src/handlers/mcp.js"
-      - "worker/src/analyzers/llm.js"
-      - "worker/migrations/**"
-      - "worker/scripts/test-mcp-*.mjs"
-      - "worker/scripts/test-llm-routing.mjs"
+      - "worker/**"
       - "mcp/**"
       - ".mcp.json"
       - ".github/workflows/mcp.yml"
