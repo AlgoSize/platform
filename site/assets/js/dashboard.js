@@ -1628,12 +1628,19 @@
     // through two implementations that can disagree about what a finding
     // looks like. (rerunFromHistory already does exactly this internally —
     // this just makes the same path reachable from another module.)
-    renderVuln: function (result) { showOutput("vuln", renderVuln(result)); },
+    //
+    // These call the renderer and STOP. Each internal renderer already ends in
+    // its own showOutput(...) and therefore returns undefined, so wrapping one
+    // in another showOutput cleared the output that had just been drawn and
+    // then threw on appendChild(undefined) — "Argument 1 ('node') to
+    // Node.appendChild must be an instance of Node". That is what every
+    // monitored "Show the advisories →" did, on all three tool pages.
+    renderVuln: function (result) { renderVuln(result); },
     renderCost: function (result) {
-      showOutput("cost", renderCost(result));
+      renderCost(result);
       renderCostChart(result && result.suggestions);
     },
-    renderAlgo: function (result) { showOutput("algo", renderAlgo(result)); },
+    renderAlgo: function (result) { renderAlgo(result); },
   };
 
   if (document.readyState === "loading") {
