@@ -83,6 +83,42 @@ NOTE: 0019 creates the MCP tables too, but it does NOT turn MCP on. Applying
 it changes no behaviour except fixing the above. Turning MCP on is Task 6.
 
 ────────────────────────────────────────────────────────────────────────
+TASK 1b — Apply migration 0018 (arch_snapshots)
+────────────────────────────────────────────────────────────────────────
+An earlier version of this file listed 0018 under "ALREADY DONE". That was an
+error on our side — it was never confirmed against production. The live schema
+check reports its three arch_snapshots columns absent, and that reading is
+correct; there is no drift to reconcile and nothing to investigate.
+
+0018 is about as safe as a migration gets: ONE new table plus two indexes,
+every statement IF NOT EXISTS, no ALTER on any existing table, no data at
+risk.
+
+  cd worker
+  npx wrangler d1 execute algosize --file=migrations/0018_arch_snapshots.sql \
+    --remote --env production --config wrangler.toml
+
+Until it is applied, architecture runs still work and still return their
+graph — snapshot recording is best-effort by construction — but nothing is
+kept, so drift/diff has no history to read. It also matters for MCP: the
+catalog advertises algosize_list_arch_snapshots and algosize_diff_architecture,
+which have nothing to read without this table.
+
+────────────────────────────────────────────────────────────────────────
+TASK 1c — Apply migration 0020 (per-org flag overrides)
+────────────────────────────────────────────────────────────────────────
+New, shipping alongside this correction. One new table, IF NOT EXISTS, no
+ALTER, no data at risk. It is what makes "enable MCP for these specific orgs
+and nobody else" possible — see Task 6.
+
+  cd worker
+  npx wrangler d1 execute algosize --file=migrations/0020_flag_overrides.sql \
+    --remote --env production --config wrangler.toml
+
+Applying it changes NO behaviour on its own: with no override rows, every
+flag evaluates exactly as it does today.
+
+────────────────────────────────────────────────────────────────────────
 TASK 2 — Confirm the schema check agrees
 ────────────────────────────────────────────────────────────────────────
 The app has its own migration manifest at /api/admin/schema-check, which
@@ -93,7 +129,7 @@ Sign in as an admin at https://algosize.com/dashboard/ and then:
 
   curl -s https://algosize.com/api/admin/schema-check -H "Cookie: <admin session>"
 
-EXPECT 0019 present with all seven checks passing.
+EXPECT 0018, 0019 and 0020 all present and passing (0019 has seven checks).
 
 This is a genuinely independent check, not a duplicate of Task 1: PRAGMA tells
 you the columns exist, this tells you every object the migration was supposed
@@ -180,19 +216,30 @@ To roll back, unset it. The code falls back to K2.6 with no deploy needed.
 ────────────────────────────────────────────────────────────────────────
 TASK 6 — Turn MCP on. ONLY after Tasks 1, 2 and 4 pass.
 ────────────────────────────────────────────────────────────────────────
-Two ways. Prefer the second for a staged rollout.
+DO NOT run this task yet. It needs migration 0020 (per-org flag overrides),
+which is being added in a follow-up — the rollout choice below is not
+available until it ships. Skip to Task 7's prerequisites and stop.
 
-Environment-wide:
+For reference, once 0020 is applied there will be two ways:
+
+Environment-wide — every organisation at once:
 
   cd worker && npx wrangler secret put MCP_ENABLED --config wrangler.toml --env production
   # value: true
 
-Per organisation, leaving MCP_ENABLED unset — the feature flag takes an org id
-as its subject, so one organisation can be switched on alone:
+Chosen organisations only, leaving MCP_ENABLED unset:
 
-  PATCH /api/admin/flags/mcp.enabled     (via the admin panel's Flags section)
+  PATCH /api/admin/flags/mcp.enabled          {"enabled": true, "rolloutPct": 0}
+  PUT   /api/admin/flags/mcp.enabled/overrides/<org_id>   {"enabled": true}
 
-Say which one you used and, if per-org, which org.
+An override wins over the flag's own state in both directions, so rolloutPct 0
+keeps everyone else off while the named orgs are on.
+
+IMPORTANT CORRECTION: an earlier version of this file said the flag "takes an
+org id as its subject, so one organisation can be switched on alone". That was
+wrong. Before 0020, rolloutPct is a deterministic hash bucket — it selects
+roughly N% of orgs and gives no say in which. Do not attempt a "one specific
+org" rollout with rolloutPct; it cannot do it.
 
 ────────────────────────────────────────────────────────────────────────
 TASK 7 — Verify end to end, with a real credential
@@ -285,7 +332,10 @@ unrelated.
 ────────────────────────────────────────────────────────────────────────
 ALREADY DONE — do not redo
 ────────────────────────────────────────────────────────────────────────
-- D1 migrations 0015, 0016, 0017, 0018 are applied to production.
+- D1 migrations 0015, 0016, 0017 are applied to production.
+  (An earlier version of this file also listed 0018. That was wrong — it was
+  carried over from a task tracker showing the FEATURE complete, which is not
+  the same claim as "applied to prod D1". 0018 is handled in Task 1b.)
 - The Worker is deployed at 7cc4230 via worker.yml run #72 (successful).
 - Nothing in this file should require a code change. If one seems to, stop and
   report rather than editing the repo — this prompt is for operating the

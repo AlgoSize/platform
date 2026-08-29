@@ -25,6 +25,7 @@ import {
 } from "../src/oplog.js";
 import {
   listFlags, getFlag, upsertFlag, deleteFlag, isFlagEnabled,
+  listFlagOverrides, setFlagOverride,
 } from "../src/flags.js";
 import {
   indexSession, listUserSessions, revokeUserSession, unindexSession,
@@ -343,6 +344,83 @@ group("feature flags");
   expect(del.deleted && del.previous.key === "second_flag", "a flag can be deleted, returning what it was");
   expect(await getFlag(env, "second_flag") === null, "and is gone afterwards");
   expect((await deleteFlag(env, "second_flag")).deleted === false, "deleting it again is a no-op, not an error");
+}
+
+// ---------------------------------------------------------------------------
+group("feature flag overrides — targeting an exact subject");
+// ---------------------------------------------------------------------------
+// The rollout percentage answers "roughly what fraction of accounts" and
+// gives no say in WHICH ones. That is the right primitive for an unbiased
+// rollout and the wrong one for a pilot: "turn this on for our own orgs
+// before any customer sees it" is a set you choose, not a set a hash picks.
+{
+  const env = { DB: makeD1() };
+  await upsertFlag(env, "mcp.enabled", { enabled: false, updatedBy: "a@b.c" });
+
+  // The case the whole table exists for: a globally OFF flag, on for one
+  // named org and nobody else.
+  const set = await setFlagOverride(env, "mcp.enabled", "org_internal", { enabled: true, updatedBy: "a@b.c" });
+  expect(set.ok && set.override.enabled === true, "an override can be set for one exact subject");
+  expect(await isFlagEnabled(env, null, "mcp.enabled", "org_internal") === true,
+    "an ON override beats a globally disabled flag — this is the pilot case");
+  expect(await isFlagEnabled(env, null, "mcp.enabled", "org_customer") === false,
+    "…and every other org stays off, which percentage bucketing could not guarantee");
+
+  // The other direction matters just as much: excluding one account from a
+  // rollout everyone else is in.
+  await upsertFlag(env, "mcp.enabled", { enabled: true, rolloutPct: 100 });
+  await setFlagOverride(env, "mcp.enabled", "org_optout", { enabled: false, updatedBy: "a@b.c" });
+  expect(await isFlagEnabled(env, null, "mcp.enabled", "org_optout") === false,
+    "an OFF override beats a fully enabled flag, so one account can be held back");
+  expect(await isFlagEnabled(env, null, "mcp.enabled", "org_someone_else") === true,
+    "…without affecting anyone else");
+
+  // An override must win over the BUCKET, not merely tiebreak it — otherwise
+  // a subject the hash already excluded stays excluded and the override
+  // silently does nothing.
+  await upsertFlag(env, "mcp.enabled", { enabled: true, rolloutPct: 1 });
+  let bucketedOut = null;
+  for (let i = 0; i < 200 && bucketedOut === null; i++) {
+    const s = `org_probe_${i}`;
+    if (await isFlagEnabled(env, null, "mcp.enabled", s) === false) bucketedOut = s;
+  }
+  expect(bucketedOut !== null, "found a subject the 1% bucket excludes (test setup)");
+  await setFlagOverride(env, "mcp.enabled", bucketedOut, { enabled: true, updatedBy: "a@b.c" });
+  expect(await isFlagEnabled(env, null, "mcp.enabled", bucketedOut) === true,
+    "an override turns on a subject the rollout bucket had excluded");
+
+  // Clearing returns the subject to the global rollout rather than pinning
+  // it to a value — otherwise "undo" would silently mean "set to off".
+  await upsertFlag(env, "mcp.enabled", { enabled: true, rolloutPct: 100 });
+  const cleared = await setFlagOverride(env, "mcp.enabled", "org_optout", { enabled: null, updatedBy: "a@b.c" });
+  expect(cleared.ok && cleared.cleared === true, "an override can be cleared");
+  expect(await isFlagEnabled(env, null, "mcp.enabled", "org_optout") === true,
+    "…and the subject returns to whatever the global rollout says, not to off");
+
+  // Listing, for the admin panel.
+  const list = await listFlagOverrides(env, "mcp.enabled");
+  expect(list.some((o) => o.subject === "org_internal" && o.enabled === true),
+    "overrides are listable for one flag");
+  expect(!list.some((o) => o.subject === "org_optout"),
+    "…and a cleared one is gone from the list rather than lingering as a row");
+
+  // Overrides are per flag, not global.
+  await upsertFlag(env, "other_flag", { enabled: false });
+  expect(await isFlagEnabled(env, null, "other_flag", "org_internal") === false,
+    "an override on one flag does not leak into another");
+
+  // Input validation, matching upsertFlag's contract.
+  expect((await setFlagOverride(env, "Not Valid", "org_x", { enabled: true })).error === "invalid_key",
+    "a bad flag key is refused");
+  expect((await setFlagOverride(env, "ok_key", "", { enabled: true })).error === "invalid_subject",
+    "an empty subject is refused");
+  expect((await setFlagOverride(env, "ok_key", "org_x", { enabled: "yes" })).error === "invalid_enabled",
+    "a non-boolean enabled is refused rather than coerced — 'yes' silently meaning true is how a " +
+    "flag gets turned on by a typo");
+
+  // Fails closed, same as every other read in this module.
+  expect(await isFlagEnabled({ DB: makeEmptyD1() }, null, "mcp.enabled", "org_internal") === false,
+    "an unreachable database is off even for a subject with an ON override");
 }
 
 // ---------------------------------------------------------------------------

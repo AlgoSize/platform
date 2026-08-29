@@ -34,7 +34,7 @@ import { stripeFetch, StripeError, PLANS, INTERVALS } from "../stripe.js";
 import { tierForOrg } from "../reports/branding.js";
 import { listAuditEvents, writeAudit, AUDIT_ACTIONS } from "../audit.js";
 import { listWebhookDeliveries, listEmailSends, WEBHOOK_OUTCOME, EMAIL_OUTCOME } from "../oplog.js";
-import { listFlags, upsertFlag, FLAG_KEY_RE } from "../flags.js";
+import { listFlags, upsertFlag, FLAG_KEY_RE, listFlagOverrides, setFlagOverride } from "../flags.js";
 import { listUserSessions, revokeUserSession } from "../sessions.js";
 import { resolveEntitlementForOrg } from "../entitlement.js";
 
@@ -1008,6 +1008,101 @@ function flagErrorMessage(error) {
   if (error === "invalid_rollout") return "rolloutPct must be a whole number from 0 to 100.";
   if (error === "invalid_key")     return "A flag key is lowercase letters, digits, dot, dash or underscore.";
   return "Could not update the flag.";
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/admin/flags/:key/overrides
+// PUT/DELETE /api/admin/flags/:key/overrides/:subject
+// ---------------------------------------------------------------------------
+//
+// The rollout percentage answers "roughly what fraction" and gives no say in
+// which accounts land in it. An override is how one exact org gets turned on
+// — a real pilot — without gambling on a hash, and without opening the flag
+// for everyone else. See migrations/0020 and flags.js for the mechanism.
+
+export async function adminListFlagOverridesHandler(request, env) {
+  if (!env || !env.DB) return notConfigured();
+  const key = request.params && request.params.key;
+  if (!key || !FLAG_KEY_RE.test(key)) {
+    return jsonResponse(
+      { error: "invalid_key", message: "A flag key is lowercase letters, digits, dot, dash or underscore." },
+      400,
+    );
+  }
+  return jsonResponse({ key, overrides: await listFlagOverrides(env, key) });
+}
+
+export async function adminSetFlagOverrideHandler(request, env, ctx) {
+  if (!env || !env.DB) return notConfigured();
+  const key     = request.params && request.params.key;
+  const subject = request.params && request.params.subject;
+  if (!key || !FLAG_KEY_RE.test(key)) {
+    return jsonResponse(
+      { error: "invalid_key", message: "A flag key is lowercase letters, digits, dot, dash or underscore." },
+      400,
+    );
+  }
+  if (!subject) {
+    return jsonResponse({ error: "invalid_subject", message: "A subject (e.g. an org id) is required." }, 400);
+  }
+
+  let body;
+  try { body = await request.json(); }
+  catch { return jsonResponse({ error: "invalid_json", message: "Request body must be valid JSON." }, 400); }
+
+  if (typeof (body && body.enabled) !== "boolean") {
+    return jsonResponse(
+      { error: "invalid_enabled", message: "Body must be { \"enabled\": true } or { \"enabled\": false }." },
+      400,
+    );
+  }
+
+  const actor  = (request.user && request.user.email) || "unknown";
+  const result = await setFlagOverride(env, key, subject, { enabled: body.enabled, updatedBy: actor });
+
+  if (!result.ok) {
+    const status = result.error === "write_failed" ? 500 : 400;
+    return jsonResponse({ error: result.error, message: result.message || flagErrorMessage(result.error) }, status);
+  }
+
+  await writeAudit(env, ctx, {
+    actor,
+    actorUserId: request.user && request.user.userId,
+    action:      AUDIT_ACTIONS.FLAG_OVERRIDE_SET,
+    targetType:  "flag_override",
+    targetId:    `${key}:${subject}`,
+    metadata:    { flag: key, subject, enabled: body.enabled },
+  });
+
+  return jsonResponse({ ok: true, override: result.override });
+}
+
+export async function adminDeleteFlagOverrideHandler(request, env, ctx) {
+  if (!env || !env.DB) return notConfigured();
+  const key     = request.params && request.params.key;
+  const subject = request.params && request.params.subject;
+  if (!key || !FLAG_KEY_RE.test(key) || !subject) {
+    return jsonResponse({ error: "invalid_request", message: "A flag key and subject are required." }, 400);
+  }
+
+  const actor = (request.user && request.user.email) || "unknown";
+  // enabled: null clears the row and returns this subject to whatever the
+  // global rollout says — same as never having set an override.
+  const result = await setFlagOverride(env, key, subject, { enabled: null, updatedBy: actor });
+  if (!result.ok) {
+    return jsonResponse({ error: result.error, message: result.message || flagErrorMessage(result.error) }, 400);
+  }
+
+  await writeAudit(env, ctx, {
+    actor,
+    actorUserId: request.user && request.user.userId,
+    action:      AUDIT_ACTIONS.FLAG_OVERRIDE_SET,
+    targetType:  "flag_override",
+    targetId:    `${key}:${subject}`,
+    metadata:    { flag: key, subject, cleared: true },
+  });
+
+  return jsonResponse({ ok: true, cleared: true });
 }
 
 // ---------------------------------------------------------------------------

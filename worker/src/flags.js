@@ -116,6 +116,87 @@ export async function deleteFlag(env, key) {
   return { deleted: true, previous: existing };
 }
 
+// ---------------------------------------------------------------------------
+// Per-subject overrides (migrations/0020)
+// ---------------------------------------------------------------------------
+//
+// The rollout_pct bucket answers "roughly what fraction of accounts" and
+// gives you no say in which ones. An override answers "this exact account,
+// explicitly" — the thing a real pilot needs and a percentage cannot give.
+
+export async function listFlagOverrides(env, key) {
+  if (!env || !env.DB || !key) return [];
+  const res = await env.DB
+    .prepare(
+      `SELECT subject, enabled, updated_by, updated_at
+         FROM feature_flag_overrides WHERE flag_key = ? ORDER BY updated_at DESC`,
+    )
+    .bind(key)
+    .all();
+  return ((res && res.results) || []).map((r) => ({
+    subject:   r.subject,
+    enabled:   r.enabled === 1,
+    updatedBy: r.updated_by || null,
+    updatedAt: r.updated_at,
+  }));
+}
+
+async function getFlagOverride(env, key, subject) {
+  if (!env || !env.DB || !key || !subject) return null;
+  const row = await env.DB
+    .prepare(
+      `SELECT enabled FROM feature_flag_overrides WHERE flag_key = ? AND subject = ?`,
+    )
+    .bind(key, subject)
+    .first();
+  return row ? { enabled: row.enabled === 1 } : null;
+}
+
+/**
+ * Set (or clear, with `enabled: null`) the override for one subject.
+ *
+ * Returns `{ ok: false, error }` on bad input, matching upsertFlag's
+ * contract — every caller here is an HTTP handler too.
+ */
+export async function setFlagOverride(env, key, subject, { enabled, updatedBy } = {}) {
+  if (!env || !env.DB) return { ok: false, error: "not_configured" };
+  if (typeof key !== "string" || !FLAG_KEY_RE.test(key)) {
+    return { ok: false, error: "invalid_key" };
+  }
+  if (typeof subject !== "string" || !subject) {
+    return { ok: false, error: "invalid_subject" };
+  }
+
+  if (enabled === null) {
+    await env.DB
+      .prepare("DELETE FROM feature_flag_overrides WHERE flag_key = ? AND subject = ?")
+      .bind(key, subject)
+      .run();
+    return { ok: true, cleared: true };
+  }
+
+  if (typeof enabled !== "boolean") return { ok: false, error: "invalid_enabled" };
+
+  const now = Math.floor(Date.now() / 1000);
+  try {
+    await env.DB
+      .prepare(
+        `INSERT INTO feature_flag_overrides (flag_key, subject, enabled, updated_by, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(flag_key, subject) DO UPDATE SET
+           enabled    = excluded.enabled,
+           updated_by = excluded.updated_by,
+           updated_at = excluded.updated_at`,
+      )
+      .bind(key, subject, enabled ? 1 : 0, updatedBy || null, now)
+      .run();
+  } catch (err) {
+    return { ok: false, error: "write_failed", message: (err && err.message) || "unknown error" };
+  }
+
+  return { ok: true, cleared: false, override: { key, subject, enabled, updatedBy: updatedBy || null, updatedAt: now } };
+}
+
 /**
  * Stable 0-99 bucket for a subject within one flag.
  *
@@ -137,10 +218,20 @@ async function bucketFor(key, subject) {
  * Fails CLOSED: an unknown flag, an unreachable database, or a missing
  * subject all resolve to false. A flag system that fails open turns a
  * database blip into an unannounced launch of every unfinished feature.
+ *
+ * An override (migrations/0020), when one exists for this subject, is
+ * checked FIRST and answers on its own — before the flag's own enabled or
+ * rollout_pct is even read. That order is the point: an override exists to
+ * say "ignore the global state for this one subject", so it has to win over
+ * that state, not merely tiebreak it. It is checked in the same try/catch as
+ * the flag read, so an override lookup failure fails this call shut exactly
+ * like a flag lookup failure does — there is no partial-credit path where
+ * the override errors but the rollout logic runs anyway.
  */
 export async function isFlagEnabled(env, ctx, key, subject = null) {
-  let flag;
+  let flag, override;
   try {
+    if (subject) override = await getFlagOverride(env, key, subject);
     flag = await getFlag(env, key);
   } catch (err) {
     await captureException(env, ctx, err, {
@@ -149,6 +240,7 @@ export async function isFlagEnabled(env, ctx, key, subject = null) {
     });
     return false;
   }
+  if (override) return override.enabled;
   if (!flag || !flag.enabled) return false;
   if (flag.rolloutPct >= 100) return true;
   if (flag.rolloutPct <= 0) return false;
