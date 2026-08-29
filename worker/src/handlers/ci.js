@@ -593,6 +593,16 @@ jobs:
             -H "Authorization: Bearer \${{ secrets.ALGOSIZE_API_KEY }}" \\
             -H "Content-Type: application/json" \\
             --data @payload.json)
+          # See the note in the other gates: a 402 is the monthly allowance,
+          # not a defect in this pull request. Warned and skipped rather than
+          # failed — but SAID OUT LOUD in the pull request comment below,
+          # because an audit that did not run must never be mistaken for one
+          # that found nothing.
+          if [ "$HTTP" = "402" ]; then
+            echo "::warning::$(jq -r '.message // "Monthly run allowance exhausted."' response.json)"
+            echo "quota=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$HTTP" != "200" ]; then
             echo "::error::Algosize returned HTTP $HTTP"
             cat response.json
@@ -635,6 +645,42 @@ jobs:
         with:
           sarif_file: algosize.sarif
           category: algosize
+
+      # The audit did not run because the allowance is spent. Said in the
+      # pull request, in the same sticky comment, so a reviewer reading the
+      # thread cannot mistake silence for a clean audit — the whole point of
+      # a gate is that its absence is visible.
+      - name: Say the audit did not run
+        if: github.event_name == 'pull_request' && steps.audit.outputs.quota == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const MARKER = '<!-- algosize-audit -->';
+            const body = [
+              MARKER,
+              '### Algosize dependency audit — not run',
+              '',
+              'This organisation has used its monthly analysis allowance, so **no audit ran for this commit**.',
+              'That is not a clean result: the dependencies in this pull request have not been checked.',
+              '',
+              'The allowance resets monthly, or an upgrade lifts it: https://algosize.com/#pricing',
+            ].join('\n');
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number, per_page: 100,
+            });
+            const existing = comments.find((c) => c.body && c.body.includes(MARKER));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, body,
+              });
+            }
 
       - name: Comment on the pull request
         if: github.event_name == 'pull_request' && steps.audit.outputs.run_id != ''
@@ -838,6 +884,15 @@ jobs:
                 body: JSON.stringify({ code, sampleInput: entry.sampleInput }),
               });
               const body = await res.json().catch(() => ({}));
+              // A spent allowance is a billing state, not a defect in this
+              // pull request. This gate already skipped rather than failed on
+              // any non-OK status, which was the right shape by accident;
+              // naming 402 explicitly means the log says WHY, in the server's
+              // own words, instead of "API 402 (quota_exceeded)".
+              if (res.status === 402) {
+                console.log("::warning::" + (body.message || "Monthly run allowance exhausted.") + " Complexity was not measured for " + label + ".");
+                continue;
+              }
               if (!res.ok) {
                 console.log("::warning::" + label + ": API " + res.status + " (" + (body.error || "error") + ") — skipped");
                 continue;
@@ -979,6 +1034,21 @@ jobs:
             -H "Content-Type: application/json" \\
             --data @payload.json)
 
+          # A 402 is the monthly run allowance, not a defect in this pull
+          # request. It is a WARNING and a skip, never a red build: the free
+          # tier is five runs, an active repository reaches that in an
+          # afternoon, and reddening every pull request until someone pays is
+          # the fastest way to get this gate deleted — which costs the team
+          # their audit as well as us the customer. Exactly the reasoning the
+          # missing-key check above is built on, and it applies harder here,
+          # because a missing key is a one-time setup step while this recurs
+          # every month.
+          if [ "$HTTP" = "402" ]; then
+            echo "::warning::$(jq -r '.message // "Monthly run allowance exhausted."' response.json)"
+            echo "quota=true" >> "$GITHUB_OUTPUT"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$HTTP" != "200" ]; then
             echo "::warning::The estimator returned HTTP $HTTP — annotating without a verdict."
             jq -r '.message // .error // "no detail"' response.json || true
@@ -1152,6 +1222,21 @@ jobs:
             -H "Content-Type: text/csv" \\
             --data-binary @"\${{ steps.cur.outputs.cur }}")
 
+          # A 402 is the monthly run allowance, not a defect in this pull
+          # request. It is a WARNING and a skip, never a red build: the free
+          # tier is five runs, an active repository reaches that in an
+          # afternoon, and reddening every pull request until someone pays is
+          # the fastest way to get this gate deleted — which costs the team
+          # their audit as well as us the customer. Exactly the reasoning the
+          # missing-key check above is built on, and it applies harder here,
+          # because a missing key is a one-time setup step while this recurs
+          # every month.
+          if [ "$HTTP" = "402" ]; then
+            echo "::warning::$(jq -r '.message // "Monthly run allowance exhausted."' response.json)"
+            echo "quota=true" >> "$GITHUB_OUTPUT"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$HTTP" != "200" ]; then
             echo "::warning::The cost analyzer returned HTTP $HTTP — annotating without a verdict."
             jq -r '.message // .error // "no detail"' response.json || true
@@ -1362,6 +1447,21 @@ jobs:
             -H "Content-Type: application/json" \\
             --data @payload.json)
 
+          # A 402 is the monthly run allowance, not a defect in this pull
+          # request. It is a WARNING and a skip, never a red build: the free
+          # tier is five runs, an active repository reaches that in an
+          # afternoon, and reddening every pull request until someone pays is
+          # the fastest way to get this gate deleted — which costs the team
+          # their audit as well as us the customer. Exactly the reasoning the
+          # missing-key check above is built on, and it applies harder here,
+          # because a missing key is a one-time setup step while this recurs
+          # every month.
+          if [ "$HTTP" = "402" ]; then
+            echo "::warning::$(jq -r '.message // "Monthly run allowance exhausted."' response.json)"
+            echo "quota=true" >> "$GITHUB_OUTPUT"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$HTTP" != "200" ]; then
             echo "::warning::The architecture endpoint returned HTTP $HTTP — annotating without a verdict."
             echo "skip=true" >> "$GITHUB_OUTPUT"

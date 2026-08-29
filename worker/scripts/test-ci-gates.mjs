@@ -214,6 +214,59 @@ group("the Worker's own pull-request gate actually covers the Worker");
 }
 
 // ===========================================================================
+group("a spent allowance is a warning, never a red build");
+// ===========================================================================
+// The free tier is five runs a month and an active repository reaches that
+// in an afternoon — this one did, the day its key was first set. Every gate
+// then failed with a bare "returned HTTP 402", which reads to a reviewer as
+// "this pull request is broken" rather than "the account is out of runs".
+//
+// The missing-key check has always been a notice-and-skip for exactly this
+// reason, argued in its own comment: a workflow that goes red the moment it
+// is pasted gets deleted, and a deleted gate costs the team its audit. Quota
+// is the same failure with a worse shape, because a missing key is a
+// one-time setup step and this recurs every month.
+for (const g of GATES) {
+  const metered = /api\/(ci\/runs|estimate|analyze\/)/.test(g.yaml);
+  if (!metered) continue;
+
+  // Two shapes in the wild: the curl gates test the status in bash, the
+  // optimizer gate fetches from node and tests res.status. Both are checked,
+  // because a guard that only understood bash reported the optimizer as
+  // missing a branch it did not need — a false alarm that would have been
+  // "fixed" by weakening the rule.
+  const bashish = g.yaml.indexOf('HTTP" = "402"');
+  const jsish   = g.yaml.indexOf("res.status === 402");
+  const at = bashish >= 0 ? bashish : jsish;
+  expect(at >= 0,
+    `${g.name} — recognises 402 as its own case, not "some non-200"`);
+  if (at < 0) continue;
+
+  // The 402 branch must not fail the build. In bash that means exit 0 rather
+  // than falling into the generic non-200 path; in JS it means `continue`.
+  const branch = g.yaml.slice(at);
+  const end = bashish >= 0 ? branch.indexOf("\n          fi") : branch.indexOf("\n              }");
+  const body = branch.slice(0, end > 0 ? end : 400);
+  expect((/exit 0/.test(body) || /continue;/.test(body)) && !/exit 1/.test(body),
+    `${g.name} — the 402 branch cannot fail a build over a billing state`);
+  expect(/::warning::/.test(body) && !/::error::/.test(body),
+    `${g.name} — and annotates it as a warning rather than an error`);
+  expect(/\.message/.test(body),
+    `${g.name} — relaying the server's own sentence, not a bare status code`);
+}
+
+// The audit gate carries one extra obligation: silence is not an acceptable
+// way to report that no audit ran. A reviewer scanning the thread must not
+// read a missing comment as a clean bill of health.
+{
+  const audit = GATES.find((g) => g.name === "dependency audit");
+  expect(/audit\.outputs\.quota == 'true'/.test(audit.yaml),
+    "the audit gate comments when the allowance is spent");
+  expect(/not run/i.test(audit.yaml) && /not a clean result/i.test(audit.yaml),
+    "…saying plainly that the dependencies were NOT checked");
+}
+
+// ===========================================================================
 group("every generated gate is valid bash, and its jq actually interpolates");
 // ===========================================================================
 // These generators are JS template literals, so a single backslash never
