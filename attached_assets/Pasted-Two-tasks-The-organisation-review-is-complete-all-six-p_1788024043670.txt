@@ -1,0 +1,80 @@
+Two tasks. The organisation review is complete: all six production orgs are
+test accounts (four .test / .invalid seeds, one probe, plus the admin's own
+account), there are no real customers, and the project is in prototype phase.
+The staged per-organisation rollout is therefore unnecessary — enable
+environment-wide.
+
+Same rules: run from `worker/`, always pass `--config wrangler.toml`
+explicitly (the root wrangler.jsonc shadows it — 2026-08-20 incident), paste
+actual command output rather than summarising.
+
+────────────────────────────────────────────────────────────────────────
+TASK F — Enable MCP environment-wide
+────────────────────────────────────────────────────────────────────────
+  cd worker
+  npx wrangler secret put MCP_ENABLED --config wrangler.toml --env production
+  # value: true
+
+Leave the mcp.enabled feature flag alone entirely — do not create it, do not
+set overrides. MCP_ENABLED short-circuits ahead of it, so the flag is dead
+weight here and a half-configured flag is worse than an absent one.
+
+Then confirm the surface actually opened. It answered 404 before this:
+
+  curl -s -o /dev/null -w "%{http_code}\n" -X POST https://algosize.com/api/mcp
+
+EXPECT 401 now, not 404. 401 means the endpoint exists and is demanding a
+credential — which is the pass condition. A continued 404 means the secret
+did not take effect; report that rather than retrying blindly.
+
+────────────────────────────────────────────────────────────────────────
+TASK G — Verify end to end with a real credential
+────────────────────────────────────────────────────────────────────────
+Create an API key at https://algosize.com/dashboard/#/account/keys — the full
+value is shown once, at creation, and nothing can read it back afterwards.
+
+  KEY=<the key>
+
+  # initialize — expect 200 and an Mcp-Session-Id response header
+  curl -si -X POST https://algosize.com/api/mcp \
+    -H "Authorization: Bearer $KEY" \
+    -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"curl","version":"1"},"capabilities":{}}}' \
+    | grep -i "mcp-session-id\|HTTP/"
+
+  SID=<the Mcp-Session-Id value>
+
+  # whoami — read-only and unmetered, so this costs no quota
+  curl -s -X POST https://algosize.com/api/mcp \
+    -H "Authorization: Bearer $KEY" \
+    -H "Mcp-Session-Id: $SID" \
+    -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"algosize_whoami","arguments":{}}}'
+
+EXPECT a result naming the organisation, with "isError": false.
+
+  # tools/list — the catalog as an authenticated caller sees it
+  curl -s -X POST https://algosize.com/api/mcp \
+    -H "Authorization: Bearer $KEY" -H "Mcp-Session-Id: $SID" \
+    -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","id":3,"method":"tools/list"}' | head -c 400
+
+EXPECT 22 tools.
+
+  # usage — what the dashboard's activity panel reads
+  curl -s https://algosize.com/api/mcp/usage -H "Authorization: Bearer $KEY"
+
+EXPECT totals.calls >= 2 (the whoami and the tools/list), and a `daily` array
+of exactly 14 entries. The array is DENSE — every day present, including days
+with zero calls. Fewer than 14 entries means something is wrong; do not read
+a short array as "quiet days omitted".
+
+Do NOT call any metered tool (the four analyzers or the estimator) as part of
+this verification. They consume real runs from the monthly allowance and
+nothing here needs them to prove the surface works.
+
+────────────────────────────────────────────────────────────────────────
+STILL DO NOT DO
+────────────────────────────────────────────────────────────────────────
+Do not add the .well-known apex zone routes. Still pending a decision on
+whether the OAuth browser flow is launching.
