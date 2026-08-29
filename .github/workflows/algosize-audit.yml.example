@@ -228,8 +228,7 @@ jobs:
               'That is not a clean result: the dependencies in this pull request have not been checked.',
               '',
               'The allowance resets monthly, or an upgrade lifts it: https://algosize.com/#pricing',
-            ].join('
-');
+            ].join('\n');
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner, repo: context.repo.repo,
               issue_number: context.issue.number, per_page: 100,
