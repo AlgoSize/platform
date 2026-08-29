@@ -85,6 +85,15 @@ dispatch context (`handlers/mcp.js:149`) and `callTool` receives that same `cx`
 (`mcp.js:287`), so every one of the five `logToolCall` sites can pass it with
 no new data flow.
 
+**Stronger than this section first stated, and it matters downstream:** every
+method except `initialize` is refused without a live session, enforced once at
+`handlers/mcp.js:216-221` before the method switch. Since all five log sites
+sit inside `callTool` and `readResource`, which are reachable only past that
+check, **no row written after 0021 can have a null `session_ref`**. There is no
+"stateless call" case to handle. The only ungrouped rows are the ones written
+before the migration, which is a finite, closed set that ages out of the
+30-day window — one honesty state to design, not two.
+
 **Also in scope, from the audit's §1 edges:**
 
 - Log calls to **nonexistent tool names** (`mcp.js:292-294` currently returns
@@ -186,8 +195,8 @@ available", never as a silent re-point at a much older graph.
 
 `enrich.js:13-18` says the runtime signals that would set `origin: "observed"`
 "land in Phase 2". `ARCHITECTURE-XRAY-PHASE-0.md` §7.2 then established that
-this conflicts with a product invariant, laid out three options, and **asked
-for a decision that was never made**:
+this conflicts with a product invariant and laid out three options. That
+decision has now been made — see §3.1. The options as posed:
 
 - **(a) Self-only runtime signals** — runtime data for Algosize's own
   infrastructure with Algosize's own credentials; customer graphs stay
@@ -204,23 +213,58 @@ an implementation: option (c) is a change to what the product promises about
 customer data, and no architecture feature should make that call as a side
 effect.
 
-**Until that is answered, `origin` stays `"static"` on every edge and every
-surface must render the runtime dimension as "not measured" — never as
-"unused", never as "fine".** That is what the `null`-means-not-measured
-discipline in `enrich.js:12-18` exists to protect, and it is the difference
-between a feature that is honest about its limits and one that quietly
-certifies an architecture nobody checked.
-
 Note that §1's tracing work does **not** unblock this. The tool-call log
 records what *Algosize's* assistants did, never what the customer's system did
 — they are different subjects, and conflating them would produce exactly the
-false certification the discipline above prevents.
+false certification the discipline below prevents.
+
+### 3.1 · Decision: all three, and what each one costs
+
+**Answered: (a), (b) and (c) are all approved.** Recorded here because §7.2 has
+been open since Phase 0 and the answer is a product decision, not an
+implementation one.
+
+Sequencing follows from what each option requires, not from preference:
+
+| | Option | Blocked on |
+| --- | --- | --- |
+| 1st | **(b)** customer-pushed CI telemetry | nothing — no credential is ever held |
+| 2nd | **(a)** self-only signals, our own infrastructure | nothing — our credentials, our systems |
+| 3rd | **(c)** cloud-account connector, scoped per-customer tokens | the two changes below, **before** any code |
+
+(b) and (a) can be built whenever they are scheduled. **(c) cannot start until
+two things outside the architecture feature are done**, and naming them is the
+point of recording the decision rather than absorbing it:
+
+1. **The Privacy Policy's account of what data leaves the system changes.**
+   Storing a scoped customer cloud token means the product holds a credential
+   to a customer's infrastructure. The policy currently describes a system that
+   holds none.
+2. **`test-ci-gates.mjs` stops being a promise and becomes a lie unless it is
+   rewritten deliberately.** It denies fourteen credential mechanisms *by name*
+   — `configure-aws-credentials`, `azure/login`, `id-token: write`, `KUBECONFIG`
+   among them. That test is the enforcement of the invariant (c) breaks. It must
+   be rewritten as an explicit, narrowed rule — not deleted, not loosened by a
+   diff that happens to make a build pass.
+
+Until (c) has both, and until any of the three is actually built, **`origin`
+stays `"static"` on every edge and every surface renders the runtime dimension
+as "not measured" — never as "unused", never as "fine".** That is what the
+`null`-means-not-measured discipline in `enrich.js:12-18` protects: the
+difference between a feature honest about its limits and one that quietly
+certifies an architecture nobody checked.
+
+**This decision unblocks item 5; it does not schedule it.** Item 5 is not in
+the approved build scope (§4), and nothing in it is designed by Part 3.
 
 ---
 
 ## 4 · Proposed scope, in order
 
-Nothing here is started. Each item is independently shippable.
+Each item is independently shippable.
+
+**Approved for build: items 1-3.** Item 4 was not approved and is not designed
+by Part 3. Item 5 is unblocked by the §3.1 decision but is not in scope.
 
 | # | Item | Size | Depends on |
 | --- | --- | --- | --- |

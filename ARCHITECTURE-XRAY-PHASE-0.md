@@ -266,6 +266,15 @@ real deploy-event and drift data without touching the thing the product's
 security posture is built on. But it is your call, and (c) is a legitimate
 choice if runtime validation is the point of the feature.
 
+**Answered (2026-08-29): all three.** (b) and (a) are unblocked and can be
+built when scheduled. (c) is approved as a direction but cannot start until the
+Privacy Policy's account of data held is updated and `test-ci-gates.mjs` is
+deliberately rewritten — it denies the fourteen mechanisms above by name, and
+it is the enforcement of the invariant (c) breaks. Full reasoning and
+sequencing in `TRACE-AND-GRAPH-PLAN.md` §3.1. Until something is built,
+`origin` stays `"static"` and every surface renders the runtime dimension as
+*not measured*.
+
 ---
 
 ## 8 · Proposed graph schema
