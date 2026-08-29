@@ -79,7 +79,7 @@ import {
   getArchSnapshotHandler,
   archDiffHandler,
 } from "./handlers/arch_snapshots.js";
-import { sweepDueMonitors, handleMonitorQueue } from "./monitors/run.js";
+import { sweepDueMonitors, handleMonitorQueue, handleMonitorDlq } from "./monitors/run.js";
 import { logoutHandler } from "./handlers/logout.js";
 import { meHandler } from "./handlers/me.js";
 import {
@@ -626,8 +626,21 @@ export default {
    * Queue consumer — one batch of monitor-check messages. Each message is
    * acked or retried individually inside handleMonitorQueue, so one slow or
    * failing repo can't redeliver (and re-email) its batch-mates.
+   *
+   * ONE entrypoint serves every bound queue, so it must dispatch on which
+   * queue the batch came from. Sending a dead-lettered batch to
+   * handleMonitorQueue would re-run the exact sweep that already failed three
+   * times — the DLQ's whole purpose is that those attempts are over — and,
+   * because that handler retries on failure, it would bounce the message back
+   * into the DLQ it just came from, indefinitely. Match on the suffix rather
+   * than the exact name so production and staging (`algosize-scans-dlq` and
+   * `algosize-scans-staging-dlq`) both route correctly from one rule.
    */
   async queue(batch, env, ctx) {
+    if (String(batch.queue || "").endsWith("-dlq")) {
+      await handleMonitorDlq(batch, env, ctx);
+      return;
+    }
     await handleMonitorQueue(batch, env, ctx);
   },
 };

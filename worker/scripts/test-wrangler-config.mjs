@@ -80,6 +80,39 @@ expect(unquote(readKey(sections.get("env.production"), "name")) === "algosize",
        "production worker is named algosize");
 
 // ---------------------------------------------------------------------------
+console.log("\nOAuth discovery is routed at the apex, by exact path\n");
+// ---------------------------------------------------------------------------
+// The MCP OAuth flow starts with a client fetching
+// https://algosize.com/.well-known/oauth-protected-resource — the spec puts
+// discovery at the ORIGIN ROOT, so the algosize.com/api/* route does not
+// cover it. src/index.js has registered both handlers all along; without the
+// zone routes below the requests never reach this Worker at all, and the
+// Claude.ai "add a connector" path dead-ends before it starts.
+//
+// Asserted here because a missing route is invisible in every other check:
+// the code is present, the tests pass, the deploy succeeds, and only a real
+// browser attempting a real connection ever finds out.
+for (const [envName, host] of [["production", "algosize.com"],
+                               ["staging", "staging.algosize.com"]]) {
+  const envLines = sections.get(`env.${envName}`) || [];
+  const patterns = envLines
+    .map((l) => /pattern\s*=\s*"([^"]+)"/.exec(l))
+    .filter(Boolean).map((m) => m[1]);
+
+  for (const doc of ["oauth-protected-resource", "oauth-authorization-server"]) {
+    const want = `${host}/.well-known/${doc}`;
+    expect(patterns.includes(want), `${envName}: routes ${want}`);
+  }
+
+  // Exact paths, not a wildcard. /.well-known/* would claim every well-known
+  // path on the zone — ACME challenges among them — and this Worker answers
+  // JSON 404 for the ones it does not implement, which would break issuance
+  // rather than falling through to the site Worker.
+  expect(!patterns.some((pat) => pat.includes("/.well-known/*")),
+    `${envName}: no /.well-known/* wildcard — it would claim ACME and every other well-known path`);
+}
+
+// ---------------------------------------------------------------------------
 console.log("\nworkers.dev must be explicit wherever routes are set\n");
 // ---------------------------------------------------------------------------
 

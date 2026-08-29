@@ -519,6 +519,67 @@ export async function handleMonitorQueue(batch, env, ctx, opts = {}) {
 }
 
 /**
+ * The dead-letter consumer — where a monitor message goes to be noticed.
+ *
+ * `algosize-scans-dlq` has existed in production since 2026-08-18 and had no
+ * consumer bound to it, which made it a hole rather than a safety net: a
+ * message that exhausted its three retries landed there, was retained for the
+ * queue's retention window (four days by default), and was then purged. No
+ * alert, no D1 row beyond whatever `recordMonitorAttempt` wrote on the
+ * retryable attempts, and no way afterwards to know it had happened. A
+ * permanently-broken monitor simply went quiet, which is indistinguishable
+ * from a repository that stopped having problems.
+ *
+ * This does NOT re-run the sweep. A message reaches the DLQ only after
+ * runMonitorCheck threw three times, and the throw path is reserved for
+ * conditions a retry could plausibly fix (5xx from GitHub or OSV) — three
+ * consecutive failures means the retry premise was wrong, and a fourth attempt
+ * would fail the same way while looking like progress. The job here is
+ * visibility: say loudly that a monitor gave up, and record the attempt so the
+ * dashboard stops rendering the row as merely stale.
+ *
+ * Always acks. A retry() here would return the message to the DLQ it is
+ * already in, and a DLQ with no onward destination retries until retention
+ * expires — turning one dead message into hundreds of duplicate alerts for the
+ * same dead monitor.
+ */
+export async function handleMonitorDlq(batch, env, ctx) {
+  for (const message of batch.messages || []) {
+    const monitorId = message.body && message.body.monitorId;
+    try {
+      await captureException(
+        env, ctx,
+        new Error(`monitor ${monitorId || "(unknown)"} exhausted its retries and was dead-lettered`),
+        {
+          tags:  { source: "monitors", phase: "dead_letter" },
+          extra: {
+            monitorId: monitorId || null,
+            // Cloudflare tracks this across the original queue's attempts, so
+            // it says how many times the sweep actually ran before giving up.
+            attempts: message.attempts ?? null,
+            queue: batch.queue || null,
+          },
+        },
+      );
+      // The monitor row should say "failed", not sit at whatever the last
+      // retryable attempt left. recordMonitorAttempt deliberately touches no
+      // baseline, so this cannot corrupt the next successful sweep's diff.
+      if (monitorId) {
+        await recordMonitorAttempt(env, monitorId, {
+          status: "failed",
+          error:  "dead_lettered",
+          at:     Math.floor(Date.now() / 1000),
+        });
+      }
+    } catch {
+      // Observability failing must not strand the message. There is nowhere
+      // for it to go from here, and a throw would abort the rest of the batch.
+    }
+    message.ack();
+  }
+}
+
+/**
  * One line per secondary analyzer that alerted, for the Slack body.
  *
  * Kept beside the caller rather than in routing.js because it reads the diff

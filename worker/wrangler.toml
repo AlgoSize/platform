@@ -210,6 +210,25 @@ workers_dev = true
 # Worker. Mirrors the staging block below. See DEPLOY.md §4.2.
 routes = [
   { pattern = "algosize.com/api/*", zone_name = "algosize.com" },
+  # OAuth discovery. The spec puts these at the ORIGIN root, not under a
+  # prefix — a client given https://algosize.com/api/mcp fetches
+  # https://algosize.com/.well-known/oauth-protected-resource and nothing
+  # else. Without these two the Claude.ai "add a connector" flow cannot
+  # start at all, which is the one connection method the dashboard
+  # advertises that API keys do not already cover.
+  #
+  # EXACT paths, deliberately. algosize.com/* routes to the algosize-site
+  # Worker (wrangler.jsonc, DEPLOY.md §9.3); Cloudflare picks the most
+  # specific match, so these two win for their own paths and change nothing
+  # else on the apex. A wildcard like /.well-known/* would claim paths this
+  # Worker does not serve — ACME challenges among them — and hand them a
+  # JSON 404 instead of letting the site Worker answer.
+  #
+  # src/index.js already registers both handlers at these paths, plus
+  # /api/.well-known/… aliases that work under `wrangler dev` (no zone
+  # routes at all) and during the ~2 minutes these take to propagate.
+  { pattern = "algosize.com/.well-known/oauth-protected-resource",   zone_name = "algosize.com" },
+  { pattern = "algosize.com/.well-known/oauth-authorization-server", zone_name = "algosize.com" },
 ]
 
 [env.production.vars]
@@ -349,6 +368,11 @@ dead_letter_queue = "algosize-scans-dlq"
 name   = "algosize-staging"
 routes = [
   { pattern = "staging.algosize.com/api/*", zone_name = "algosize.com" },
+  # Mirrors production — see the note there. Staging gets them too so the
+  # OAuth flow is exercisable somewhere that is not production, which is the
+  # only place a consent-screen change can be tried against a real browser.
+  { pattern = "staging.algosize.com/.well-known/oauth-protected-resource",   zone_name = "algosize.com" },
+  { pattern = "staging.algosize.com/.well-known/oauth-authorization-server", zone_name = "algosize.com" },
 ]
 
 [env.staging.vars]
