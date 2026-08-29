@@ -33,7 +33,7 @@ Never paste an API key, token, session id or cookie value back into chat.
 Report only the outputs each task names.
 
 --------------------------------------------------------------------------
-TASK 1 — apply migration 0021 to production D1
+TASK 1 — apply migrations 0021 and 0022 to production D1
 --------------------------------------------------------------------------
 
 The migration adds one nullable column and one index to an existing table:
@@ -47,10 +47,16 @@ dropped, and existing rows keep working with session_ref NULL. There is
 nothing to back up beyond the standard D1 point-in-time recovery, and no
 downtime window is needed.
 
-Run it:
+0022 adds one nullable column to `monitors`, and is what lets the scorecard
+say "not measured" instead of rendering a skipped analyzer's empty baseline
+as a measured zero. Same additive, non-destructive shape.
+
+Run them in order:
 
   cd worker
   npx wrangler d1 execute algosize --file=migrations/0021_mcp_session_ref.sql \
+    --remote --env production --config wrangler.toml
+  npx wrangler d1 execute algosize --file=migrations/0022_monitor_skips.sql \
     --remote --env production --config wrangler.toml
 
 If staging is live, apply it there first with --env staging and the staging
@@ -68,10 +74,11 @@ Open this in a browser where you are signed in as an Algosize admin:
 
 Paste ONLY the JSON response. No cookies, no tokens, no API keys.
 
-Expect migration "0021" present and applied, with its single check
-(mcp_tool_calls.session_ref) passing, and ok:true overall with 21 migrations.
+Expect migrations "0021" and "0022" present and applied — their checks are
+mcp_tool_calls.session_ref and monitors.last_skips_json — with ok:true overall
+and 22 migrations.
 
-If 0021 reports NOT applied, say so and stop — do not re-run Task 1 more than
+If either reports NOT applied, say so and stop — do not re-run Task 1 more than
 once. A repeated ALTER TABLE on a column that already exists is an error, not
 an idempotent no-op, and the second failure would be reported as though the
 first had not landed.
@@ -94,6 +101,51 @@ is exactly what they would be. Nothing breaks; the feature just does nothing.
 ```
 
 ---
+
+--------------------------------------------------------------------------
+TASK 3 — stop metering Algosize's own organisation
+--------------------------------------------------------------------------
+
+The CI gates burned this account's five free monthly analyses the day the
+API key was first set, and every pull request afterwards failed with HTTP
+402. The gates no longer go red for that (it is a warning and a skip now),
+but they also stop analysing, so our own repository goes unaudited.
+
+INTERNAL_ORG_IDS is a comma-separated list of organisation ids that are
+entitled without a subscription. It is checked before any plan rule, so a
+Stripe webhook cannot switch our metering back on.
+
+First, find the org id — it is NOT the email. Run:
+
+  cd worker
+  npx wrangler d1 execute algosize --remote --env production --config wrangler.toml \
+    --command "SELECT o.org_id, o.name, o.plan FROM organisations o
+               JOIN org_members m ON m.org_id = o.org_id
+               WHERE m.role = 'owner' ORDER BY o.created_at"
+
+Report the org_id / name / plan rows. No emails — the join is on role, and
+the columns selected deliberately exclude any member address.
+
+Then set the variable for the org that is Algosize's own:
+
+  npx wrangler secret put INTERNAL_ORG_IDS --env production --config wrangler.toml
+
+Paste just the org id when prompted (comma-separate if there is more than
+one). Deploy is not required for a secret to take effect, but confirm with:
+
+  npx wrangler deployments list --env production --config wrangler.toml
+
+Report: the org rows, and confirmation that the variable was set. Never
+paste the API key or any session value.
+
+--------------------------------------------------------------------------
+WHAT TO EXPECT AFTERWARDS
+--------------------------------------------------------------------------
+
+The next CI run analyses instead of reporting 402, and /api/me for that org
+reports reason "internal_org" rather than claiming an active subscription.
+Every other organisation is unaffected and still metered — that is asserted
+by a test, not just intended.
 
 ## Optional, new with the tree-discovery fix: GITHUB_TOKEN
 
