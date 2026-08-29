@@ -1,7 +1,7 @@
 # MCP-PLAN.md — Algosize Model Context Protocol server
 
 Status: **in progress.** The server, its 22 tools and OAuth 2.1 are built and
-tested; the dashboard view and admin panel are not (§7). What follows describes
+tested, as are the dashboard view and the admin adoption panel. What follows describes
 what is actually in the tree, not what was intended — where the original plan
 was wrong, the correction is recorded rather than the plan quietly edited.
 
@@ -211,7 +211,24 @@ children of their own refresh token.
 
 ## 7. Still to do
 
-- **Dashboard `#/mcp` view** — the design brief is written; no UI yet.
+Nothing in the build itself. What remains is operator work, in
+`DEPLOY-mcp.md`: apply migration 0019 to production D1, decide on Kimi K3
+(§8 — it needs an AI Gateway), and flip `MCP_ENABLED` when the surface should
+go live.
+
+Deferred by choice, with the reasoning recorded rather than lost:
+
+- **`GET /api/mcp` as a real SSE stream.** It answers 405 today, which the
+  spec allows, because every tool is request/response and holding an idle
+  stream open would consume a subrequest for the session's life to deliver
+  nothing. It becomes a stream when progress notifications for long
+  architecture scans exist to send.
+- **A `return_to` round-trip through the magic-link email**, so an
+  unauthenticated `authorize` resumes without the interstitial. Now that
+  `#/mcp` exists it could host the consent UI directly, which is the cleaner
+  version of this.
+- **A tighter rate limit on metered `tools/call`** than the 120/min envelope
+  limit.
 - **Admin panel MCP adoption** section reading `mcp_tool_calls`.
 - **`GET /api/mcp` as a real SSE stream**, once progress notifications exist.
 - **Rate limits** beyond the 120/min envelope limit — a tighter one on metered
@@ -266,7 +283,7 @@ bugs are in the wiring), `test-llm-routing.mjs`, and `mcp/test/smoke.test.mjs`.
 runs on push to main, so without this the MCP suite's first CI exposure would
 be at merge time, when a failure fails a production deploy.
 
-Full worker suite: 59 scripts, green.
+Full worker suite: 60 scripts, green.
 
 ---
 
