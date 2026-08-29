@@ -46,7 +46,15 @@ export function rankOf(label) {
 // The function slicer moved into the analyzer module so the scheduled
 // monitors' optimizer pass and this script share one definition. Re-exported
 // here because existing tests (and any tooling) import it from this script.
-export { extractFunction } from "../src/analyzers/optimizer.js";
+//
+// Imported AND re-exported, not `export { x } from "..."`. That form is a pure
+// re-export: it forwards the name to importers without creating a local
+// binding, so the call site below saw a ReferenceError. The bug was latent
+// because that path only runs when an audited function actually changes —
+// every PR that touched nothing in optimizer.config.json took the
+// "no audited functions changed" branch and never reached it.
+import { extractFunction } from "../src/analyzers/optimizer.js";
+export { extractFunction };
 
 function parseArgs(argv) {
   const args = { all: false, base: "origin/main", refactor: false,
