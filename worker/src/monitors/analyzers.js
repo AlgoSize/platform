@@ -34,10 +34,11 @@ import { runOptimizer, extractFunction } from "../analyzers/optimizer.js";
 import { estimateHandler } from "../handlers/estimate.js";
 import { runInSandbox } from "../handlers/analyze.js";
 
-// Root-level manifests the Architecture X-ray can parse, fetched by name —
-// the same access pattern the lockfile audit uses. Manifests in
-// subdirectories are out of reach of name-based fetching and that limit is
-// stated in the dashboard copy rather than silently narrowing the promise.
+// Root-level manifests the Architecture X-ray can parse, fetched by name.
+// This list is now the FALLBACK: discovery goes through the repository's git
+// tree (discoverArchFiles below), which reaches manifests in subdirectories.
+// The by-name fetch survives for repos where the tree listing is unavailable,
+// so behaviour never regresses below what shipped first.
 export const ARCH_MANIFEST_NAMES = Object.freeze([
   "wrangler.toml",
   "docker-compose.yml", "docker-compose.yaml",
@@ -94,6 +95,108 @@ export async function fetchRepoFilesByName({ owner, repo, branch }, names, fetch
   return { files: [], throttled: false };
 }
 
+// ---------------------------------------------------------------------------
+// Tree discovery — how the X-ray reaches below the repository root
+// ---------------------------------------------------------------------------
+//
+// The by-name fetch above can only see the root, and real repositories keep
+// their manifests where their deployables live — worker/wrangler.toml, not
+// wrangler.toml. This bit in production on our own repository: the sweep
+// found nothing at the root, skipped quietly (as designed, to avoid config
+// noise), and "Draw the map" reported nothing to map for a repo with three
+// deployable units. One git-tree listing fixes discovery while keeping the
+// access class identical: committed files, from GitHub, nothing else.
+
+// How many files a discovery pass may fetch. Manifests are few; the cap
+// exists for the pathological repo, and when it bites the analyzer's own
+// coverage reporting says what was read rather than pretending completeness.
+export const MAX_ARCH_TREE_FILES = 30;
+
+// Basenames graph.js can actually parse (its dispatch at graph.js:649-655).
+// Kubernetes yaml cannot be recognised by name alone (any .ya?ml with a
+// `kind:`), so yaml is taken only from directories that advertise the intent.
+const ARCH_TREE_FILE_RE = /^(wrangler\.toml|docker-compose\.ya?ml|compose\.ya?ml|Dockerfile[^/]*|_config\.ya?ml|[^/]+\.tf)$/;
+const K8S_DIR_RE        = /(^|\/)(k8s|kube(rnetes)?|manifests?|deploy(ment)?s?)(\/|$)/i;
+const K8S_FILE_RE       = /\.ya?ml$/;
+// Source entry points, for the cross-cluster import edges. SOURCE_RE in
+// graph.js accepts any js/ts file; fetching every one would turn a listing
+// into a crawl, so discovery takes only entry-point names at shallow depth.
+const ENTRY_SOURCE_RE   = /^(index|main|server|app|worker)\.(js|mjs|cjs|jsx|ts|tsx)$/;
+const MAX_ENTRY_DEPTH   = 3;
+const EXCLUDED_DIR_RE   = /(^|\/)(node_modules|vendor|dist|build|out|coverage|_site|\.git|attached_assets|test|tests|__tests__|fixtures|examples?)(\/|$)/;
+
+function archTreeCategory(path) {
+  const parts = String(path).split("/");
+  const name  = parts[parts.length - 1];
+  if (EXCLUDED_DIR_RE.test(path)) return null;
+  if (ARCH_TREE_FILE_RE.test(name)) return 0;
+  if (K8S_FILE_RE.test(name) && K8S_DIR_RE.test(path)) return 1;
+  if (ENTRY_SOURCE_RE.test(name) && parts.length <= MAX_ENTRY_DEPTH) return 2;
+  return null;
+}
+
+/**
+ * Discover and fetch the X-ray's inputs through the repository's git tree.
+ *
+ * One listing call, then bounded raw fetches — manifests before k8s yaml
+ * before source entries, shallow before deep, so the cap always spends
+ * itself on the files that carry the most graph.
+ *
+ * Returns the same shape as fetchRepoFilesByName, plus { unavailable: true }
+ * when the tree could not be listed on any candidate branch — the caller
+ * falls back to the root-name fetch, so a private or renamed repo behaves
+ * exactly as it did before discovery existed. GITHUB_TOKEN, when set, is our
+ * own read token for public content and raises the API rate limit; it is
+ * never required and never logged.
+ */
+export async function discoverArchFiles({ owner, repo, branch }, fetchImpl, env) {
+  const headers = {
+    "User-Agent": "algosize-monitor",
+    Accept: "application/vnd.github+json",
+  };
+  if (env && env.GITHUB_TOKEN) headers.Authorization = `Bearer ${env.GITHUB_TOKEN}`;
+
+  const branches = branch ? [branch] : ["main", "master"];
+  for (const b of branches) {
+    const url = `https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(b)}?recursive=1`;
+    let res;
+    try { res = await fetchImpl(url, { headers }); } catch { continue; }
+    if (res.status === 429 || res.status === 403 || res.status >= 500) {
+      return { files: [], throttled: true };
+    }
+    if (!res.ok) continue;
+
+    let body;
+    try { body = await res.json(); } catch { continue; }
+    const entries = Array.isArray(body && body.tree) ? body.tree : [];
+
+    const wanted = entries
+      .filter((e) => e && e.type === "blob" && typeof e.path === "string")
+      .filter((e) => !(typeof e.size === "number" && e.size > MAX_FILE_BYTES))
+      .map((e) => ({ path: e.path, category: archTreeCategory(e.path) }))
+      .filter((e) => e.category !== null)
+      .sort((x, y) => x.category - y.category
+        || x.path.split("/").length - y.path.split("/").length
+        || (x.path < y.path ? -1 : 1))
+      .slice(0, MAX_ARCH_TREE_FILES);
+
+    let throttled = false;
+    const results = await Promise.all(wanted.map(async ({ path }) => {
+      const raw = `https://raw.githubusercontent.com/${owner}/${repo}/${b}/${encodeURI(path)}`;
+      let r;
+      try { r = await fetchImpl(raw); } catch { return null; }
+      if (r.status === 429 || r.status === 403 || r.status >= 500) { throttled = true; return null; }
+      if (!r.ok) return null;
+      const text = await r.text();
+      if (text.length > MAX_FILE_BYTES) return null;
+      return { path, content: text };
+    }));
+    if (throttled) return { files: [], throttled: true };
+    return { files: results.filter(Boolean), throttled: false };
+  }
+  return { files: [], throttled: false, unavailable: true };
+}
+
 export function parseGithubRepoUrl(repoUrl) {
   let u;
   try { u = new URL(repoUrl); } catch { return null; }
@@ -124,8 +227,15 @@ export async function runArchForMonitor(monitor, env, fetchImpl) {
   const repo = parseGithubRepoUrl(monitor.repoUrl);
   if (!repo) return { status: "skipped", reason: "bad_repo_url" };
 
-  const fetched = await fetchRepoFilesByName(
-    { ...repo, branch: monitor.branch }, ARCH_MANIFEST_NAMES, fetchImpl);
+  let fetched = await discoverArchFiles(
+    { ...repo, branch: monitor.branch }, fetchImpl, env);
+  if (fetched.unavailable) {
+    // The tree could not be listed (private repo, rename, API outage that
+    // read as 404). Fall back to the root-name fetch so this path never does
+    // worse than it did before discovery existed.
+    fetched = await fetchRepoFilesByName(
+      { ...repo, branch: monitor.branch }, ARCH_MANIFEST_NAMES, fetchImpl);
+  }
   if (fetched.throttled) return { status: "skipped", reason: "github_throttled" };
   if (!fetched.files.length) return { status: "no_manifests" };
 

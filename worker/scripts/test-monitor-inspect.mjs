@@ -139,8 +139,12 @@ group("a repo that cannot be read never renders as an empty result");
     analyzers: ["vuln", "arch", "estimate", "algo"],
   });
 
-  // Every fetch 404s: no manifests, no compose, no optimizer config.
+  // Every fetch 404s: no manifests, no compose, no optimizer config. Handed
+  // to the direct calls AND set as env.FETCH — the endpoint call below
+  // resolves its fetch from env, and without this it reaches the real
+  // network, where a proxy 403 reads as GitHub throttling.
   const empty = fakeGithub({});
+  env.FETCH = empty;
 
   const arch = await inspectMonitor(env, null, m, "arch", empty);
   expect(arch.status === "unavailable" && arch.reason === "no_manifests",

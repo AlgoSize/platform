@@ -95,6 +95,24 @@ is exactly what they would be. Nothing breaks; the feature just does nothing.
 
 ---
 
+## Optional, new with the tree-discovery fix: GITHUB_TOKEN
+
+The Architecture X-ray now discovers a watched repository's manifests through
+the GitHub git-tree API instead of guessing root-level names. Unauthenticated,
+that API allows 60 requests/hour per IP — and Workers egress IPs are shared,
+so the sweep can hit someone else's exhausted quota. A rate-limited listing is
+handled honestly (the analyzer skips without touching baselines), but setting
+a token makes the limit a non-issue:
+
+  cd worker
+  npx wrangler secret put GITHUB_TOKEN --env production --config wrangler.toml
+
+Use a fine-grained personal access token with **public repository read-only**
+access and nothing else. This is OUR read token for public content — not a
+customer credential, and not the §7.2 connector; the invariant about customer
+cloud accounts is untouched. Skip this entirely if you prefer: the feature
+works without it, just with a shared rate limit.
+
 ## Still open from the earlier prompt files
 
 Not part of this release, and not blocked by it. Listed so they do not get
