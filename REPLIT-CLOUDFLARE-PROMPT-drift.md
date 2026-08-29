@@ -120,8 +120,13 @@ First, find the org id — it is NOT the email. Run:
   cd worker
   npx wrangler d1 execute algosize --remote --env production --config wrangler.toml \
     --command "SELECT o.org_id, o.name, o.plan FROM organisations o
-               JOIN org_members m ON m.org_id = o.org_id
+               JOIN memberships m ON m.org_id = o.org_id
                WHERE m.role = 'owner' ORDER BY o.created_at"
+
+The table is `memberships` (migrations/0004_orgs.sql). An earlier revision of
+this file said `org_members`, which does not exist — the query failed against
+production with SQLITE_ERROR before anyone noticed the name had never been
+checked against the schema.
 
 Report the org_id / name / plan rows. No emails — the join is on role, and
 the columns selected deliberately exclude any member address.

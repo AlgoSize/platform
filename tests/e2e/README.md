@@ -22,7 +22,8 @@ checklist in [`TESTING.md`](../../TESTING.md) — see the
 
 ## Run it locally
 
-You need Ruby 3.2 + bundler (for Jekyll) and Node 20 + npm.
+You need Ruby 3.2 + bundler (for Jekyll) and Node 22 + npm — this suite boots
+`wrangler dev`, and wrangler 4 exits on anything older.
 
 ```bash
 # one-time setup

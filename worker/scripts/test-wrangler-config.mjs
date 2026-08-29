@@ -19,7 +19,7 @@
 //
 // Run with:  node scripts/test-wrangler-config.mjs
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -334,6 +334,83 @@ console.log("\nthe Worker actually bundles\n");
       expect(bytes > 0 && bytes < 3 * 1024 * 1024,
         `bundle is a sane size (${(bytes / 1024).toFixed(0)} KB uncompressed)`);
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+console.log("\nthe e2e Worker boots with remote bindings off\n");
+// ---------------------------------------------------------------------------
+//
+// wrangler 4 opens a remote proxy session for any binding it cannot emulate,
+// and `[ai]` is one — Workers AI has no local implementation. Without a
+// CLOUDFLARE_API_TOKEN (and the e2e job must not have one) wrangler exits 1
+// before it listens, and all Playwright can say is "Process from
+// config.webServer was not able to start". Asserted here because that error
+// names neither wrangler, nor the AI binding, nor the flag that fixes it.
+{
+  const cfg = readFileSync(
+    join(__dirname, "..", "..", "tests", "e2e", "playwright.config.js"), "utf8");
+  const devCmd = (cfg.match(/^\s*command:\s*"([^"]*wrangler dev[^"]*)"/m) || [])[1];
+  expect(Boolean(devCmd), "playwright.config.js starts the Worker with `wrangler dev`");
+  if (devCmd) {
+    expect(/(^|\s)(--local|-l)(\s|$)/.test(devCmd),
+      "and passes --local, so the AI binding reports itself unsupported instead of " +
+      "demanding a CLOUDFLARE_API_TOKEN the test job deliberately does not have");
+  }
+}
+
+// ---------------------------------------------------------------------------
+console.log("\nevery CI job runs a Node new enough for the wrangler we pin\n");
+// ---------------------------------------------------------------------------
+//
+// wrangler's bin refuses to start below its own floor:
+//
+//   if (semiver(process.versions.node, MIN_NODE_VERSION) < 0) { ... exit }
+//
+// so a wrangler upgrade that raises that floor above the workflows' pin does
+// not fail a test — it fails the DEPLOY, and only once it is on main. The
+// 3.x → 4.x upgrade did exactly this: the floor went 18 → 22 while every
+// workflow still said 20.
+//
+// The floor is read from the lockfile rather than node_modules so this holds
+// before `npm ci` has ever run, and so it tracks the version actually pinned
+// rather than whatever happens to be installed.
+//
+// Checked against EVERY node-version in .github/workflows, not only the jobs
+// that name wrangler on a run: line. e2e.yml is the reason: it boots wrangler
+// through Playwright's `webServer`, so no run: line mentions it, and any
+// narrower scan misses the one job that actually starts the binary.
+{
+  const lockPath = join(__dirname, "..", "package-lock.json");
+  const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+  const entry = lock.packages && lock.packages["node_modules/wrangler"];
+  expect(Boolean(entry), "worker/package-lock.json pins wrangler");
+
+  const declared = entry && entry.engines && entry.engines.node;
+  expect(Boolean(declared),
+    "and the lockfile records wrangler's engines.node — without it there is no floor to check");
+
+  const floor = declared ? parseInt(/(\d+)/.exec(declared)[1], 10) : null;
+  if (floor !== null) {
+    ok(`wrangler ${entry.version} requires Node >= ${floor} (engines.node "${declared}")`);
+
+    const wfDir = join(__dirname, "..", "..", ".github", "workflows");
+    const files = readdirSync(wfDir).filter((f) => /\.ya?ml$/.test(f)).sort();
+    // If the scan ever matches nothing — a rename, a syntax change in
+    // setup-node — it must say so rather than passing by finding no work.
+    let pins = 0;
+    for (const file of files) {
+      const text = readFileSync(join(wfDir, file), "utf8");
+      for (const m of text.matchAll(/^\s*node-version:\s*["']?(\d+)/gm)) {
+        pins++;
+        const major = parseInt(m[1], 10);
+        expect(major >= floor,
+          `${file}: node-version ${major} >= wrangler's floor of ${floor}`);
+      }
+    }
+    expect(pins > 0,
+      "found at least one node-version pin to check — zero means the scan stopped matching, " +
+      "not that every job is fine");
   }
 }
 

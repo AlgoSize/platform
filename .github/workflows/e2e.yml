@@ -26,7 +26,8 @@ jobs:
 
       # ---------------------------------------------------------------
       # Toolchains. The site is Jekyll (Ruby 3.2 + bundler) and the
-      # Worker + Playwright suite are Node 20.
+      # Worker + Playwright suite are Node 22 — wrangler 4 refuses to start
+      # below 22, and this job boots it via Playwright's `webServer`.
       # ---------------------------------------------------------------
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
@@ -38,19 +39,27 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       # ---------------------------------------------------------------
-      # Dependencies. Each side has its own lockless install (no
-      # package-lock.json committed) so we use plain `npm install`.
+      # Dependencies. `npm ci`, not `npm install` — both sides DO commit a
+      # package-lock.json (the comment here claimed otherwise for a long
+      # time, and it was simply wrong). The difference is not cosmetic:
+      # `npm install` is free to resolve something the lock does not name
+      # and to leave the lock describing a tree nobody installs, which is
+      # how tests/e2e/package-lock.json came to carry a whole miniflare →
+      # undici/ws subtree that package.json never declared and no spec ever
+      # imported. Nothing installed it, so nothing broke — but the audit
+      # gate reads the LOCKFILE, so those advisories counted against every
+      # pull request. `npm ci` fails loudly on that drift instead.
       # ---------------------------------------------------------------
       - name: Install Worker deps
         working-directory: worker
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Install Playwright deps
         working-directory: tests/e2e
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Install Chromium for Playwright
         working-directory: tests/e2e

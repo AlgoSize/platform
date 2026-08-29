@@ -15,8 +15,8 @@ results in [Appendix A](#appendix-a--dynamic-probe-results).
 You need:
 
 - **Ruby 3.2 + bundler** (Jekyll site).
-- **Node 20 + npm** (Worker tooling — wrangler is already in
-  `worker/node_modules`).
+- **Node 22 + npm** (Worker tooling — wrangler is already in
+  `worker/node_modules`, and wrangler 4 refuses to start below 22).
 - A **Stripe test-mode account** with:
   - `sk_test_…` secret key,
   - a recurring price ID (`price_…`) attached to a product,
