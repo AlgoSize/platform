@@ -32,13 +32,49 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Collect source
+      - name: Collect manifests and source
         if: steps.key.outputs.skip != 'true'
         id: collect
         run: |
-          # Source only, and bounded. Build output and vendored dependencies
-          # carry no signal about YOUR architecture and would dominate the graph.
-          find .             -path ./node_modules -prune -o             -path ./.git -prune -o             -path ./dist -prune -o             -path ./build -prune -o             -path ./vendor -prune -o             -type f ( -name '*.js' -o -name '*.mjs' -o -name '*.ts' -o -name '*.tsx' -o -name '*.py' -o -name '*.go' )             -size -200k -print | head -400 | sed 's|^./||' > files.txt
+          # MANIFESTS FIRST, then source. This order is the whole point: the
+          # analyzer builds its clusters and services from manifests
+          # (wrangler.toml, compose, Dockerfile, Terraform, k8s) and uses
+          # source only for the import edges between them. Collecting source
+          # alone returns a graph with zero clusters and zero findings, which
+          # renders as "worst: none" — a clean bill of health for a repository
+          # nobody actually mapped. That is the failure this ordering exists
+          # to prevent, and truncation at the cap must never cost a
+          # manifest to make room for one more source file.
+          #
+          # Build output and vendored dependencies carry no signal about YOUR
+          # architecture and would dominate the graph, so they are pruned.
+          find . \
+            -name node_modules -prune -o \
+            -name .git -prune -o \
+            -name dist -prune -o \
+            -name build -prune -o \
+            -name vendor -prune -o \
+            -name _site -prune -o \
+            -type f \( -name 'wrangler.toml' -o -name 'docker-compose.y*ml' -o -name 'compose.y*ml' -o -name 'Dockerfile*' -o -name '*.tf' -o -name '_config.y*ml' \) \
+            -size -200k -print | sed 's|^./||' > manifests.txt
+
+          find . \
+            -name node_modules -prune -o \
+            -name .git -prune -o \
+            -name dist -prune -o \
+            -name build -prune -o \
+            -name vendor -prune -o \
+            -name _site -prune -o \
+            -type f \( -name '*.js' -o -name '*.mjs' -o -name '*.ts' -o -name '*.tsx' -o -name '*.py' -o -name '*.go' \) \
+            -size -200k -print | sed 's|^./||' > source.txt
+
+          # Manifests are never truncated; source fills whatever budget is left.
+          MANIFESTS=$(wc -l < manifests.txt | tr -d ' ')
+          BUDGET=$((400 - MANIFESTS))
+          [ "$BUDGET" -lt 0 ] && BUDGET=0
+          cat manifests.txt > files.txt
+          head -"$BUDGET" source.txt >> files.txt
+          echo "::notice::Collected $MANIFESTS manifest(s) and $(( $(wc -l < files.txt) - MANIFESTS )) source file(s)."
 
           COUNT=$(wc -l < files.txt | tr -d ' ')
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
@@ -53,7 +89,10 @@ jobs:
         env:
           ALGOSIZE_API_KEY: ${{ secrets.ALGOSIZE_API_KEY }}
         run: |
-          jq -Rn --arg repo "${{ github.repository }}"                  --arg ref "${{ github.head_ref }}"                  --arg sha "${{ github.event.pull_request.head.sha }}"             '{repo:$repo, ref:$ref, commit_sha:$sha, arch_fail_on:"none",
+          jq -Rn --arg repo "${{ github.repository }}" \
+                 --arg ref "${{ github.head_ref }}" \
+                 --arg sha "${{ github.event.pull_request.head.sha }}" \
+            '{repo:$repo, ref:$ref, commit_sha:$sha, arch_fail_on:"none",
               files:[inputs | {path:., content:""}]}' < files.txt > skeleton.json
 
           # Read each file into its entry. Done in jq rather than in the shell
@@ -72,8 +111,27 @@ jobs:
           json.dump(skel, open("/dev/stdout", "w"))
           PY
 
-          HTTP=$(curl -sS -o response.json -w '%{http_code}'             -X POST "https://algosize.com/api/ci/runs"             -H "Authorization: Bearer $ALGOSIZE_API_KEY"             -H "Content-Type: application/json"             --data @payload.json)
+          HTTP=$(curl -sS -o response.json -w '%{http_code}' \
+            -X POST "https://algosize.com/api/ci/runs" \
+            -H "Authorization: Bearer $ALGOSIZE_API_KEY" \
+            -H "Content-Type: application/json" \
+            --data @payload.json)
 
+          # A 402 is the monthly run allowance, not a defect in this pull
+          # request. It is a WARNING and a skip, never a red build: the free
+          # tier is five runs, an active repository reaches that in an
+          # afternoon, and reddening every pull request until someone pays is
+          # the fastest way to get this gate deleted — which costs the team
+          # their audit as well as us the customer. Exactly the reasoning the
+          # missing-key check above is built on, and it applies harder here,
+          # because a missing key is a one-time setup step while this recurs
+          # every month.
+          if [ "$HTTP" = "402" ]; then
+            echo "::warning::$(jq -r '.message // "Monthly run allowance exhausted."' response.json)"
+            echo "quota=true" >> "$GITHUB_OUTPUT"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$HTTP" != "200" ]; then
             echo "::warning::The architecture endpoint returned HTTP $HTTP — annotating without a verdict."
             echo "skip=true" >> "$GITHUB_OUTPUT"
@@ -81,10 +139,10 @@ jobs:
           fi
 
           jq -r '.architecture
-                 | "clusters=(.summary.clusters // 0)",
-                   "findings=(.summary.findings // 0)",
-                   "worst=(.worstSeverity // "none")",
-                   "failed=(.failed)"' response.json >> "$GITHUB_OUTPUT"
+                 | "clusters=\(.summary.clusters // 0)",
+                   "findings=\(.summary.findings // 0)",
+                   "worst=\(.worstSeverity // "none")",
+                   "failed=\(.failed)"' response.json >> "$GITHUB_OUTPUT"
 
       - name: Comment
         if: steps.key.outputs.skip != 'true' && steps.collect.outputs.skip != 'true' && steps.run.outputs.skip != 'true'
@@ -98,7 +156,8 @@ jobs:
             echo
             echo "${{ steps.collect.outputs.count }} files · ${{ steps.run.outputs.clusters }} clusters · ${{ steps.run.outputs.findings }} findings (worst: ${{ steps.run.outputs.worst }})"
           } > comment.md
-          gh pr comment "$PR" --body-file comment.md --edit-last ||             gh pr comment "$PR" --body-file comment.md
+          gh pr comment "$PR" --body-file comment.md --edit-last || \
+            gh pr comment "$PR" --body-file comment.md
 
           if [ "${{ steps.run.outputs.failed }}" = "true" ]; then
             echo "::error::Architecture findings exceeded the configured threshold."

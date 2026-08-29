@@ -23,6 +23,7 @@ import {
   advisoryKey, advisoryKeySet, hashKeySet, diffAdvisories, groupBySeverity,
 } from "../src/monitors/diff.js";
 import { sweepDueMonitors, runMonitorCheck, handleMonitorQueue, handleMonitorDlq } from "../src/monitors/run.js";
+import { discoverArchFiles, runArchForMonitor, MAX_ARCH_TREE_FILES } from "../src/monitors/analyzers.js";
 import {
   createMonitor, getMonitorById, listMonitorsDue, isDue, monitorLimitFor, setMonitorPaused,
   normalizeAnalyzers, recordMonitorRun,
@@ -1050,6 +1051,117 @@ console.log("\nthe dead-letter consumer\n");
 }
 
 // ---------- summary ----------
+// ---------------------------------------------------------------------------
+console.log("\nthe X-ray reaches manifests below the repository root\n");
+// ---------------------------------------------------------------------------
+// The failure this pins hit production on our own repository: every manifest
+// lives in a subdirectory (worker/wrangler.toml), the root-name fetch found
+// nothing, and "Draw the map" reported nothing to map for a repo with three
+// deployable units — while the sweep skipped quietly and the monitor badge
+// showed the vuln audit's clean result. Discovery now goes through the git
+// tree; these tests bind that path, and the binding was verified by
+// reverting runArchForMonitor to the names-only fetch and watching the
+// end-to-end case report no_manifests again.
+
+const DEEP_WRANGLER = 'name = "api"\n[[d1_databases]]\nbinding = "DB"\ndatabase_name = "app"\n';
+
+function makeTreeFetch({ tree, raw = {}, treeStatus = 200, rawThrottle = false }) {
+  return async (url, init) => {
+    const u = String(url);
+    if (u.includes("api.github.com") && u.includes("/git/trees/")) {
+      if (treeStatus !== 200) return new Response("nope", { status: treeStatus });
+      return new Response(JSON.stringify({ tree, truncated: false }), { status: 200 });
+    }
+    if (u.includes("raw.githubusercontent.com")) {
+      if (rawThrottle) return new Response("rate limited", { status: 403 });
+      const path = decodeURIComponent(u.split("/").slice(6).join("/"));
+      if (path in raw) return new Response(raw[path], { status: 200 });
+      return new Response("not found", { status: 404 });
+    }
+    return new Response("not found", { status: 404 });
+  };
+}
+
+{
+  const blob = (path, size = 100) => ({ path, type: "blob", size });
+  const tree = [
+    blob("worker/wrangler.toml"),
+    blob("worker-sandbox/wrangler.toml"),
+    blob("infra/k8s/app.yaml"),
+    blob("src/index.js"),
+    blob("src/lib/helpers.js"),                 // not an entry point — ignored
+    blob("node_modules/dep/wrangler.toml"),     // excluded directory
+    blob("tests/fixtures/docker-compose.yml"),  // excluded directory
+    blob("docs/notes.md"),                      // not a manifest
+    blob("big/terraform.tf", 999999999),        // over the size cap
+    { path: "worker", type: "tree" },           // directories are not files
+  ];
+  const raw = {
+    "worker/wrangler.toml":         DEEP_WRANGLER,
+    "worker-sandbox/wrangler.toml": 'name = "sandbox"\n',
+    "infra/k8s/app.yaml":           "kind: Deployment\nmetadata:\n  name: app\n",
+    "src/index.js":                 "import { x } from './lib/helpers.js';\n",
+  };
+  const fetchImpl = makeTreeFetch({ tree, raw });
+
+  const got = await discoverArchFiles({ owner: "o", repo: "deep", branch: "main" }, fetchImpl, {});
+  const paths = got.files.map((f) => f.path).sort();
+  expect(paths.join(",") === "infra/k8s/app.yaml,src/index.js,worker-sandbox/wrangler.toml,worker/wrangler.toml",
+    `discovery finds manifests, k8s yaml and entry sources below the root (got ${paths.join(",")})`);
+  expect(!paths.some((x) => x.includes("node_modules") || x.startsWith("tests/")),
+    "…and never reads vendored or fixture directories");
+  expect(!paths.includes("big/terraform.tf"),
+    "…and skips a file the tree already says is over the size cap");
+
+  // The cap spends itself on manifests first.
+  const many = [];
+  for (let i = 0; i < 40; i++) many.push(blob(`services/s${String(i).padStart(2, "0")}/wrangler.toml`));
+  many.push(blob("src/index.js"));
+  const capped = await discoverArchFiles({ owner: "o", repo: "wide", branch: "main" },
+    makeTreeFetch({ tree: many, raw: Object.fromEntries(many.filter((e) => e.type === "blob").map((e) => [e.path, DEEP_WRANGLER])) }), {});
+  expect(capped.files.length === MAX_ARCH_TREE_FILES,
+    `the fetch is bounded at ${MAX_ARCH_TREE_FILES} files`);
+  expect(!capped.files.some((f) => f.path === "src/index.js"),
+    "…and when it bites, a manifest beats a source entry for the last slot");
+
+  // GitHub saying "slow down" must not read as "these files no longer exist".
+  const throttled = await discoverArchFiles({ owner: "o", repo: "deep", branch: "main" },
+    makeTreeFetch({ tree, treeStatus: 403 }), {});
+  expect(throttled.throttled === true, "a rate-limited tree listing is throttled, not empty");
+  const rawThrottled = await discoverArchFiles({ owner: "o", repo: "deep", branch: "main" },
+    makeTreeFetch({ tree, rawThrottle: true }), {});
+  expect(rawThrottled.throttled === true, "…and so is a rate-limited content fetch after a good listing");
+
+  // A tree that cannot be listed at all (404 — private, renamed) says so, so
+  // the caller can fall back to the root-name fetch instead of reporting a
+  // repo with unreachable metadata as having no architecture.
+  const gone = await discoverArchFiles({ owner: "o", repo: "deep", branch: "main" },
+    makeTreeFetch({ tree, treeStatus: 404 }), {});
+  expect(gone.unavailable === true && gone.throttled === false,
+    "an unlistable tree reports unavailable, which routes to the fallback");
+
+  // End to end: the exact production shape — every manifest below the root.
+  const arch = await runArchForMonitor(
+    { repoUrl: "https://github.com/o/deep", branch: "main" }, {}, fetchImpl);
+  expect(arch.status === "ok",
+    `a repo whose only manifests live in subdirectories now maps (got ${arch.status})`);
+
+  // And the fallback end to end: tree 404s, but a root wrangler.toml exists.
+  const rootOnly = async (url, init) => {
+    const u = String(url);
+    if (u.includes("api.github.com")) return new Response("nope", { status: 404 });
+    if (u.includes("raw.githubusercontent.com") && u.endsWith("/wrangler.toml")
+        && !u.split("/").slice(6).join("/").includes("/")) {
+      return new Response(DEEP_WRANGLER, { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  };
+  const viaFallback = await runArchForMonitor(
+    { repoUrl: "https://github.com/o/rootonly", branch: "main" }, {}, rootOnly);
+  expect(viaFallback.status === "ok",
+    "a repo the tree API cannot list still maps from its root manifests — no regression");
+}
+
 console.log("");
 if (failures === 0) {
   console.log("\x1b[32m  all monitor tests passed\x1b[0m\n");

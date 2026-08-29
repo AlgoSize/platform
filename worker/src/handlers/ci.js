@@ -593,6 +593,16 @@ jobs:
             -H "Authorization: Bearer \${{ secrets.ALGOSIZE_API_KEY }}" \\
             -H "Content-Type: application/json" \\
             --data @payload.json)
+          # See the note in the other gates: a 402 is the monthly allowance,
+          # not a defect in this pull request. Warned and skipped rather than
+          # failed — but SAID OUT LOUD in the pull request comment below,
+          # because an audit that did not run must never be mistaken for one
+          # that found nothing.
+          if [ "$HTTP" = "402" ]; then
+            echo "::warning::$(jq -r '.message // "Monthly run allowance exhausted."' response.json)"
+            echo "quota=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$HTTP" != "200" ]; then
             echo "::error::Algosize returned HTTP $HTTP"
             cat response.json
@@ -635,6 +645,42 @@ jobs:
         with:
           sarif_file: algosize.sarif
           category: algosize
+
+      # The audit did not run because the allowance is spent. Said in the
+      # pull request, in the same sticky comment, so a reviewer reading the
+      # thread cannot mistake silence for a clean audit — the whole point of
+      # a gate is that its absence is visible.
+      - name: Say the audit did not run
+        if: github.event_name == 'pull_request' && steps.audit.outputs.quota == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const MARKER = '<!-- algosize-audit -->';
+            const body = [
+              MARKER,
+              '### Algosize dependency audit — not run',
+              '',
+              'This organisation has used its monthly analysis allowance, so **no audit ran for this commit**.',
+              'That is not a clean result: the dependencies in this pull request have not been checked.',
+              '',
+              'The allowance resets monthly, or an upgrade lifts it: https://algosize.com/#pricing',
+            ].join('\n');
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number, per_page: 100,
+            });
+            const existing = comments.find((c) => c.body && c.body.includes(MARKER));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, body,
+              });
+            }
 
       - name: Comment on the pull request
         if: github.event_name == 'pull_request' && steps.audit.outputs.run_id != ''
@@ -838,6 +884,15 @@ jobs:
                 body: JSON.stringify({ code, sampleInput: entry.sampleInput }),
               });
               const body = await res.json().catch(() => ({}));
+              // A spent allowance is a billing state, not a defect in this
+              // pull request. This gate already skipped rather than failed on
+              // any non-OK status, which was the right shape by accident;
+              // naming 402 explicitly means the log says WHY, in the server's
+              // own words, instead of "API 402 (quota_exceeded)".
+              if (res.status === 402) {
+                console.log("::warning::" + (body.message || "Monthly run allowance exhausted.") + " Complexity was not measured for " + label + ".");
+                continue;
+              }
               if (!res.ok) {
                 console.log("::warning::" + label + ": API " + res.status + " (" + (body.error || "error") + ") — skipped");
                 continue;
@@ -895,10 +950,12 @@ export function ciEstimateSnippetHandler(request, env) {
 
 export function buildBudgetExample() {
   return JSON.stringify({
-    "$comment": "monthlyCeilingUsd is the number that fails a build, checked against the CHEAPEST priced provider. Omit it (or set it to null) to annotate the pull request without ever failing — which is the right setting until you have watched a few runs and trust the figure. `compose` is repo-root-relative.",
+    "$comment": "monthlyCeilingUsd is the number that fails a build, checked against the CHEAPEST priced provider. Omit it (or set it to null) to annotate the pull request without ever failing — which is the right setting until you have watched a few runs and trust the figure. `compose` is repo-root-relative. `cur` names a COMMITTED Cost & Usage Report for the cloud-spend gate; leave it null unless you actually commit one, and the gate will skip with a notice rather than fail. monthlySpendCeilingUsd is that gate's ceiling, and is about money already spent, not money projected.",
     compose: "docker-compose.yml",
     monthlyCeilingUsd: null,
     providers: ["hetzner", "aws"],
+    cur: null,
+    monthlySpendCeilingUsd: null,
   }, null, 2);
 }
 
@@ -966,17 +1023,32 @@ jobs:
         env:
           ALGOSIZE_API_KEY: \${{ secrets.ALGOSIZE_API_KEY }}
         run: |
-          jq -n \
-            --rawfile compose "\${{ steps.budget.outputs.compose }}" \
-            --argjson providers '\${{ steps.budget.outputs.providers }}' \
+          jq -n \\
+            --rawfile compose "\${{ steps.budget.outputs.compose }}" \\
+            --argjson providers '\${{ steps.budget.outputs.providers }}' \\
             '{inputType:"compose", content:$compose, options:{providers:$providers}}' > payload.json
 
-          HTTP=$(curl -sS -o response.json -w '%{http_code}' \
-            -X POST "${origin}/api/estimate" \
-            -H "Authorization: Bearer $ALGOSIZE_API_KEY" \
-            -H "Content-Type: application/json" \
+          HTTP=$(curl -sS -o response.json -w '%{http_code}' \\
+            -X POST "${origin}/api/estimate" \\
+            -H "Authorization: Bearer $ALGOSIZE_API_KEY" \\
+            -H "Content-Type: application/json" \\
             --data @payload.json)
 
+          # A 402 is the monthly run allowance, not a defect in this pull
+          # request. It is a WARNING and a skip, never a red build: the free
+          # tier is five runs, an active repository reaches that in an
+          # afternoon, and reddening every pull request until someone pays is
+          # the fastest way to get this gate deleted — which costs the team
+          # their audit as well as us the customer. Exactly the reasoning the
+          # missing-key check above is built on, and it applies harder here,
+          # because a missing key is a one-time setup step while this recurs
+          # every month.
+          if [ "$HTTP" = "402" ]; then
+            echo "::warning::$(jq -r '.message // "Monthly run allowance exhausted."' response.json)"
+            echo "quota=true" >> "$GITHUB_OUTPUT"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$HTTP" != "200" ]; then
             echo "::warning::The estimator returned HTTP $HTTP — annotating without a verdict."
             jq -r '.message // .error // "no detail"' response.json || true
@@ -988,9 +1060,9 @@ jobs:
           # excluded rather than counted as zero.
           jq -r '[.providers[] | select(.estimatedTotalMicroUsd != null)]
                  | sort_by(.estimatedTotalMicroUsd) | .[0]
-                 | "cheapest_usd=\(.estimatedTotalMicroUsd / 1000000)",
-                   "cheapest_name=\(.providerName // .providerId)"' response.json >> "$GITHUB_OUTPUT"
-          jq -r '"resources=\(.normalizedSpec.resources | length)"' response.json >> "$GITHUB_OUTPUT"
+                 | "cheapest_usd=\\(.estimatedTotalMicroUsd / 1000000)",
+                   "cheapest_name=\\(.providerName // .providerId)"' response.json >> "$GITHUB_OUTPUT"
+          jq -r '"resources=\\(.normalizedSpec.resources | length)"' response.json >> "$GITHUB_OUTPUT"
 
       - name: Comment and gate
         if: steps.key.outputs.skip != 'true' && steps.budget.outputs.skip != 'true' && steps.run.outputs.skip != 'true'
@@ -1025,11 +1097,201 @@ jobs:
             echo "_No cloud account was contacted and no credential was used._"
           } > comment.md
 
-          gh pr comment "$PR" --body-file comment.md --edit-last || \
+          gh pr comment "$PR" --body-file comment.md --edit-last || \\
             gh pr comment "$PR" --body-file comment.md
 
           if [ "$FAIL" = "1" ]; then
             echo "::error::Estimated monthly cost \$$USD exceeds the \$$CEILING ceiling."
+            exit 1
+          fi
+`;
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/ci/cost-snippet
+// ---------------------------------------------------------------------------
+
+/**
+ * The cloud-spend gate.
+ *
+ * The awkward one, and the reason it shipped last: every other gate reads
+ * something a repository naturally contains — a lockfile, a compose file, a
+ * wrangler.toml. A Cost & Usage Report is a billing export, often hundreds of
+ * megabytes, frequently containing account ids, and almost nobody commits one.
+ *
+ * So this gate is built to be ABSENT most of the time and to say so quietly:
+ * with no CUR committed it skips with a notice, exactly as a missing key
+ * does, and never turns a pull request red for a file that was never meant to
+ * be there. It earns its place for the teams who DO commit a trimmed monthly
+ * export — the spend is then reviewed in the pull request that changes it,
+ * next to the infrastructure that caused it, rather than in a console nobody
+ * opens.
+ *
+ * It reads the same algosize.budget.json the estimator uses rather than
+ * inventing a second config file: both answer a question about money, and one
+ * file that holds every threshold is one file to review.
+ *
+ * Like the estimator's gate, no cloud account is contacted. The CUR is a file
+ * the repository already has; there is no connector here and no credential is
+ * accepted.
+ */
+export function ciCostSnippetHandler(request, env) {
+  const origin = (env.SITE_ORIGIN || "https://algosize.com").replace(/\/$/, "");
+  return json({
+    filename: ".github/workflows/algosize-cost.yml",
+    configFilename: "algosize.budget.json",
+    secretName: "ALGOSIZE_API_KEY",
+    setupSteps: [
+      "Use the same ALGOSIZE_API_KEY repository secret every other gate uses — there is nothing new to create.",
+      "Commit a Cost & Usage Report export and name it in algosize.budget.json under `cur`. Without one the gate skips with a notice and never fails a build.",
+      "Commit the workflow file below.",
+    ],
+    configExample: buildBudgetExample(),
+    workflow: buildCostWorkflow({ origin }),
+  }, 200);
+}
+
+export function buildCostWorkflow({ origin }) {
+  return `name: Algosize cloud spend
+
+# Analyses a COMMITTED Cost & Usage Report on every pull request and reports
+# the biggest spenders and savings. When a spend ceiling is declared it fails
+# the build; without one it annotates and never fails.
+#
+# No cloud account is contacted and no credential is accepted. The CUR is a
+# file this repository already contains — if it does not contain one, this
+# gate skips with a notice rather than turning the pull request red for a
+# file that was never meant to be committed.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  cost:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for the API key
+        id: key
+        env:
+          ALGOSIZE_API_KEY: \${{ secrets.ALGOSIZE_API_KEY }}
+        run: |
+          if [ -z "$ALGOSIZE_API_KEY" ]; then
+            echo "::notice::ALGOSIZE_API_KEY is not set — skipping the cloud-spend analysis."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # A missing CUR is the NORMAL case, not a misconfiguration: a billing
+      # export is large and usually private. Skipping quietly is the whole
+      # reason this gate is safe to paste into any repository.
+      - name: Locate the CUR export
+        if: steps.key.outputs.skip != 'true'
+        id: cur
+        run: |
+          CUR=
+          CEILING=
+          if [ -f algosize.budget.json ]; then
+            CUR=$(jq -r '.cur // empty' algosize.budget.json)
+            CEILING=$(jq -r '.monthlySpendCeilingUsd // empty' algosize.budget.json)
+          fi
+          if [ -z "$CUR" ]; then
+            echo "::notice::No \\\`cur\\\` named in algosize.budget.json — nothing to analyse."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif [ ! -f "$CUR" ]; then
+            echo "::notice::$CUR is named in algosize.budget.json but is not committed — nothing to analyse."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "cur=$CUR" >> "$GITHUB_OUTPUT"
+            echo "ceiling=$CEILING" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Analyse the report
+        if: steps.key.outputs.skip != 'true' && steps.cur.outputs.skip != 'true'
+        id: run
+        env:
+          ALGOSIZE_API_KEY: \${{ secrets.ALGOSIZE_API_KEY }}
+        run: |
+          HTTP=$(curl -sS -o response.json -w '%{http_code}' \\
+            -X POST "${origin}/api/analyze/cost" \\
+            -H "Authorization: Bearer $ALGOSIZE_API_KEY" \\
+            -H "Content-Type: text/csv" \\
+            --data-binary @"\${{ steps.cur.outputs.cur }}")
+
+          # A 402 is the monthly run allowance, not a defect in this pull
+          # request. It is a WARNING and a skip, never a red build: the free
+          # tier is five runs, an active repository reaches that in an
+          # afternoon, and reddening every pull request until someone pays is
+          # the fastest way to get this gate deleted — which costs the team
+          # their audit as well as us the customer. Exactly the reasoning the
+          # missing-key check above is built on, and it applies harder here,
+          # because a missing key is a one-time setup step while this recurs
+          # every month.
+          if [ "$HTTP" = "402" ]; then
+            echo "::warning::$(jq -r '.message // "Monthly run allowance exhausted."' response.json)"
+            echo "quota=true" >> "$GITHUB_OUTPUT"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$HTTP" != "200" ]; then
+            echo "::warning::The cost analyzer returned HTTP $HTTP — annotating without a verdict."
+            jq -r '.message // .error // "no detail"' response.json || true
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          jq -r '"spend=\\(.currentSpend // 0)",
+                 "savings_pct=\\(.totalSavingsPct // 0)",
+                 "wins=\\(.suggestions | length)"' response.json >> "$GITHUB_OUTPUT"
+          # Top three savings by value, as one markdown table.
+          jq -r '"| Win | Impact | Est. monthly saving |",
+                 "|---|---|---|",
+                 (.suggestions | sort_by(-.savingsEstimate) | .[0:3][]
+                  | "| \\(.title) | \\(.impact) | $\\(.savingsEstimate | floor) |")' response.json > table.md
+
+      - name: Comment and gate
+        if: steps.key.outputs.skip != 'true' && steps.cur.outputs.skip != 'true' && steps.run.outputs.skip != 'true'
+        env:
+          GH_TOKEN: \${{ github.token }}
+          CEILING: \${{ steps.cur.outputs.ceiling }}
+          SPEND:   \${{ steps.run.outputs.spend }}
+          PCT:     \${{ steps.run.outputs.savings_pct }}
+          WINS:    \${{ steps.run.outputs.wins }}
+          PR: \${{ github.event.pull_request.number }}
+        run: |
+          VERDICT="No spend ceiling is set, so this is an annotation only."
+          FAIL=0
+          if [ -n "$CEILING" ]; then
+            if awk "BEGIN{exit !($SPEND > $CEILING)}"; then
+              VERDICT="Over the \\$$CEILING/mo ceiling."
+              FAIL=1
+            else
+              VERDICT="Within the \\$$CEILING/mo ceiling."
+            fi
+          fi
+
+          {
+            echo "<!-- algosize-cost -->"
+            echo "### Cloud spend"
+            echo
+            echo "**\\$$SPEND / month** in the committed report — $WINS savings win(s), up to $PCT% recoverable."
+            echo
+            cat table.md
+            echo
+            echo "$VERDICT"
+            echo
+            echo "_Read from the committed Cost & Usage Report. No cloud account was contacted and no credential was used._"
+          } > comment.md
+
+          gh pr comment "$PR" --body-file comment.md --edit-last || \\
+            gh pr comment "$PR" --body-file comment.md
+
+          if [ "$FAIL" = "1" ]; then
+            echo "::error::Monthly spend \\$$SPEND exceeds the \\$$CEILING ceiling."
             exit 1
           fi
 `;
@@ -1100,20 +1362,49 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Collect source
+      - name: Collect manifests and source
         if: steps.key.outputs.skip != 'true'
         id: collect
         run: |
-          # Source only, and bounded. Build output and vendored dependencies
-          # carry no signal about YOUR architecture and would dominate the graph.
-          find . \
-            -path ./node_modules -prune -o \
-            -path ./.git -prune -o \
-            -path ./dist -prune -o \
-            -path ./build -prune -o \
-            -path ./vendor -prune -o \
-            -type f \( -name '*.js' -o -name '*.mjs' -o -name '*.ts' -o -name '*.tsx' -o -name '*.py' -o -name '*.go' \) \
-            -size -200k -print | head -400 | sed 's|^\./||' > files.txt
+          # MANIFESTS FIRST, then source. This order is the whole point: the
+          # analyzer builds its clusters and services from manifests
+          # (wrangler.toml, compose, Dockerfile, Terraform, k8s) and uses
+          # source only for the import edges between them. Collecting source
+          # alone returns a graph with zero clusters and zero findings, which
+          # renders as "worst: none" — a clean bill of health for a repository
+          # nobody actually mapped. That is the failure this ordering exists
+          # to prevent, and truncation at the cap must never cost a
+          # manifest to make room for one more source file.
+          #
+          # Build output and vendored dependencies carry no signal about YOUR
+          # architecture and would dominate the graph, so they are pruned.
+          find . \\
+            -name node_modules -prune -o \\
+            -name .git -prune -o \\
+            -name dist -prune -o \\
+            -name build -prune -o \\
+            -name vendor -prune -o \\
+            -name _site -prune -o \\
+            -type f \\( -name 'wrangler.toml' -o -name 'docker-compose.y*ml' -o -name 'compose.y*ml' -o -name 'Dockerfile*' -o -name '*.tf' -o -name '_config.y*ml' \\) \\
+            -size -200k -print | sed 's|^\./||' > manifests.txt
+
+          find . \\
+            -name node_modules -prune -o \\
+            -name .git -prune -o \\
+            -name dist -prune -o \\
+            -name build -prune -o \\
+            -name vendor -prune -o \\
+            -name _site -prune -o \\
+            -type f \\( -name '*.js' -o -name '*.mjs' -o -name '*.ts' -o -name '*.tsx' -o -name '*.py' -o -name '*.go' \\) \\
+            -size -200k -print | sed 's|^\./||' > source.txt
+
+          # Manifests are never truncated; source fills whatever budget is left.
+          MANIFESTS=$(wc -l < manifests.txt | tr -d ' ')
+          BUDGET=$((400 - MANIFESTS))
+          [ "$BUDGET" -lt 0 ] && BUDGET=0
+          cat manifests.txt > files.txt
+          head -"$BUDGET" source.txt >> files.txt
+          echo "::notice::Collected $MANIFESTS manifest(s) and $(( $(wc -l < files.txt) - MANIFESTS )) source file(s)."
 
           COUNT=$(wc -l < files.txt | tr -d ' ')
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
@@ -1128,9 +1419,9 @@ jobs:
         env:
           ALGOSIZE_API_KEY: \${{ secrets.ALGOSIZE_API_KEY }}
         run: |
-          jq -Rn --arg repo "\${{ github.repository }}" \
-                 --arg ref "\${{ github.head_ref }}" \
-                 --arg sha "\${{ github.event.pull_request.head.sha }}" \
+          jq -Rn --arg repo "\${{ github.repository }}" \\
+                 --arg ref "\${{ github.head_ref }}" \\
+                 --arg sha "\${{ github.event.pull_request.head.sha }}" \\
             '{repo:$repo, ref:$ref, commit_sha:$sha, arch_fail_on:"none",
               files:[inputs | {path:., content:""}]}' < files.txt > skeleton.json
 
@@ -1150,12 +1441,27 @@ jobs:
           json.dump(skel, open("/dev/stdout", "w"))
           PY
 
-          HTTP=$(curl -sS -o response.json -w '%{http_code}' \
-            -X POST "${origin}/api/ci/runs" \
-            -H "Authorization: Bearer $ALGOSIZE_API_KEY" \
-            -H "Content-Type: application/json" \
+          HTTP=$(curl -sS -o response.json -w '%{http_code}' \\
+            -X POST "${origin}/api/ci/runs" \\
+            -H "Authorization: Bearer $ALGOSIZE_API_KEY" \\
+            -H "Content-Type: application/json" \\
             --data @payload.json)
 
+          # A 402 is the monthly run allowance, not a defect in this pull
+          # request. It is a WARNING and a skip, never a red build: the free
+          # tier is five runs, an active repository reaches that in an
+          # afternoon, and reddening every pull request until someone pays is
+          # the fastest way to get this gate deleted — which costs the team
+          # their audit as well as us the customer. Exactly the reasoning the
+          # missing-key check above is built on, and it applies harder here,
+          # because a missing key is a one-time setup step while this recurs
+          # every month.
+          if [ "$HTTP" = "402" ]; then
+            echo "::warning::$(jq -r '.message // "Monthly run allowance exhausted."' response.json)"
+            echo "quota=true" >> "$GITHUB_OUTPUT"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$HTTP" != "200" ]; then
             echo "::warning::The architecture endpoint returned HTTP $HTTP — annotating without a verdict."
             echo "skip=true" >> "$GITHUB_OUTPUT"
@@ -1163,10 +1469,10 @@ jobs:
           fi
 
           jq -r '.architecture
-                 | "clusters=\(.summary.clusters // 0)",
-                   "findings=\(.summary.findings // 0)",
-                   "worst=\(.worstSeverity // "none")",
-                   "failed=\(.failed)"' response.json >> "$GITHUB_OUTPUT"
+                 | "clusters=\\(.summary.clusters // 0)",
+                   "findings=\\(.summary.findings // 0)",
+                   "worst=\\(.worstSeverity // "none")",
+                   "failed=\\(.failed)"' response.json >> "$GITHUB_OUTPUT"
 
       - name: Comment
         if: steps.key.outputs.skip != 'true' && steps.collect.outputs.skip != 'true' && steps.run.outputs.skip != 'true'
@@ -1180,7 +1486,7 @@ jobs:
             echo
             echo "\${{ steps.collect.outputs.count }} files · \${{ steps.run.outputs.clusters }} clusters · \${{ steps.run.outputs.findings }} findings (worst: \${{ steps.run.outputs.worst }})"
           } > comment.md
-          gh pr comment "$PR" --body-file comment.md --edit-last || \
+          gh pr comment "$PR" --body-file comment.md --edit-last || \\
             gh pr comment "$PR" --body-file comment.md
 
           if [ "\${{ steps.run.outputs.failed }}" = "true" ]; then

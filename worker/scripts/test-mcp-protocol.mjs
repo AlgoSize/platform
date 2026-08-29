@@ -9,6 +9,7 @@
 
 import worker from "../src/index.js";
 import { makeD1 } from "./_d1-stub.mjs";
+import { createMonitor } from "../src/monitors/_store.js";
 import { SCOPES } from "../src/mcp/tokens.js";
 
 let failures = 0;
@@ -744,6 +745,52 @@ group("the X-ray answers to its product name");
   const vagueBody = await vague.json();
   expect(vagueBody.error && !/did you mean/i.test(vagueBody.error.message),
     "an ambiguous miss gets no guess");
+}
+
+// ---------------------------------------------------------------------------
+group("the X-ray maps a monitored repo through MCP, without an upload");
+// ---------------------------------------------------------------------------
+// The user-facing promise: an assistant asks for the architecture of a
+// watched repository and gets the graph — no one hand-feeds it manifests.
+// This exercises the whole chain the dashboard's "Draw the map" uses:
+// tools/call → algosize_get_monitor_result → /api/monitors/:id/result/arch →
+// inspectMonitor → tree discovery. The repo's manifests live in
+// subdirectories, which is the exact shape that used to answer no_manifests.
+{
+  const env = makeEnv(); await seed(env);
+  const m = await createMonitor(env, {
+    orgId: ORG, repoUrl: "https://github.com/acme/deep", createdBy: "u_mcp",
+    analyzers: ["vuln", "arch"],
+  });
+  env.FETCH = async (url) => {
+    const u = String(url);
+    if (u.includes("api.github.com") && u.includes("/git/trees/")) {
+      return new Response(JSON.stringify({ tree: [
+        { path: "worker/wrangler.toml", type: "blob", size: 200 },
+      ] }), { status: 200 });
+    }
+    if (u.includes("raw.githubusercontent.com") && u.endsWith("worker/wrangler.toml")) {
+      return new Response('name = "api"\n[[d1_databases]]\nbinding = "DB"\ndatabase_name = "app"\n', { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  };
+
+  const init = await worker.fetch(rpc(INIT), env, ctx);
+  const sid = init.headers.get("Mcp-Session-Id");
+  const res = await worker.fetch(rpc({
+    jsonrpc: "2.0", id: 50, method: "tools/call",
+    params: { name: "algosize_get_monitor_result",
+              arguments: { monitorId: m.monitorId, analyzer: "arch" } },
+  }, { sessionId: sid }), env, ctx);
+  const out = (await res.json()).result;
+  const sc = out && out.structuredContent;
+
+  expect(out && out.isError === false,
+    "an assistant can ask for a watched repo's architecture and not be told to upload files");
+  expect(sc && sc.status === "ok",
+    `…the inspection ran (got ${sc && (sc.status + (sc.reason ? "/" + sc.reason : ""))})`);
+  expect(sc && sc.result && sc.result.summary && sc.result.summary.nodes >= 1,
+    "…and the graph has real nodes, parsed from a manifest below the repository root");
 }
 
 console.log("");

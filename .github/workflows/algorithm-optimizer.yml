@@ -1,120 +1,137 @@
-name: Algorithm optimizer
+name: Algosize algorithm optimizer
 
-# Runs the algorithm optimizer's Big-O audit on every pull request, via the
-# same core module the dashboard's /api/analyze/algo endpoint uses
-# (worker/src/analyzers/optimizer.js). Which functions get audited is
-# controlled by optimizer.config.json at the repo root — see the README's
-# "Running the optimizer in CI" section.
+# Big-O regression gate. Reads optimizer.config.json, slices each named
+# function out of its file, and asks the Algosize API to measure it — the
+# same analyzer behind the dashboard's Algorithm optimizer and the scheduled
+# monitors' nightly pass, so all three always agree about a function.
 #
-# The sandbox runs IN-PROCESS under Node here (the same instrumented runner
-# the Worker falls back to without its service binding), so no edge runtime,
-# browser, or wrangler dev server is needed.
-#
-# Refactor suggestions are opt-in (flip ENABLE_REFACTOR_SUGGESTIONS below).
-# When enabled they go through Workers AI (Kimi K2.5) via the REST API using
-# CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_AI_TOKEN, falling back to
-# OPENAI_API_KEY. All are read from GitHub Actions secrets — never from a
-# committed .env — and a missing secret degrades to a clear console notice
-# plus stub text in the report, NOT a red build: the Big-O gate is the check,
-# the prose is garnish.
+# The build fails only when a measured complexity lands ABOVE the entry's
+# declared baseline ceiling. A function that cannot be found or measured is
+# reported and skipped, not failed: a red build about config is how the gate
+# gets deleted.
 
 on:
   pull_request:
 
 permissions:
   contents: read
-  # Required for the sticky PR comment.
-  pull-requests: write
 
 jobs:
-  optimize:
+  optimizer:
     runs-on: ubuntu-latest
-    env:
-      # Flip to "true" to include AI refactor suggestions in the report and
-      # PR comment. Needs one of the credential pairs below.
-      ENABLE_REFACTOR_SUGGESTIONS: "false"
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      CLOUDFLARE_AI_TOKEN: ${{ secrets.CLOUDFLARE_AI_TOKEN }}
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     steps:
-      # Full history so `git diff origin/main...HEAD` (the default entry
-      # filter) resolves; a shallow clone would silently widen the audit to
-      # --all instead.
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: worker/package-lock.json
+      # Skipped-with-notice when the secret is absent, same as the audit
+      # workflow: a workflow that goes red the moment it is pasted reads as
+      # "this product is broken".
+      - name: Check for the API key
+        id: key
+        env:
+          ALGOSIZE_API_KEY: ${{ secrets.ALGOSIZE_API_KEY }}
+        run: |
+          if [ -n "$ALGOSIZE_API_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::ALGOSIZE_API_KEY is not set — skipping the optimizer gate. Add the secret to enable it."
+          fi
 
-      - name: Install worker dependencies
-        working-directory: worker
-        run: npm ci
+      - name: Audit configured functions
+        if: steps.key.outputs.present == 'true'
+        env:
+          ALGOSIZE_API_KEY: ${{ secrets.ALGOSIZE_API_KEY }}
+        run: |
+          # acorn does the function slicing — a real parse, not a regex.
+          npm install --no-save --no-audit --no-fund acorn >/dev/null 2>&1
+          node - <<'NODE'
+          const fs = require("fs");
+          const acorn = require("acorn");
 
-      - name: Run the optimizer audit
-        working-directory: worker
-        run: npm run optimizer:ci
+          // Both spellings of the polynomial labels rank identically: the API
+          // measures "O(n²)" while config ceilings are typed "O(n^2)". Labels
+          // past O(n³) carry a raw exponent ("O(n^4.2)") and rank by it;
+          // anything unparseable — "unknown" included — ranks worst.
+          const RANKS = new Map([
+            ["O(1)", 0], ["O(log n)", 1], ["O(n)", 2], ["O(n log n)", 3],
+            ["O(n²)", 4], ["O(n^2)", 4], ["O(n³)", 5], ["O(n^3)", 5],
+          ]);
+          const rank = (l) => {
+            if (RANKS.has(l)) return RANKS.get(l);
+            const m = typeof l === "string" ? l.match(/^O\(n\^([0-9.]+)\)$/) : null;
+            if (m && Number.parseFloat(m[1]) > 3) return Math.min(5 + (Number.parseFloat(m[1]) - 3), 99);
+            return 100;
+          };
 
-      - name: Upload the report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: optimizer-report
-          path: optimizer-report.json
-
-      - name: Comment on the pull request
-        if: always()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            let report = null;
-            try { report = JSON.parse(fs.readFileSync('optimizer-report.json', 'utf8')); } catch {}
-            const MARKER = '<!-- algorithm-optimizer -->';
-            let body;
-            if (!report) {
-              body = [MARKER, '### Algorithm optimizer', '',
-                      'The audit did not produce a report — see the workflow logs.'].join('\n');
-            } else {
-              const rows = report.results.map((r) => {
-                const mark = r.verdict === 'ok' ? '✅' : r.verdict === 'unknown' ? '❓' : '❌';
-                const measured = r.bigO ? r.bigO.label : '—';
-                return `| ${mark} | \`${r.name}\` | \`${r.functionName}\` | ${measured} | ${r.baseline ? '≤ ' + r.baseline : '—'} | ${r.verdict}${r.error ? ' — ' + r.error : ''} |`;
-              });
-              const suggestions = report.results
-                .filter((r) => r.suggestion && r.suggestion.text)
-                .map((r) => `<details><summary>Refactor suggestion — \`${r.name}\`</summary>\n\n${r.suggestion.text}\n\n${r.suggestion.code ? '```js\n' + r.suggestion.code + '\n```' : ''}\n</details>`);
-              body = [
-                MARKER,
-                '### Algorithm optimizer',
-                '',
-                report.results.length === 0
-                  ? `No audited functions changed in this PR (${report.summary.mode}).`
-                  : ['| | Entry | Function | Measured | Baseline | Verdict |',
-                     '|---|---|---|---|---|---|',
-                     ...rows].join('\n'),
-                '',
-                ...suggestions,
-              ].join('\n');
+          function extractFunction(source, name) {
+            const ast = acorn.parse(source, { ecmaVersion: "latest", sourceType: "module" });
+            for (const node of ast.body) {
+              const fn = node.type === "FunctionDeclaration" ? node
+                : (node.type === "ExportNamedDeclaration" || node.type === "ExportDefaultDeclaration")
+                  && node.declaration && node.declaration.type === "FunctionDeclaration"
+                  ? node.declaration : null;
+              if (fn && fn.id && fn.id.name === name) return source.slice(fn.start, fn.end);
             }
-            // One sticky comment per PR, updated in place — same pattern as
-            // the dependency-audit workflow.
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner, repo: context.repo.repo,
-              issue_number: context.issue.number, per_page: 100,
-            });
-            const existing = comments.find((c) => c.body && c.body.includes(MARKER));
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner, repo: context.repo.repo,
-                comment_id: existing.id, body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner, repo: context.repo.repo,
-                issue_number: context.issue.number, body,
-              });
+            return null;
+          }
+
+          async function main() {
+            if (!fs.existsSync("optimizer.config.json")) {
+              console.log("::notice::optimizer.config.json not found — nothing to audit.");
+              return;
             }
+            const config = JSON.parse(fs.readFileSync("optimizer.config.json", "utf8"));
+            const entries = Array.isArray(config.entries) ? config.entries : [];
+            let failed = 0;
+
+            for (const entry of entries) {
+              const label = entry.name || entry.functionName || "unnamed";
+              if (!entry.file || !entry.functionName) {
+                console.log("::warning::" + label + ": entry missing file or functionName — skipped");
+                continue;
+              }
+              if (!fs.existsSync(entry.file)) {
+                console.log("::warning::" + label + ": " + entry.file + " not found — skipped");
+                continue;
+              }
+              const code = extractFunction(fs.readFileSync(entry.file, "utf8"), entry.functionName);
+              if (!code) {
+                console.log("::warning::" + label + ": function " + entry.functionName + " not found in " + entry.file + " — skipped");
+                continue;
+              }
+
+              const res = await fetch("https://algosize.com/api/analyze/algo", {
+                method: "POST",
+                headers: {
+                  "content-type": "application/json",
+                  authorization: "Bearer " + process.env.ALGOSIZE_API_KEY,
+                },
+                body: JSON.stringify({ code, sampleInput: entry.sampleInput }),
+              });
+              const body = await res.json().catch(() => ({}));
+              // A spent allowance is a billing state, not a defect in this
+              // pull request. This gate already skipped rather than failed on
+              // any non-OK status, which was the right shape by accident;
+              // naming 402 explicitly means the log says WHY, in the server's
+              // own words, instead of "API 402 (quota_exceeded)".
+              if (res.status === 402) {
+                console.log("::warning::" + (body.message || "Monthly run allowance exhausted.") + " Complexity was not measured for " + label + ".");
+                continue;
+              }
+              if (!res.ok) {
+                console.log("::warning::" + label + ": API " + res.status + " (" + (body.error || "error") + ") — skipped");
+                continue;
+              }
+              const measured = body.bigO && body.bigO.label || "unknown";
+              const ceiling = entry.baseline || null;
+              if (ceiling && rank(measured) > rank(ceiling)) {
+                console.log("::error::" + label + ": measured " + measured + " exceeds the declared ceiling " + ceiling);
+                failed++;
+              } else {
+                console.log(label + ": " + measured + (ceiling ? " (ceiling " + ceiling + ")" : ""));
+              }
+            }
+            if (failed > 0) process.exit(1);
+          }
+          main().catch((err) => { console.log("::error::" + err.message); process.exit(1); });
+          NODE

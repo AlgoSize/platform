@@ -181,7 +181,11 @@ async function inspectEstimate(env, ctx, monitor, baseline, fetchImpl) {
 async function inspectAlgo(env, monitor, baseline, fetchImpl) {
   const run = await runAlgoForMonitor(monitor, env, fetchImpl);
   if (run.status !== "ok") {
-    return { status: "unavailable", reason: run.reason || run.status, baseline };
+    // `skippedEntries` rides along so a total failure names which entry
+    // failed and why, instead of a sentence telling the reader to go and
+    // check the file and function names themselves.
+    return { status: "unavailable", reason: run.reason || run.status, baseline,
+             skipped: run.skippedEntries || [] };
   }
   const previous = monitor.lastAlgo && monitor.lastAlgo.byName;
   const diff = diffAlgoGrades(run.grades, previous);

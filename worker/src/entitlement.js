@@ -37,6 +37,12 @@ export const ENTITLEMENT_REASON = Object.freeze({
   NO_ORG_ID:         "no_org_id",
   ORG_NOT_FOUND:     "org_not_found",
   FREE_PLAN:         "free_plan",
+  // An organisation Algosize itself owns. Deliberately its own reason rather
+  // than reusing ACTIVE_SUBSCRIPTION: the dashboard, the invoices page and
+  // every support conversation should say "internal", not claim a Stripe
+  // subscription that does not exist and would confuse the first person to
+  // go looking for the invoice.
+  INTERNAL_ORG:      "internal_org",
   ACTIVE_SUBSCRIPTION: "active_subscription",
   TRIALING:          "trialing",
   GRACE_PERIOD:      "grace_period",
@@ -135,7 +141,7 @@ export async function resolveEntitlement(env, userId, { now, ctx, request } = {}
     return deny(ENTITLEMENT_REASON.NO_ORG, { user });
   }
 
-  return applyOrgRules(active.org, { now, user, role: active.role });
+  return applyOrgRules(active.org, { now, user, role: active.role, env });
 }
 
 /**
@@ -170,7 +176,7 @@ export async function resolveEntitlementForOrg(env, orgId, { now, ctx, request }
     return deny(ENTITLEMENT_REASON.ORG_NOT_FOUND);
   }
 
-  return applyOrgRules(org, { now });
+  return applyOrgRules(org, { now, env });
 }
 
 /**
@@ -178,10 +184,39 @@ export async function resolveEntitlementForOrg(env, orgId, { now, ctx, request }
  * GRACE_ELIGIBLE / (implicit) never-entitling sets above for what each
  * status means and why.
  */
-function applyOrgRules(org, { now, user = null, role = null } = {}) {
+/**
+ * Organisations Algosize runs on its own behalf, from INTERNAL_ORG_IDS.
+ *
+ * Deliberately an environment variable and not a database column: this is the
+ * one switch that turns metering off, so it should be set at deploy time by
+ * someone with Cloudflare access and be visible in a config diff, never
+ * flippable by anything with write access to a row.
+ *
+ * Keyed on the ORGANISATION, not on an admin email, because that is the only
+ * identity a CI pipeline has. The dependency-audit gate authenticates with an
+ * org-scoped API key and carries no user at all, so an email allowlist would
+ * have looked correct in the dashboard and changed nothing where it was
+ * actually needed.
+ *
+ * Unset or empty means nobody is internal — the safe direction.
+ */
+function isInternalOrg(env, orgId) {
+  const raw = env && env.INTERNAL_ORG_IDS;
+  if (typeof raw !== "string" || !raw.trim() || !orgId) return false;
+  return raw.split(",").map((s) => s.trim()).filter(Boolean).includes(orgId);
+}
+
+function applyOrgRules(org, { now, user = null, role = null, env = null } = {}) {
   const nowSec = typeof now === "number" ? now : Math.floor(Date.now() / 1000);
   const currentPeriodEnd = org.currentPeriodEnd;
   const base = { currentPeriodEnd, user, org, role };
+
+  // Checked before anything else, so an internal org is entitled regardless
+  // of what Stripe later writes to its row. A webhook flipping sub_status
+  // must not be able to switch our own metering back on mid-sweep.
+  if (isInternalOrg(env, org.orgId)) {
+    return { plan: "internal", active: true, reason: ENTITLEMENT_REASON.INTERNAL_ORG, ...base };
+  }
 
   if (org.plan !== "paid") {
     return { plan: "free", active: false, reason: ENTITLEMENT_REASON.FREE_PLAN, ...base };

@@ -16,7 +16,7 @@
 //
 // Run with:  node scripts/test-entitlement.mjs
 
-import { resolveEntitlement, ENTITLEMENT_REASON } from "../src/entitlement.js";
+import { resolveEntitlement, resolveEntitlementForOrg, ENTITLEMENT_REASON } from "../src/entitlement.js";
 import { enforceQuota, FREE_MONTHLY_LIMIT, quotaKey } from "../src/quota.js";
 import { analyzeVulnHandler } from "../src/handlers/analyze.js";
 import { meHandler } from "../src/handlers/me.js";
@@ -285,6 +285,64 @@ async function callMe(env, userId) {
   expect(body.email === "usr_m_orphan@example.com", "/api/me: falls back to the session email");
   expect(body.plan === "free", "/api/me: orphan session reads free, not paid");
   expect(body.monthlyRunsLimit === FREE_MONTHLY_LIMIT, "/api/me: orphan session gets the free limit");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\nan organisation Algosize owns is not metered\n");
+// ---------------------------------------------------------------------------
+// Our own repository burned its five free runs in one afternoon the day its
+// CI key was first set, and every pull request after that failed on a 402.
+// Keyed on the ORG rather than an admin email because that is the only
+// identity a pipeline has: the audit gate authenticates with an org-scoped
+// API key and carries no user at all, so an email allowlist would have looked
+// right in the dashboard and changed nothing where it was needed.
+{
+  const env = makeEnv({ INTERNAL_ORG_IDS: "org_algosize, org_second" });
+  for (const id of ["org_algosize", "org_second", "org_customer"]) {
+    await env.DB.prepare(
+      `INSERT INTO organisations (org_id, name, stripe_customer_id, plan, sub_status,
+                                  seats_purchased, created_at, updated_at)
+       VALUES (?, ?, ?, 'free', NULL, 1, ?, ?)`,
+    ).bind(id, id, `cus_${id}`, NOW, NOW).run();
+  }
+
+  const ours = await resolveEntitlementForOrg(env, "org_algosize", { now: NOW });
+  expect(ours.active === true,
+    `an internal org is entitled despite a free plan row (active=${ours.active})`);
+  expect(ours.reason === ENTITLEMENT_REASON.INTERNAL_ORG,
+    `…and says so honestly rather than claiming a subscription (reason=${ours.reason})`);
+  expect(ours.plan === "internal",
+    `…with its own plan label, not a fake "paid" (plan=${ours.plan})`);
+
+  const second = await resolveEntitlementForOrg(env, "org_second", { now: NOW });
+  expect(second.active === true, "the list is comma-separated and tolerates spaces");
+
+  // The part that matters most: everyone else still pays.
+  const customer = await resolveEntitlementForOrg(env, "org_customer", { now: NOW });
+  expect(customer.active === false && customer.reason === ENTITLEMENT_REASON.FREE_PLAN,
+    `an org NOT on the list is unaffected (active=${customer.active}, reason=${customer.reason})`);
+
+  // Unset means nobody is internal. A metering switch must fail in the
+  // direction that bills, never the direction that gives the product away.
+  const noEnv = makeEnv();
+  await noEnv.DB.prepare(
+    `INSERT INTO organisations (org_id, name, stripe_customer_id, plan, sub_status,
+                                seats_purchased, created_at, updated_at)
+     VALUES ('org_algosize', 'a', 'cus_a', 'free', NULL, 1, ?, ?)`,
+  ).bind(NOW, NOW).run();
+  const unset = await resolveEntitlementForOrg(noEnv, "org_algosize", { now: NOW });
+  expect(unset.active === false,
+    "with INTERNAL_ORG_IDS unset, nobody is internal");
+
+  const blank = makeEnv({ INTERNAL_ORG_IDS: "  ,  " });
+  await blank.DB.prepare(
+    `INSERT INTO organisations (org_id, name, stripe_customer_id, plan, sub_status,
+                                seats_purchased, created_at, updated_at)
+     VALUES ('org_algosize', 'a', 'cus_a', 'free', NULL, 1, ?, ?)`,
+  ).bind(NOW, NOW).run();
+  const empties = await resolveEntitlementForOrg(blank, "org_algosize", { now: NOW });
+  expect(empties.active === false,
+    "…and an all-separator value does not accidentally match the empty string");
 }
 
 // ---------------------------------------------------------------------------

@@ -92,7 +92,8 @@ import {
   sharedReportHandler,
 } from "./handlers/runs.js";
 import { ciRunHandler, ciSnippetHandler, ciOptimizerSnippetHandler,
-         ciEstimateSnippetHandler, ciArchitectureSnippetHandler } from "./handlers/ci.js";
+         ciEstimateSnippetHandler, ciArchitectureSnippetHandler,
+         ciCostSnippetHandler } from "./handlers/ci.js";
 import {
   billingPortalHandler,
   billingSummaryHandler,
@@ -342,6 +343,7 @@ router.get( "/api/ci/optimizer-snippet", requireAuth, ciOptimizerSnippetHandler)
 // reach it without hand-writing YAML against an undocumented body.
 router.get( "/api/ci/estimate-snippet",     requireAuth, ciEstimateSnippetHandler);
 router.get( "/api/ci/architecture-snippet", requireAuth, ciArchitectureSnippetHandler);
+router.get( "/api/ci/cost-snippet",         requireAuth, ciCostSnippetHandler);
 
 // ---- Stripe Customer Portal (Task #18) — manage card / cancel / invoices --
 router.post("/api/billing/portal",  requireAuth, billingPortalHandler);

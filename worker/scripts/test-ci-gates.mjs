@@ -28,8 +28,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
   buildWorkflow, buildOptimizerWorkflow, buildEstimateWorkflow,
-  buildArchitectureWorkflow, buildBudgetExample, buildOptimizerConfigExample,
-} from "../src/handlers/ci.js";
+  buildArchitectureWorkflow, buildBudgetExample, buildOptimizerConfigExample, buildCostWorkflow } from "../src/handlers/ci.js";
 import {
   ciSnippetHandler, ciOptimizerSnippetHandler,
   ciEstimateSnippetHandler, ciArchitectureSnippetHandler,
@@ -54,6 +53,8 @@ const GATES = [
     file: ".github/workflows/algosize-estimate.yml" },
   { name: "architecture", yaml: buildArchitectureWorkflow({ origin: ORIGIN }),
     file: ".github/workflows/algosize-architecture.yml" },
+  { name: "cloud spend", yaml: buildCostWorkflow({ origin: ORIGIN }),
+    file: ".github/workflows/algosize-cost.yml" },
 ];
 
 // ===========================================================================
@@ -210,6 +211,121 @@ group("the Worker's own pull-request gate actually covers the Worker");
 
   expect(/run: npm test/.test(yaml),
     "…and the workflow does run the full suite, which is the only reason the filter matters");
+}
+
+// ===========================================================================
+group("a spent allowance is a warning, never a red build");
+// ===========================================================================
+// The free tier is five runs a month and an active repository reaches that
+// in an afternoon — this one did, the day its key was first set. Every gate
+// then failed with a bare "returned HTTP 402", which reads to a reviewer as
+// "this pull request is broken" rather than "the account is out of runs".
+//
+// The missing-key check has always been a notice-and-skip for exactly this
+// reason, argued in its own comment: a workflow that goes red the moment it
+// is pasted gets deleted, and a deleted gate costs the team its audit. Quota
+// is the same failure with a worse shape, because a missing key is a
+// one-time setup step and this recurs every month.
+for (const g of GATES) {
+  const metered = /api\/(ci\/runs|estimate|analyze\/)/.test(g.yaml);
+  if (!metered) continue;
+
+  // Two shapes in the wild: the curl gates test the status in bash, the
+  // optimizer gate fetches from node and tests res.status. Both are checked,
+  // because a guard that only understood bash reported the optimizer as
+  // missing a branch it did not need — a false alarm that would have been
+  // "fixed" by weakening the rule.
+  const bashish = g.yaml.indexOf('HTTP" = "402"');
+  const jsish   = g.yaml.indexOf("res.status === 402");
+  const at = bashish >= 0 ? bashish : jsish;
+  expect(at >= 0,
+    `${g.name} — recognises 402 as its own case, not "some non-200"`);
+  if (at < 0) continue;
+
+  // The 402 branch must not fail the build. In bash that means exit 0 rather
+  // than falling into the generic non-200 path; in JS it means `continue`.
+  const branch = g.yaml.slice(at);
+  const end = bashish >= 0 ? branch.indexOf("\n          fi") : branch.indexOf("\n              }");
+  const body = branch.slice(0, end > 0 ? end : 400);
+  expect((/exit 0/.test(body) || /continue;/.test(body)) && !/exit 1/.test(body),
+    `${g.name} — the 402 branch cannot fail a build over a billing state`);
+  expect(/::warning::/.test(body) && !/::error::/.test(body),
+    `${g.name} — and annotates it as a warning rather than an error`);
+  expect(/\.message/.test(body),
+    `${g.name} — relaying the server's own sentence, not a bare status code`);
+}
+
+// The audit gate carries one extra obligation: silence is not an acceptable
+// way to report that no audit ran. A reviewer scanning the thread must not
+// read a missing comment as a clean bill of health.
+{
+  const audit = GATES.find((g) => g.name === "dependency audit");
+  expect(/audit\.outputs\.quota == 'true'/.test(audit.yaml),
+    "the audit gate comments when the allowance is spent");
+  expect(/not run/i.test(audit.yaml) && /not a clean result/i.test(audit.yaml),
+    "…saying plainly that the dependencies were NOT checked");
+}
+
+// ===========================================================================
+group("every generated gate is valid bash, and its jq actually interpolates");
+// ===========================================================================
+// These generators are JS template literals, so a single backslash never
+// reaches the YAML: `\\` + newline is a JS line continuation that deletes the
+// newline, and `\\(` collapses to `(`. Both mistakes shipped — the estimate and
+// architecture gates had their multi-line shell crushed onto one line, an
+// unescaped `\\(` that made `find` a bash syntax error, and jq interpolations
+// written `"x=(.y)"` instead of `"x=\\(.y)"`, which emits the literal text
+// rather than the value.
+//
+// It stayed invisible for weeks because ALGOSIZE_API_KEY was never set on this
+// repository: every run skipped at the key check and reported success. The
+// moment a real key landed, two of the three gates failed on their first run.
+// A green CI check that never executed its own body proves nothing, so these
+// assertions read the generated YAML rather than trusting that it ran.
+{
+  const { execFileSync } = await import("node:child_process");
+  const { writeFileSync, mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "gates-"));
+
+  for (const g of GATES) {
+    // Every `run: |` block, dedented, with GitHub expressions blanked — they
+    // are substituted before bash ever sees them, and `${{ ... }}` is not
+    // valid shell on its own.
+    const blocks = [...g.yaml.matchAll(/run: \|\n([\s\S]*?)(?=\n {6}- name:|\n {6}- uses:|\n *$)/g)]
+      .map((m) => m[1].replace(/\$\{\{[^}]*\}\}/g, "X"))
+      .map((b) => b.split("\n").map((l) => l.replace(/^ {10}/, "")).join("\n"));
+
+    let bad = null;
+    blocks.forEach((b, i) => {
+      // A heredoc body is another language (python here); bash -n still parses
+      // the heredoc itself, which is what we want to check.
+      const f = join(dir, `${g.name.replace(/\W/g, "_")}-${i}.sh`);
+      writeFileSync(f, b);
+      try { execFileSync("bash", ["-n", f], { stdio: "pipe" }); }
+      catch (err) { if (!bad) bad = String(err.stderr || err).split("\n")[0]; }
+    });
+    expect(bad === null, `${g.name} — every run block parses as bash (${bad || "ok"})`);
+
+    // The collapse signature: a `find`/`curl`/`jq` line carrying a long run of
+    // spaces is a line continuation that JS ate.
+    //
+    // It cannot tell that from deliberate column alignment, and it should not
+    // be loosened to try: this assertion caught two gates that had never once
+    // run, and a heuristic that occasionally asks an author to use fewer
+    // alignment spaces is cheap next to one that misses a dead workflow. If
+    // it fires on a line you wrote on purpose, shorten the padding.
+    const collapsed = g.yaml.split("\n").find((l) => /\s{8,}\S/.test(l.trim()));
+    expect(!collapsed,
+      `${g.name} — no line-continuation was swallowed into one long line`);
+
+    // jq interpolation must keep its backslash, or it prints its own source.
+    const badJq = g.yaml.split("\n").find((l) =>
+      /^\s*[|"']*\s*"?\w+=\((\.|\$)/.test(l) && !l.includes("=\\("));
+    expect(!badJq,
+      `${g.name} — jq interpolations are \\( … ), not bare ( … ) (${badJq ? badJq.trim() : "ok"})`);
+  }
 }
 
 console.log("");

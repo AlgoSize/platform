@@ -20,7 +20,7 @@
 // are different problems with different fixes, and a single grey dash for
 // both would hide the second one forever.
 
-import { requireOrgContext } from "./monitors.js";
+import { requireOrgContext, explainUnavailable } from "./monitors.js";
 import { listMonitors } from "../monitors/_store.js";
 import { gradeForScore, scoreForCounts, worstSeverity } from "../analyzers/audit.js";
 import { formatMicroUsd, bigORank } from "../monitors/analyzers.js";
@@ -92,6 +92,31 @@ function shortRepo(url) {
 
 function off()                 { return { kind: "off", note: null, value: null, rank: null }; }
 function pending(note)         { return { kind: "pending", note, value: null, rank: null }; }
+/**
+ * The analyzer is switched on and the sweep ran, but this analyzer produced
+ * nothing — no manifests, no compose file, no runnable config.
+ *
+ * Its own kind, deliberately. It used to be indistinguishable from a real
+ * result: on `no_manifests` the sweep records an EMPTY baseline so a repo
+ * that later gains a manifest baselines from nothing, and the architecture
+ * column rendered that empty array as "0 · No findings in the last sweep" —
+ * a clean bill of health for a repository the X-ray never read. A grid whose
+ * zeros cannot be trusted is worse than one with gaps in it.
+ */
+function unmeasured(note)      { return { kind: "unmeasured", note, value: null, rank: null }; }
+
+/**
+ * Why this analyzer produced nothing in the last sweep, or null if it did.
+ *
+ * `lastSkips` is null on a monitor swept before migration 0022 — unknown, not
+ * empty — so an old row keeps its previous rendering rather than claiming
+ * every analyzer ran.
+ */
+function skipFor(m, analyzer) {
+  if (!Array.isArray(m.lastSkips)) return null;
+  const hit = m.lastSkips.find((s) => s && s.analyzer === analyzer);
+  return hit ? explainUnavailable(hit.reason) : null;
+}
 function graded(value, note, rank, stale) {
   return { kind: stale ? "stale" : "grade", value, note, rank };
 }
@@ -136,6 +161,8 @@ function securityCell(m, on, stale) {
 // ---------------------------------------------------------------------------
 function costCell(m, on, stale) {
   if (!on.includes("estimate")) return off();
+  const skipped = skipFor(m, "estimate");
+  if (skipped) return unmeasured(skipped);
   const est = m.lastEstimate;
   if (!est) return pending("No estimate recorded yet.");
 
@@ -160,6 +187,8 @@ function costCell(m, on, stale) {
 // ---------------------------------------------------------------------------
 function complexityCell(m, on, stale) {
   if (!on.includes("algo")) return off();
+  const skipped = skipFor(m, "algo");
+  if (skipped) return unmeasured(skipped);
   const algo = m.lastAlgo;
   if (!algo) return pending("No complexity run recorded yet.");
 
@@ -185,6 +214,8 @@ function complexityCell(m, on, stale) {
 // ---------------------------------------------------------------------------
 function architectureCell(m, on, stale) {
   if (!on.includes("arch")) return off();
+  const skipped = skipFor(m, "arch");
+  if (skipped) return unmeasured(skipped);
   const keys = m.lastArchKeys;
   if (keys === null) return pending("No architecture run recorded yet.");
   return graded(

@@ -305,7 +305,84 @@ function parseGithubUrl(s) {
  * Returns `[{ filename, content }]` or throws a tagged error on a real
  * upstream failure (vs. plain 404, which just yields an empty list).
  */
-async function fetchLockfilesFromGithub({ owner, repo }, fetchImpl) {
+// How many lockfiles one audit will read. A monorepo has a handful; the cap
+// exists for the pathological repository, and the audit reports what it read.
+const MAX_LOCKFILES = 12;
+// Directories whose lockfiles describe somebody else's dependency tree.
+const VENDORED_RE = /(^|\/)(node_modules|vendor|bundle|\.git|dist|build|_site|fixtures?|__tests__)(\/|$)/;
+
+/**
+ * Find every supported lockfile in the repository, at any depth, through the
+ * git tree API.
+ *
+ * The by-name fetch below reads the repository ROOT only, which silently
+ * mis-audits every monorepo: this repository keeps its lockfiles in worker/
+ * and tests/e2e/ and has only a Gemfile.lock at the root, so the audit graded
+ * the Ruby tree "A - 0, no advisories in the last sweep" while the npm
+ * packages carrying six high-severity advisories were never fetched. A
+ * confident clean bill of health over dependencies nobody looked at is the
+ * worst answer a security scanner can give, and it is worse than an error.
+ *
+ * Returns null - not an empty list - when the tree cannot be listed, so the
+ * caller falls back to the root-name fetch rather than reporting a private
+ * or renamed repository as having no dependencies.
+ */
+async function discoverLockfiles({ owner, repo }, fetchImpl, env) {
+  const headers = { "User-Agent": "algosize-audit", Accept: "application/vnd.github+json" };
+  if (env && env.GITHUB_TOKEN) headers.Authorization = `Bearer ${env.GITHUB_TOKEN}`;
+
+  for (const branch of ["main", "master"]) {
+    const url = `https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`;
+    let res;
+    try { res = await fetchImpl(url, { headers }); } catch { continue; }
+    if (res.status === 429 || res.status === 403) {
+      const e = new Error(
+        "GitHub is rate-limiting our requests for this repo's lockfiles. Wait a minute and try again.",
+      );
+      e.fetchError = true; e.code = "github_rate_limited"; e.status = 503;
+      throw e;
+    }
+    if (!res.ok) continue;
+
+    let body;
+    try { body = await res.json(); } catch { continue; }
+    const entries = Array.isArray(body && body.tree) ? body.tree : [];
+
+    const wanted = entries
+      .filter((e) => e && e.type === "blob" && typeof e.path === "string")
+      .filter((e) => LOCKFILE_NAMES.includes(e.path.split("/").pop()))
+      .filter((e) => !VENDORED_RE.test(e.path))
+      .filter((e) => !(typeof e.size === "number" && e.size > MAX_LOCKFILE_BYTES))
+      // Shallowest first: a root lockfile matters more than a deep one when
+      // the cap bites.
+      .sort((a, b) => a.path.split("/").length - b.path.split("/").length
+        || (a.path < b.path ? -1 : 1))
+      .slice(0, MAX_LOCKFILES);
+
+    if (!wanted.length) return [];
+
+    const results = await Promise.all(wanted.map(async ({ path }) => {
+      const raw = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${encodeURI(path)}`;
+      let r;
+      try { r = await fetchImpl(raw); } catch { return null; }
+      if (r.status === 429 || r.status === 403) return null;
+      if (!r.ok) return null;
+      const text = await r.text();
+      if (text.length > MAX_LOCKFILE_BYTES) return null;
+      // `filename` keeps the full path so an advisory can be traced to the
+      // tree it came from - two package-lock.json files are two answers.
+      return { filename: path, content: text };
+    }));
+    const found = results.filter(Boolean);
+    if (found.length > 0) return found;
+  }
+  return null;
+}
+
+async function fetchLockfilesFromGithub({ owner, repo }, fetchImpl, env) {
+  const discovered = await discoverLockfiles({ owner, repo }, fetchImpl, env);
+  if (discovered !== null && discovered.length > 0) return discovered;
+
   for (const branch of ["main", "master"]) {
     const fetches = LOCKFILE_NAMES.map(async (filename) => {
       const url = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filename}`;
@@ -443,7 +520,7 @@ export async function runLockfileAudit(body, env, request, ctx) {
 
   let manifests;
   try {
-    manifests = await fetchLockfilesFromGithub(repo, fetchImpl);
+    manifests = await fetchLockfilesFromGithub(repo, fetchImpl, env);
   } catch (err) {
     // Observability (Task #22): both 502 paths capture so an upstream
     // GitHub outage is visible in Sentry even though we return a clean

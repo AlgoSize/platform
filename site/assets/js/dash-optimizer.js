@@ -415,6 +415,21 @@
         if (payload.status !== "ok") {
           slot.appendChild(el("p", { class: "night-grade-skip" },
             payload.message || "No grades for this repository."));
+          // When every entry failed, the API now says which one and why. A
+          // reader told only "check the file and function names" has to guess
+          // between a wrong path, a renamed function and a rejected one —
+          // three different fixes. Naming the entry turns that into a task.
+          var why = payload.skipped || [];
+          if (why.length) {
+            var list = el("ul", { class: "night-skip-list" });
+            why.slice(0, 12).forEach(function (sk) {
+              var li = el("li", {});
+              li.appendChild(el("span", { class: "mono" }, (sk && sk.name) || "unnamed"));
+              li.appendChild(document.createTextNode(" — " + ((sk && sk.reason) || "skipped")));
+              list.appendChild(li);
+            });
+            slot.appendChild(list);
+          }
           return;
         }
 

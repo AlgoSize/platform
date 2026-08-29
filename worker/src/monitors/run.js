@@ -344,6 +344,9 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
     // the identity keys alone cannot be graded: six lows and one critical
     // plus five lows are the same number and a very different repository.
     severities:  countBySeverity(advisories),
+    // Recorded so the scorecard can say "not measured" instead of rendering a
+    // skipped analyzer's empty baseline as a measured zero.
+    skips,
     archKeys:    archBaseline,
     estimate:    estBaseline,
     algo:        algoBaseline,

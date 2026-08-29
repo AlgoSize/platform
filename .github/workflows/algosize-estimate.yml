@@ -61,10 +61,32 @@ jobs:
         env:
           ALGOSIZE_API_KEY: ${{ secrets.ALGOSIZE_API_KEY }}
         run: |
-          jq -n             --rawfile compose "${{ steps.budget.outputs.compose }}"             --argjson providers '${{ steps.budget.outputs.providers }}'             '{inputType:"compose", content:$compose, options:{providers:$providers}}' > payload.json
+          jq -n \
+            --rawfile compose "${{ steps.budget.outputs.compose }}" \
+            --argjson providers '${{ steps.budget.outputs.providers }}' \
+            '{inputType:"compose", content:$compose, options:{providers:$providers}}' > payload.json
 
-          HTTP=$(curl -sS -o response.json -w '%{http_code}'             -X POST "https://algosize.com/api/estimate"             -H "Authorization: Bearer $ALGOSIZE_API_KEY"             -H "Content-Type: application/json"             --data @payload.json)
+          HTTP=$(curl -sS -o response.json -w '%{http_code}' \
+            -X POST "https://algosize.com/api/estimate" \
+            -H "Authorization: Bearer $ALGOSIZE_API_KEY" \
+            -H "Content-Type: application/json" \
+            --data @payload.json)
 
+          # A 402 is the monthly run allowance, not a defect in this pull
+          # request. It is a WARNING and a skip, never a red build: the free
+          # tier is five runs, an active repository reaches that in an
+          # afternoon, and reddening every pull request until someone pays is
+          # the fastest way to get this gate deleted — which costs the team
+          # their audit as well as us the customer. Exactly the reasoning the
+          # missing-key check above is built on, and it applies harder here,
+          # because a missing key is a one-time setup step while this recurs
+          # every month.
+          if [ "$HTTP" = "402" ]; then
+            echo "::warning::$(jq -r '.message // "Monthly run allowance exhausted."' response.json)"
+            echo "quota=true" >> "$GITHUB_OUTPUT"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$HTTP" != "200" ]; then
             echo "::warning::The estimator returned HTTP $HTTP — annotating without a verdict."
             jq -r '.message // .error // "no detail"' response.json || true
@@ -76,9 +98,9 @@ jobs:
           # excluded rather than counted as zero.
           jq -r '[.providers[] | select(.estimatedTotalMicroUsd != null)]
                  | sort_by(.estimatedTotalMicroUsd) | .[0]
-                 | "cheapest_usd=(.estimatedTotalMicroUsd / 1000000)",
-                   "cheapest_name=(.providerName // .providerId)"' response.json >> "$GITHUB_OUTPUT"
-          jq -r '"resources=(.normalizedSpec.resources | length)"' response.json >> "$GITHUB_OUTPUT"
+                 | "cheapest_usd=\(.estimatedTotalMicroUsd / 1000000)",
+                   "cheapest_name=\(.providerName // .providerId)"' response.json >> "$GITHUB_OUTPUT"
+          jq -r '"resources=\(.normalizedSpec.resources | length)"' response.json >> "$GITHUB_OUTPUT"
 
       - name: Comment and gate
         if: steps.key.outputs.skip != 'true' && steps.budget.outputs.skip != 'true' && steps.run.outputs.skip != 'true'
@@ -113,7 +135,8 @@ jobs:
             echo "_No cloud account was contacted and no credential was used._"
           } > comment.md
 
-          gh pr comment "$PR" --body-file comment.md --edit-last ||             gh pr comment "$PR" --body-file comment.md
+          gh pr comment "$PR" --body-file comment.md --edit-last || \
+            gh pr comment "$PR" --body-file comment.md
 
           if [ "$FAIL" = "1" ]; then
             echo "::error::Estimated monthly cost $$USD exceeds the $$CEILING ceiling."
