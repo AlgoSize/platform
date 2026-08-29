@@ -41,6 +41,11 @@ export const AUDIT_ACTIONS = Object.freeze({
   MONITOR_RUN_REQUESTED:     "monitor.run_requested",
   PLAN_CHANGED:      "billing.plan_changed",
   FLAG_UPDATED:      "flag.updated",
+  // Distinct from FLAG_UPDATED: this changes ONE subject against the flag's
+  // global state (migrations/0020), which is a different kind of event to
+  // find in the log than a rollout percentage moving — someone reconstructing
+  // "why did org X get this early" wants to filter for exactly this.
+  FLAG_OVERRIDE_SET: "flag.override_set",
   SESSION_REVOKED:   "session.revoked",
   // Sign-ins. Recorded so the account area can show a login history that is
   // an actual history: the session index only knows about sessions that are

@@ -124,9 +124,24 @@ npx wrangler secret put MCP_ENABLED --config wrangler.toml --env production
 # value: true
 ```
 
-Or per organisation, leaving `MCP_ENABLED` unset, via the admin flags UI:
-`PATCH /api/admin/flags/mcp.enabled`. Prefer this for a staged rollout — the
-flag takes an org id as its subject.
+Or for chosen organisations, leaving `MCP_ENABLED` unset. Turn the flag on
+with no global rollout, then name each org explicitly (migrations/0020):
+
+```
+PATCH /api/admin/flags/mcp.enabled          {"enabled": true, "rolloutPct": 0}
+PUT   /api/admin/flags/mcp.enabled/overrides/<org_id>   {"enabled": true}
+```
+
+An override is checked before the flag's own state and wins over it in both
+directions, so `rolloutPct: 0` keeps everyone else off while the named orgs
+are on. `DELETE` on the same path clears one, returning that org to whatever
+the global rollout says.
+
+Prefer this for a pilot. **Note what `rolloutPct` alone cannot do:** it is a
+deterministic hash bucket over (flag, org), so it selects *roughly* N% of
+organisations and gives you no say in which. An earlier version of this
+runbook claimed the flag "takes an org id as its subject" in a way that
+implied it could target one — it could not, until 0020.
 
 ## 7. Verify end to end
 

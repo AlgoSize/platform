@@ -271,6 +271,9 @@ const MIGRATIONS = Object.freeze([
              // lose the label saying which credential produced them.
              { table: "runs", column: "credential_kind" },
              { table: "runs", column: "credential_id" }] },
+  { id: "0020", name: "flag_overrides",
+    checks: [{ table: "feature_flag_overrides", column: "flag_key" },
+             { table: "feature_flag_overrides", column: "subject" }] },
 ]);
 
 /** Plain SQLite identifier — the only shape we will interpolate into a PRAGMA. */

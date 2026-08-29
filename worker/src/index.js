@@ -120,6 +120,9 @@ import {
   adminAuditHandler,
   adminFlagsHandler,
   adminSetFlagHandler,
+  adminListFlagOverridesHandler,
+  adminSetFlagOverrideHandler,
+  adminDeleteFlagOverrideHandler,
   adminSettingsHandler,
 } from "./handlers/admin_panel.js";
 import { pageviewPixelHandler } from "./handlers/pageview.js";
@@ -287,6 +290,9 @@ router.get(   "/api/admin/automation",               requireAdmin, adminAutomati
 router.get(   "/api/admin/audit",                    requireAdmin, adminAuditHandler);
 router.get(   "/api/admin/flags",                    requireAdmin, adminFlagsHandler);
 router.patch( "/api/admin/flags/:key",               requireAdmin, adminSetFlagHandler);
+router.get(   "/api/admin/flags/:key/overrides",              requireAdmin, adminListFlagOverridesHandler);
+router.put(   "/api/admin/flags/:key/overrides/:subject",     requireAdmin, adminSetFlagOverrideHandler);
+router.delete("/api/admin/flags/:key/overrides/:subject",     requireAdmin, adminDeleteFlagOverrideHandler);
 router.get(   "/api/admin/settings",                 requireAdmin, adminSettingsHandler);
 
 // ---- Session routes (Task #8) ---------------------------------------------
