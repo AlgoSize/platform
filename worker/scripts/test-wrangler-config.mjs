@@ -338,6 +338,28 @@ console.log("\nthe Worker actually bundles\n");
 }
 
 // ---------------------------------------------------------------------------
+console.log("\nthe e2e Worker boots with remote bindings off\n");
+// ---------------------------------------------------------------------------
+//
+// wrangler 4 opens a remote proxy session for any binding it cannot emulate,
+// and `[ai]` is one — Workers AI has no local implementation. Without a
+// CLOUDFLARE_API_TOKEN (and the e2e job must not have one) wrangler exits 1
+// before it listens, and all Playwright can say is "Process from
+// config.webServer was not able to start". Asserted here because that error
+// names neither wrangler, nor the AI binding, nor the flag that fixes it.
+{
+  const cfg = readFileSync(
+    join(__dirname, "..", "..", "tests", "e2e", "playwright.config.js"), "utf8");
+  const devCmd = (cfg.match(/^\s*command:\s*"([^"]*wrangler dev[^"]*)"/m) || [])[1];
+  expect(Boolean(devCmd), "playwright.config.js starts the Worker with `wrangler dev`");
+  if (devCmd) {
+    expect(/(^|\s)(--local|-l)(\s|$)/.test(devCmd),
+      "and passes --local, so the AI binding reports itself unsupported instead of " +
+      "demanding a CLOUDFLARE_API_TOKEN the test job deliberately does not have");
+  }
+}
+
+// ---------------------------------------------------------------------------
 console.log("\nevery CI job runs a Node new enough for the wrangler we pin\n");
 // ---------------------------------------------------------------------------
 //

@@ -78,7 +78,19 @@ export default defineConfig({
       // and the dashboard spec re-seeds via POST /api/_test/seed in
       // beforeAll. That keeps tests independent from any stale on-disk
       // state and avoids cross-process SQLite contention.
-      command: "./node_modules/.bin/wrangler dev --config wrangler.toml --port 8787 --ip 127.0.0.1",
+      //
+      // `--local` is required as of wrangler 4, and its absence is not a
+      // subtle failure: wrangler now opens a REMOTE PROXY SESSION for any
+      // binding it cannot emulate locally, and `[ai]` is one — Workers AI
+      // has no local implementation. With no CLOUDFLARE_API_TOKEN in the
+      // environment (and there must not be one here) wrangler exits 1
+      // before it ever listens, and Playwright reports only "Process from
+      // config.webServer was not able to start", which says nothing about
+      // why. `--local` disables remote bindings wholesale; the AI binding
+      // then reports itself "not supported" and every other binding stays
+      // exactly as it was. No spec exercises Workers AI, and the analyzers
+      // that use it already have a documented no-AI path.
+      command: "./node_modules/.bin/wrangler dev --config wrangler.toml --port 8787 --ip 127.0.0.1 --local",
       cwd: WORKER_DIR,
       port: 8787,
       reuseExistingServer: !process.env.CI,
