@@ -4,8 +4,24 @@
 // and credentials. The Stripe webhook is excluded — Stripe calls it
 // server-to-server and CORS does not apply there.
 
-const ALLOWED_METHODS = "GET, POST, OPTIONS";
-const ALLOWED_HEADERS = "Content-Type, Authorization";
+// DELETE is here for /api/mcp (explicit session teardown) and the account and
+// monitor deletes; PATCH and PUT for the account and org editors. The list was
+// GET/POST/OPTIONS long after routes using the others existed — non-browser
+// callers ignore CORS entirely, so nothing broke visibly and the gap only
+// showed up from a browser.
+const ALLOWED_METHODS = "GET, POST, PATCH, PUT, DELETE, OPTIONS";
+
+// Mcp-Session-Id and MCP-Protocol-Version are what a browser-based MCP host
+// sends on every request after `initialize`. Without them in the allow list
+// the preflight fails and the host reports a generic network error.
+const ALLOWED_HEADERS = "Content-Type, Authorization, Mcp-Session-Id, MCP-Protocol-Version, Last-Event-ID";
+
+// Response headers a browser is permitted to READ. Mcp-Session-Id must be
+// here or a browser host cannot see the session id on the initialize
+// response: the fetch succeeds, the header is invisible, and every later
+// request is rejected for a missing session. It fails silently and looks like
+// a server bug, which is why it is set globally rather than per-response.
+const EXPOSED_HEADERS = "Mcp-Session-Id";
 
 /**
  * Compute the CORS headers for a given request.
@@ -20,6 +36,7 @@ export function corsHeaders(request, env) {
     "Access-Control-Allow-Methods": ALLOWED_METHODS,
     "Access-Control-Allow-Headers": ALLOWED_HEADERS,
     "Access-Control-Allow-Credentials": "true",
+    "Access-Control-Expose-Headers": EXPOSED_HEADERS,
     "Access-Control-Max-Age": "86400",
     "Vary": "Origin",
   };

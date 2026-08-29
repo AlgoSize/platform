@@ -1,99 +1,121 @@
-/**
- * mcpAuth middleware — composed AFTER requireAuth.
- *
- * Flow:
- *  1. requireAuth already ran. If it set request.org, grant all 3 scopes.
- *  2. If requireAuth returned 401 and bearer starts with `ask_mcp_`,
- *     resolve against mcp_tokens, set identity fields.
- *  3. Otherwise → 401 with WWW-Authenticate pointing to the resource metadata.
- */
+// Authentication for the MCP endpoint.
+//
+// Composed AFTER requireAuth rather than replacing it. That ordering is the
+// whole design: an `ask_live_` key or a browser cookie is resolved by exactly
+// the code every other route uses — same hashing, same revocation check, same
+// per-org rate limiting, same `last_used_at` bump — and this module only adds
+// the third credential type the product did not have before.
+//
+// The alternative, a parallel auth path that "also understands API keys",
+// would mean two implementations of the most security-sensitive function in
+// the codebase, drifting apart on the next change. There is one.
 
-const ALL_SCOPES = ['algosize:read', 'algosize:analyze', 'algosize:manage'];
+import { resolveAccessToken, hasScope, ALL_SCOPES, MCP_TOKEN_TAG } from "./tokens.js";
+import { protectedResourceMetadataUrl } from "./metadata.js";
 
-/**
- * Resolve an ask_mcp_ bearer token against the DB.
- * Returns the token row or null.
- */
-async function resolveMcpToken(env, rawToken) {
-  const { sha256Hex } = await import('../auth.js');
-  const hash = await sha256Hex(rawToken);
-  const row = await env.DB.prepare(
-    `SELECT t.token_id, t.org_id, t.user_id, t.scope, t.expires_at, t.revoked_at, t.client_id
-       FROM mcp_tokens t
-      WHERE t.token_hash = ? AND t.token_type = 'access'`
-  ).bind(hash).first();
-  if (!row) return null;
-  if (row.revoked_at) return null;
-  if (row.expires_at < Math.floor(Date.now() / 1000)) return null;
-  // Update last_used_at (best-effort, don't await)
-  env.DB.prepare('UPDATE mcp_tokens SET last_used_at = ? WHERE token_id = ?')
-    .bind(Math.floor(Date.now() / 1000), row.token_id)
-    .run();
-  return row;
+function bearerOf(request) {
+  const raw = request.headers.get("Authorization") || "";
+  const m = raw.match(/^Bearer\s+(.+)$/i);
+  return m ? m[1].trim() : null;
 }
 
 /**
- * mcpAuth — call after requireAuth.
+ * Resolve the caller, or return a 401 the client can act on.
  *
- * On success, attaches to the request object:
- *   request.mcpScopes    — string[]
- *   request.authMethod   — 'api_key' | 'mcp_oauth' | 'session'
- *   request.mcpTokenId   — string | null
+ * Returns null on success (itty-router's "continue" signal) after setting
+ * `request.mcpScopes`, `request.authMethod`, and — for the OAuth path —
+ * `request.org` / `request.user` / `request.mcpTokenId`.
  *
- * Returns a 401 Response if auth fails, or null to continue.
+ * Scope granting differs by credential, and the asymmetry is deliberate:
+ *
+ *   API key    → all three scopes. The key already authorises every one of
+ *                these operations over plain HTTP; refusing them over MCP
+ *                would be theatre, not security.
+ *   Cookie     → all three scopes. Same reasoning, and it lets the dashboard's
+ *                own MCP inspector work without minting a token.
+ *   OAuth      → exactly the scopes the user consented to, and no more. This
+ *                is the only credential where the granting party is a person
+ *                making a decision on a consent screen, so it is the only one
+ *                where a narrower grant is meaningful.
  */
-export async function mcpAuth(request, env) {
-  // Case 1: requireAuth already authenticated (api_key or cookie session)
-  if (request.org) {
-    request.mcpScopes  = ALL_SCOPES;
-    request.authMethod = request.user?.userId ? 'session' : 'api_key';
+export async function mcpAuth(request, env, ctx) {
+  // requireAuth ran first and succeeded. `org` is set for API keys; `user` for
+  // cookie sessions. Either is a fully authorised caller.
+  if (request.org || request.user) {
+    request.mcpScopes  = [...ALL_SCOPES];
+    request.authMethod = request.authMethod || (request.org ? "api_key" : "session");
     request.mcpTokenId = null;
-    return null; // proceed
+    return null;
   }
 
-  // Case 2: MCP OAuth token
-  const authHeader = request.headers.get('Authorization') ?? '';
-  const bearerMatch = authHeader.match(/^Bearer\s+(ask_mcp_[A-Za-z0-9_-]+)$/);
-  if (bearerMatch) {
-    const token = await resolveMcpToken(env, bearerMatch[1]);
-    if (token) {
-      // Load org
-      const org = await env.DB.prepare('SELECT * FROM orgs WHERE id = ?').bind(token.org_id).first();
-      if (org) {
-        request.org          = org;
-        request.user         = token.user_id ? { userId: token.user_id } : null;
-        request.authMethod   = 'mcp_oauth';
-        request.mcpScopes    = token.scope.split(' ');
-        request.mcpTokenId   = token.token_id;
-        return null; // proceed
-      }
+  const bearer = bearerOf(request);
+  if (bearer && bearer.startsWith(MCP_TOKEN_TAG)) {
+    const token = await resolveAccessToken(env, bearer);
+    if (token && token.valid) {
+      // Only the org id is attached, matching exactly what requireAuth's
+      // API-key path sets. An earlier draft selected the whole organisation
+      // row and assigned it to `request.org`, which is both a wider object
+      // than any handler wants and a query against a table that does not
+      // exist under that name (`organisations`, not `orgs`). Downstream code
+      // reads `request.org.orgId` and nothing else.
+      request.org        = { orgId: token.org_id };
+      request.user       = token.user_id ? { userId: token.user_id } : undefined;
+      request.authMethod = "mcp_oauth";
+      request.mcpScopes  = String(token.scope || "").split(/\s+/).filter(Boolean);
+      request.mcpTokenId = token.token_id;
+      return null;
     }
   }
 
-  // Case 3: Unauthenticated → 401 with resource metadata hint
-  const resourceMeta = `${env.SITE_ORIGIN ?? ''}/.well-known/oauth-protected-resource`;
+  return unauthorized(request, env);
+}
+
+/**
+ * The 401 that starts an OAuth flow.
+ *
+ * `WWW-Authenticate: Bearer resource_metadata="…"` is the entire mechanism by
+ * which a host discovers it can authenticate at all. Without this header a
+ * spec-compliant client reports "unauthorized" and stops; with it, the client
+ * fetches the metadata, registers, and runs PKCE unattended. It is one header
+ * and it is the difference between a connector that works and one that does
+ * not, so it is centralised here rather than repeated at each call site.
+ */
+export function unauthorized(request, env, description = "A valid bearer token is required.") {
   return new Response(
-    JSON.stringify({ error: 'unauthorized', error_description: 'Valid bearer token required' }),
+    JSON.stringify({ error: "unauthorized", error_description: description }),
     {
       status: 401,
       headers: {
-        'Content-Type': 'application/json',
-        'WWW-Authenticate': `Bearer resource_metadata="${resourceMeta}"`,
+        "content-type": "application/json",
+        "WWW-Authenticate":
+          `Bearer realm="algosize", resource_metadata="${protectedResourceMetadataUrl(request, env)}"`,
       },
-    }
+    },
   );
 }
 
+/** Does the authenticated request hold `scope`? */
+export function requestHasScope(request, scope) {
+  return hasScope(request.mcpScopes || [], scope);
+}
+
 /**
- * Assert that the authenticated request has a required scope.
- * Returns a JSON-RPC scope error object, or null if the scope is present.
+ * The identity a tool call is attributed to.
+ *
+ * Everything downstream — the quota meter, the usage row, the run's
+ * provenance — keys off the ORG, never the person. That matches how the rest
+ * of the product bills and stores: an API key belongs to the organisation, a
+ * run belongs to the organisation, and a member leaving must not orphan
+ * either. `userId` rides along only for the audit trail on OAuth grants,
+ * where a specific person did click approve.
  */
-export function assertScope(request, requiredScope) {
-  const scopes = request.mcpScopes ?? [];
-  if (scopes.includes(requiredScope)) return null;
+export function identityOf(request) {
   return {
-    code: -32003,
-    message: `Scope required: ${requiredScope}`,
-    data: { required: requiredScope, granted: scopes },
+    orgId:      request.org && request.org.orgId ? request.org.orgId : null,
+    userId:     request.user && request.user.userId ? request.user.userId : null,
+    authMethod: request.authMethod || "unknown",
+    scopes:     request.mcpScopes || [],
+    tokenId:    request.mcpTokenId || null,
+    apiKeyId:   request.apiKeyId || null,
   };
 }

@@ -12,7 +12,7 @@
 
 import { Router } from "itty-router";
 import { handlePreflight, withCors, corsHeaders } from "./cors.js";
-import { requireAuth } from "./auth.js";
+import { requireAuth, requireAuthSoft } from "./auth.js";
 import { checkoutHandler, checkoutSuccessHandler } from "./handlers/checkout.js";
 import { stripeWebhookHandler } from "./handlers/webhook.js";
 import {
@@ -125,6 +125,15 @@ import {
 import { pageviewPixelHandler } from "./handlers/pageview.js";
 import { seedHandler } from "./handlers/_seed.js";
 import { enforceQuota } from "./quota.js";
+import {
+  mcpPostHandler, mcpGetHandler, mcpDeleteHandler, mcpManifestHandler,
+  mcpUsageHandler, mcpListClientsHandler, mcpRevokeClientHandler,
+} from "./handlers/mcp.js";
+import { mcpAuth } from "./mcp/auth.js";
+import { mcpPreflight } from "./mcp/transport.js";
+import {
+  authorizationServerMetadata, protectedResourceMetadata, metadataResponse,
+} from "./mcp/metadata.js";
 import { makeRateLimit, makeApiKeyRateLimit } from "./middleware/rate-limit.js";
 import { captureException } from "./observability.js";
 import { generateFixHandler } from "./handlers/fix.js";
@@ -458,6 +467,57 @@ router.get(   "/api/scorecard",              requireAuth, scorecardHandler);
 router.get(   "/api/arch/snapshots",         requireAuth, listArchSnapshotsHandler);
 router.get(   "/api/arch/diff",              requireAuth, archDiffHandler);
 router.get(   "/api/arch/snapshots/:id",     requireAuth, getArchSnapshotHandler);
+
+// ---- Model Context Protocol server (migrations/0019) ----------------------
+// One endpoint speaking Streamable HTTP, so an MCP host — Claude Code, Claude
+// Desktop, Claude.ai, Cursor — can drive the analyzers as tools. Every tool is
+// an adapter over a handler registered above; see src/mcp/chains.js, which
+// carries the same middleware chains these routes use.
+//
+// The whole surface is gated behind MCP_ENABLED / the `mcp.enabled` flag and
+// fails SHUT, so merging this changes nothing until the runbook flips it.
+//
+// mcpAuth composes AFTER requireAuth rather than replacing it: an ask_live_
+// key or a cookie is resolved by exactly the code every other route uses, and
+// mcpAuth only adds the ask_mcp_ OAuth token type on top. `requireAuthSoft`
+// lets an unauthenticated request reach mcpAuth so it can answer with the
+// WWW-Authenticate header that starts the OAuth dance — a bare 401 from
+// requireAuth would leave a spec-compliant host with nowhere to go.
+// 120 envelopes a minute per credential. Generous — one conversational turn
+// can legitimately fan out to a dozen reads — but bounded, because an MCP
+// client is a program and a loop in it would otherwise be unbounded.
+const mcpEnvelopeRateLimit = makeApiKeyRateLimit({ keyName: "mcp", limit: 120, windowSec: 60 });
+
+// The two discovery documents. Thin wrappers rather than handlers of their
+// own: the documents are pure functions of the request origin, and giving
+// them a handler file would be a file that exists to call one function.
+const mcpProtectedResourceHandler = (request, env) =>
+  metadataResponse(protectedResourceMetadata(request, env));
+const mcpAuthServerHandler = (request, env) =>
+  metadataResponse(authorizationServerMetadata(request, env));
+
+router.options("/api/mcp",  mcpPreflight);
+router.post(   "/api/mcp",  mcpEnvelopeRateLimit, requireAuthSoft, mcpAuth, mcpPostHandler);
+router.get(    "/api/mcp",  mcpEnvelopeRateLimit, requireAuthSoft, mcpAuth, mcpGetHandler);
+router.delete( "/api/mcp",  mcpEnvelopeRateLimit, requireAuthSoft, mcpAuth, mcpDeleteHandler);
+
+// Public and cacheable: the catalog describes what the tools ARE and carries
+// no customer data, so it is readable before anything is connected.
+router.get(   "/api/mcp/manifest",   mcpManifestHandler);
+
+router.get(   "/api/mcp/usage",      requireAuth, mcpUsageHandler);
+router.get(   "/api/mcp/clients",    requireAuth, mcpListClientsHandler);
+router.delete("/api/mcp/clients/:id", requireAuth, mcpRevokeClientHandler);
+
+// OAuth 2.1 discovery. Served from the apex (see worker/wrangler.toml's
+// routes) AND from under /api/ — the apex path is what the spec requires and
+// what the WWW-Authenticate header advertises; the /api/ alias is what makes
+// the flow exercisable under `wrangler dev`, which has no zone routes at all,
+// and before new zone routes finish propagating.
+router.get("/.well-known/oauth-protected-resource",    mcpProtectedResourceHandler);
+router.get("/.well-known/oauth-authorization-server",  mcpAuthServerHandler);
+router.get("/api/.well-known/oauth-protected-resource",   mcpProtectedResourceHandler);
+router.get("/api/.well-known/oauth-authorization-server", mcpAuthServerHandler);
 
 // ---- Analytics noscript pixel (Task #26) ----------------------------------
 // Forwards a GET <img> request to Plausible's POST events API so visitors

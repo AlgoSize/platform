@@ -41,8 +41,24 @@ import { captureException } from "../observability.js";
 // non-200 status — we never persist failures or validation errors.
 async function maybePersist(ctx, env, request, analyzer, input, response) {
   if (!response || response.status !== 200) return;
-  const userId = request.user && request.user.userId;
-  if (!userId || !env || !env.DB) return;
+  if (!env || !env.DB) return;
+
+  // Run persistence is ORG-FIRST.
+  //
+  // This used to require request.user.userId and return early without it. An
+  // API key authenticates as the organisation and sets request.org with NO
+  // request.user — so every analyzer call made with a key was analysed,
+  // metered and billed, and then produced no run row, no report in R2, and no
+  // architecture snapshot. The work was charged for and thrown away, and the
+  // dashboard showed nothing.
+  //
+  // persistRun has always accepted an org-only owner (`if (!userId && !orgId)
+  // return null`), so the gap was entirely in this caller. MCP traffic is
+  // key- or token-authenticated by construction, which would have made every
+  // MCP analysis invisible for the same reason.
+  const userId = (request.user && request.user.userId) || null;
+  const directOrgId = (request.org && request.org.orgId) || null;
+  if (!userId && !directOrgId) return;
   let result;
   try { result = await response.clone().json(); }
   catch { return; }
@@ -53,11 +69,24 @@ async function maybePersist(ctx, env, request, analyzer, input, response) {
   // org_id NULL — so a dashboard run stayed invisible to the rest of the team
   // and its report had no org to key on in R2. Resolved here rather than
   // inside persistRun so the lookup happens once per run, not once per caller.
-  let orgId = null;
-  try {
-    const active = await getActiveOrg(env, userId);
-    orgId = active ? active.org.orgId : null;
-  } catch { /* history is best-effort; an org lookup failure must not lose it */ }
+  // A key already names its org, so there is nothing to look up. Only the
+  // session path needs the membership query.
+  let orgId = directOrgId;
+  if (!orgId && userId) {
+    try {
+      const active = await getActiveOrg(env, userId);
+      orgId = active ? active.org.orgId : null;
+    } catch { /* history is best-effort; an org lookup failure must not lose it */ }
+  }
+
+  // Which credential produced this run, for the runs feed's provenance label.
+  // The id is a key id or an opaque token id — never the secret itself, which
+  // by then exists only as a hash anyway.
+  const credentialKind =
+    request.authMethod === "mcp_oauth" ? "mcp_oauth"
+    : request.authMethod === "api_key" ? "api_key"
+    : "session";
+  const credentialId = request.mcpTokenId || request.apiKeyId || null;
 
   // Render the client-facing report as soon as the run is filed, so a share
   // link opened minutes later serves from R2 instead of rendering on the
@@ -80,7 +109,9 @@ async function maybePersist(ctx, env, request, analyzer, input, response) {
     if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(snap);
   }
 
-  const persisted = queuePersist(ctx, env, { userId, orgId, analyzer, input, result, ms })
+  const persisted = queuePersist(ctx, env, {
+    userId, orgId, analyzer, input, result, ms, credentialKind, credentialId,
+  })
     .then((run) => (run ? storeReportFor(env, ctx, run) : null))
     .catch((err) => { console.error("maybePersist: report store failed", err); return null; });
   if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(persisted);
