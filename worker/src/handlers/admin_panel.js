@@ -848,7 +848,87 @@ export async function adminAutomationHandler(request, env) {
         },
       },
     },
+    mcp: await mcpAdoption(env, now),
   });
+}
+
+/**
+ * MCP adoption, for the automation view.
+ *
+ * Answers the three questions an operator actually has about a surface that
+ * was shipped behind a flag: is anyone using it, is it working, and is it
+ * costing them runs they did not expect.
+ *
+ * Aggregate only — no org is named and no tool argument exists to leak. The
+ * per-org detail belongs on the account drawer, where an operator is already
+ * looking at one customer on purpose.
+ */
+async function mcpAdoption(env, now) {
+  const since = now - 30 * DAY;
+
+  // Every count is over the same 30-day window so the numbers can be read
+  // against each other. A "calls" figure for 30 days beside an "orgs" figure
+  // for all time would invite exactly the wrong ratio.
+  const totals = await allRows(env,
+    `SELECT COUNT(*)                                                   AS calls,
+            COUNT(DISTINCT org_id)                                     AS orgs,
+            SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END)             AS ok,
+            SUM(CASE WHEN status = 'quota_exceeded' THEN 1 ELSE 0 END) AS quota,
+            SUM(CASE WHEN run_id IS NOT NULL THEN 1 ELSE 0 END)        AS runs,
+            AVG(duration_ms)                                           AS avg_ms
+       FROM mcp_tool_calls
+      WHERE created_at >= ?`, since);
+  const t = totals[0] || {};
+  const calls = Number(t.calls || 0);
+
+  const topTools = await allRows(env,
+    `SELECT tool_name, COUNT(*) AS n,
+            SUM(CASE WHEN status <> 'ok' THEN 1 ELSE 0 END) AS errors
+       FROM mcp_tool_calls
+      WHERE created_at >= ?
+      GROUP BY tool_name
+      ORDER BY n DESC
+      LIMIT 10`, since);
+
+  const byDay = await allRows(env,
+    `SELECT created_at / 86400 AS day, COUNT(*) AS n
+       FROM mcp_tool_calls
+      WHERE created_at >= ?
+      GROUP BY day
+      ORDER BY day`, since);
+
+  const grants = await allRows(env,
+    `SELECT COUNT(DISTINCT org_id)                                        AS orgs,
+            COUNT(DISTINCT client_id)                                     AS clients,
+            SUM(CASE WHEN revoked_at IS NULL THEN 1 ELSE 0 END)           AS live
+       FROM mcp_tokens`);
+  const g = grants[0] || {};
+
+  return {
+    // Stated, because "0 calls" from a flag that is off and "0 calls" from a
+    // flag that is on and unused are different facts, and only one of them is
+    // a product problem.
+    enabled: String(env.MCP_ENABLED || "").toLowerCase() === "true",
+    windowDays: 30,
+    calls,
+    orgsCalling: Number(t.orgs || 0),
+    runsConsumed: Number(t.runs || 0),
+    quotaRefused: Number(t.quota || 0),
+    avgDurationMs: t.avg_ms != null ? Math.round(t.avg_ms) : null,
+    // Null rather than 0 when nothing has been called. A 0% error rate over
+    // zero calls is not a healthy surface, it is an untested one, and a
+    // dashboard that renders them the same way hides the difference.
+    errorRate: calls > 0 ? (calls - Number(t.ok || 0)) / calls : null,
+    oauth: {
+      orgsWithGrant: Number(g.orgs || 0),
+      clients:       Number(g.clients || 0),
+      liveTokens:    Number(g.live || 0),
+    },
+    topTools: topTools.map((r) => ({
+      tool: r.tool_name, calls: Number(r.n), errors: Number(r.errors || 0),
+    })),
+    byDay: byDay.map((r) => ({ day: Number(r.day) * 86400, calls: Number(r.n) })),
+  };
 }
 
 // ---------------------------------------------------------------------------
