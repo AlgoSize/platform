@@ -235,10 +235,29 @@ key revocations, plan changes — under machine noise. The audit log answers
 ## Enabling it
 
 Off by default, and it fails **shut**: a flag lookup that errors returns
-false. `MCP_ENABLED=true` turns it on environment-wide; the `mcp.enabled`
-feature flag allows a per-org rollout on top. With it off, `/api/mcp` returns
-404 — not 403, because an endpoint nobody is entitled to use should not
-confirm it exists.
+false. `MCP_ENABLED=true` turns it on environment-wide; per-org enablement is
+the `mcp.enabled` flag plus a subject override (migrations/0020) — the flag's
+`rollout_pct` alone buckets by hash and cannot name an organisation.
+
+With it off, an **authenticated** caller gets 404 — not 403, because an
+endpoint nobody is entitled to use should not confirm it exists.
+
+An **unauthenticated** caller gets 401 whether the surface is on or off, and
+that is not a leak — it is the order the route has to run in. `mcpAuth` sits
+ahead of the handler and answers before `mcpEnabled` is ever consulted,
+because its 401 carries the `WWW-Authenticate` header that is the entire
+mechanism by which an OAuth client discovers it can authenticate (see "The
+401 that matters" above). Moving the flag check in front of it would trade a
+working OAuth discovery path for hiding the endpoint's existence from
+strangers, which is the wrong trade — the manifest is public anyway.
+
+The consequence for operators: **an unauthenticated probe cannot tell you
+whether MCP is enabled.** `curl -X POST /api/mcp` returns 401 in both states.
+To check the gate, use an authenticated call — a real key, or the admin
+schema/flag endpoints. An earlier version of the deploy runbook told
+operators to expect 404 from a bare POST and to read a 401 as "the flag is
+somehow set"; both were wrong, and the second could have been read as
+evidence of an enablement that never happened.
 
 ## Workers AI model selection
 
