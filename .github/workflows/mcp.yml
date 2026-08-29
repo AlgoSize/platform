@@ -1,0 +1,86 @@
+name: MCP server and bridge
+
+# The MCP surface's own gate.
+#
+# It exists separately from worker.yml because worker.yml only runs on push to
+# main and staging — it is the deploy pipeline, so the full worker suite gets
+# its first CI exposure at merge time, when a failure fails a production
+# deploy. That is the wrong moment to learn a tool adapter is broken.
+#
+# This one runs on PULL REQUESTS, so anything touching the MCP surface is
+# tested before it can be merged, not while it is deploying.
+
+on:
+  pull_request:
+    paths:
+      - "worker/src/mcp/**"
+      - "worker/src/handlers/mcp.js"
+      - "worker/src/analyzers/llm.js"
+      - "worker/migrations/**"
+      - "worker/scripts/test-mcp-*.mjs"
+      - "worker/scripts/test-llm-routing.mjs"
+      - "mcp/**"
+      - ".mcp.json"
+      - ".github/workflows/mcp.yml"
+  push:
+    branches: [main]
+    paths:
+      - "worker/src/mcp/**"
+      - "worker/src/handlers/mcp.js"
+      - "mcp/**"
+
+permissions:
+  contents: read
+
+jobs:
+  mcp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install worker dependencies
+        working-directory: worker
+        run: npm ci
+
+      # Ordered cheapest-and-most-structural first, so a purity violation —
+      # the one failure that would otherwise pass every functional test while
+      # silently giving analyses away for free — is reported in seconds rather
+      # than after the whole protocol suite has run.
+      - name: Purity guard (no tool may bypass callHandler)
+        working-directory: worker
+        run: node scripts/test-mcp-purity.mjs
+
+      - name: MCP protocol, sessions, scopes and tools
+        working-directory: worker
+        run: node scripts/test-mcp-protocol.mjs
+
+      - name: Workers AI model routing (Kimi K3 vs K2.6)
+        working-directory: worker
+        run: node scripts/test-llm-routing.mjs
+
+      # No install step: the bridge has zero dependencies, deliberately. It
+      # ships over npx onto other people's machines, and every dependency
+      # would be one more thing to audit there.
+      - name: stdio bridge
+        run: node mcp/test/smoke.test.mjs
+
+      - name: Bridge declares no runtime dependencies
+        run: |
+          node -e '
+            const pkg = require("./mcp/package.json");
+            const deps = Object.keys(pkg.dependencies || {});
+            if (deps.length) {
+              console.error("The bridge must stay dependency-free; found: " + deps.join(", "));
+              process.exit(1);
+            }
+            console.log("bridge has no runtime dependencies");
+          '
+
+      # The full suite last. It is the slowest, and by this point the
+      # MCP-specific failures have already been surfaced with a clear name.
+      - name: Full worker suite
+        working-directory: worker
+        run: npm test

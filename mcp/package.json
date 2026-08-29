@@ -1,0 +1,13 @@
+{
+  "name": "@algosize/mcp",
+  "version": "1.0.0",
+  "description": "Model Context Protocol bridge for Algosize — run dependency, cost, complexity and architecture analysis from an AI coding assistant.",
+  "type": "module",
+  "bin": { "algosize-mcp": "./bin/algosize-mcp.mjs" },
+  "exports": { ".": "./src/bridge.mjs" },
+  "files": ["bin", "src", "README.md"],
+  "engines": { "node": ">=20" },
+  "scripts": { "test": "node test/smoke.test.mjs" },
+  "license": "SEE LICENSE IN ../LICENSE",
+  "keywords": ["mcp", "model-context-protocol", "algosize", "claude", "security", "cost"]
+}
