@@ -300,6 +300,90 @@ console.log("\nGET /api/me — isAdmin\n");
   }
 }
 
+console.log("\nGET /api/me — org-only callers (API key, MCP OAuth)\n");
+
+// An org-only caller — an API key or an MCP OAuth token — has no session
+// user at all: request.user is unset, request.org is what identifies it.
+// resolveEntitlement's NO_USER_ID branch is a safety net for requireAuth
+// never having run, not a real account state, and it always answers
+// plan "free", active false. Before the org-first fallback below existed,
+// meHandler called resolveEntitlement with an undefined userId for EVERY
+// org-only caller, so every one of them — including a genuinely paying
+// organisation — hit that safety net and was told it was on a free,
+// inactive plan. This is the gap algosize_whoami exposes directly: an
+// assistant connected via API key asking a paying customer's own account
+// "what's my plan" got told the wrong thing, on every call, unconditionally.
+
+// 11. A PAID, active org, called with no session user — the case that was
+//     silently wrong. This is the one test that would have caught it.
+{
+  const env = makeEnv();
+  await env.DB.prepare(
+    `INSERT INTO organisations (org_id, name, stripe_customer_id, plan, sub_status, seats_purchased, created_at, updated_at)
+     VALUES ('org_paid', 'Paid Co', 'cus_paid', 'paid', 'active', 5, 0, 0)`,
+  ).run();
+
+  const req = new Request("http://localhost/api/me", { method: "GET" });
+  req.org = { orgId: "org_paid" };
+  req.authMethod = "api_key";
+  // No requireAuth in this path — an API key never goes through it; mcpAuth
+  // (or the direct API-key middleware) attaches request.org instead, and
+  // meHandler is called directly, exactly as it is here.
+  const res = await meHandler(req, env);
+  const body = await res.json();
+  if (res.status === 200 && body.plan === "paid" && body.active === true) {
+    ok("a paid, active org reports plan:\"paid\", active:true for an org-only caller — not the free/inactive fallback");
+  } else {
+    fail(`expected plan:"paid" active:true, got status=${res.status} body=${JSON.stringify(body)}`);
+  }
+  if (body.reason === "active_subscription") {
+    ok("…and the reason names the real state, not no_user_id");
+  } else {
+    fail(`expected reason "active_subscription", got ${body.reason}`);
+  }
+  if (body.email === null && body.isAdmin === false) {
+    ok("…while identity fields stay null — there is genuinely no human user behind this call");
+  } else {
+    fail(`expected no identity leaking through, got email=${body.email} isAdmin=${body.isAdmin}`);
+  }
+}
+
+// 12. A genuinely FREE org, called the same way — the case that happened to
+//     look right before the fix (free was the fallback's answer too), for
+//     the wrong reason. Confirms the fix didn't just move the bug.
+{
+  const env = makeEnv();
+  await env.DB.prepare(
+    `INSERT INTO organisations (org_id, name, stripe_customer_id, plan, sub_status, seats_purchased, created_at, updated_at)
+     VALUES ('org_free', 'Free Co', NULL, 'free', NULL, 1, 0, 0)`,
+  ).run();
+
+  const req = new Request("http://localhost/api/me", { method: "GET" });
+  req.org = { orgId: "org_free" };
+  req.authMethod = "api_key";
+  const res = await meHandler(req, env);
+  const body = await res.json();
+  if (res.status === 200 && body.plan === "free" && body.active === false && body.reason === "free_plan") {
+    ok("a genuinely free org reports plan:\"free\", reason:free_plan — right answer, and now for the right reason");
+  } else {
+    fail(`expected plan:"free" reason:"free_plan", got ${JSON.stringify(body)}`);
+  }
+}
+
+// 13. Neither a session user nor an org — the true safety-net case
+//     (should not happen given the router, but must still fail safe).
+{
+  const env = makeEnv();
+  const req = new Request("http://localhost/api/me", { method: "GET" });
+  const res = await meHandler(req, env);
+  const body = await res.json();
+  if (res.status === 200 && body.plan === "free" && body.active === false && body.reason === "no_user_id") {
+    ok("with neither a session user nor an org, the safety net still answers free/inactive/no_user_id");
+  } else {
+    fail(`expected the NO_USER_ID safety net, got ${JSON.stringify(body)}`);
+  }
+}
+
 // ---------- summary ----------
 console.log("");
 if (failures === 0) {

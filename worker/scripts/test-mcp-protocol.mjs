@@ -252,6 +252,37 @@ group("tools/list");
 }
 
 // ---------------------------------------------------------------------------
+group("algosize_whoami reports the ORG's real entitlement");
+// ---------------------------------------------------------------------------
+// This org is seeded paid+active (see seed() above) specifically so this
+// tool is exercised against a caller with no session user AND a plan worth
+// getting wrong. handlers/me.js used to resolve entitlement off
+// request.user.userId unconditionally — undefined for an API-key caller —
+// which meant every org-only connection was told it was on a free, inactive
+// plan regardless of what it actually paid for. Nothing in this suite called
+// algosize_whoami before, so a paid org's own dashboard tests passed while
+// its own assistant lied to it about its plan on every single call.
+{
+  const env = makeEnv(); await seed(env);
+  const init = await worker.fetch(rpc(INIT), env, ctx);
+  const sid = init.headers.get("Mcp-Session-Id");
+
+  const res = await worker.fetch(rpc({
+    jsonrpc: "2.0", id: 40, method: "tools/call",
+    params: { name: "algosize_whoami", arguments: {} },
+  }, { sessionId: sid }), env, ctx);
+  const out = (await res.json()).result;
+
+  expect(out && out.isError === false, "whoami succeeds for an API-key caller");
+  expect(out.structuredContent && out.structuredContent.authMethod === "api_key",
+    `…identifies the credential as api_key (got ${out.structuredContent && out.structuredContent.authMethod})`);
+  expect(out.structuredContent && out.structuredContent.plan === "paid",
+    `…and reports the ORG's real plan, paid (got ${out.structuredContent && out.structuredContent.plan})`);
+  expect(out.structuredContent && out.structuredContent.active === true,
+    "…active, not the free/inactive fallback a caller with no session user used to get regardless of what its org paid for");
+}
+
+// ---------------------------------------------------------------------------
 group("tools/call");
 {
   const env = makeEnv(); await seed(env);
