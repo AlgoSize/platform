@@ -42,6 +42,7 @@ import { getRunHandler } from "../src/handlers/runs.js";
 import { analyzeArchitecture } from "../src/analyzers/architecture.js";
 import { persistRun } from "../src/handlers/runs.js";
 import { aggregateOf } from "../src/handlers/estimate_history.js";
+import { listArchSnapshotsHandler } from "../src/handlers/arch_snapshots.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUT = join(__dirname, "..", "..", "tests", "fixtures");
@@ -289,6 +290,14 @@ const run = async () => {
   await cap("/api/mcp/manifest", mcpManifestHandler);
   await cap("/api/mcp/usage", mcpUsageHandler);
   await cap("/api/mcp/clients", mcpListClientsHandler);
+
+  // The X-ray's drift panel asks for the snapshot history on every render.
+  // Captured from the real handler so the fixture carries its actual shape —
+  // including `basis`, the sentence that stops an empty list being read as
+  // "this org has no architecture". Without this the visual audit falls back
+  // to an empty object, which happens to render the same empty state for the
+  // wrong reason.
+  await cap("/api/arch/snapshots", listArchSnapshotsHandler);
 
   // One report payload per analyzer, keyed by run id, so the visual audit can
   // open each report layout.

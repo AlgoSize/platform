@@ -12,8 +12,42 @@ import { hasScope, SCOPES } from "./tokens.js";
 export { TOOLS, TOOL_GROUPS };
 
 /** One tool by name, or null. */
+// Names a caller might reasonably use that resolve to a real tool. The
+// architecture analyzer is marketed as the "X-ray", and a model that has read
+// the product's own pages reaches for that word — AUDIT-REPORT.md §1 caught a
+// session doing exactly this and getting nothing. An alias resolves to the
+// SAME tool object, so scope and plan gating are identical and telemetry
+// records the canonical name; tools/list never advertises aliases, because a
+// catalog with two names for one tool reads as two tools.
+const TOOL_ALIASES = Object.freeze({
+  algosize_xray_architecture: "algosize_analyze_architecture",
+});
+
 export function getTool(name) {
-  return TOOLS.find((t) => t.name === name) || null;
+  const canonical = TOOL_ALIASES[name] || name;
+  return TOOLS.find((t) => t.name === canonical) || null;
+}
+
+/**
+ * The closest real tool name to a miss, for the unknown-tool error message.
+ * Deliberately crude — shared-token overlap on underscore-split words — and
+ * deliberately conservative: no suggestion beats a wrong one, so it answers
+ * only when exactly one tool clearly leads.
+ */
+export function nearestToolName(name) {
+  const raw = String(name || "").toLowerCase();
+  if (!raw) return null;
+  const parts = new Set(raw.split(/[^a-z0-9]+/).filter((w) => w && w !== "algosize"));
+  if (!parts.size) return null;
+  let best = null, bestScore = 0, tied = false;
+  for (const t of TOOLS) {
+    const words = t.name.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w && w !== "algosize");
+    let score = 0;
+    for (const w of words) if (parts.has(w)) score++;
+    if (score > bestScore) { best = t.name; bestScore = score; tied = false; }
+    else if (score === bestScore && score > 0) tied = true;
+  }
+  return bestScore > 0 && !tied ? best : null;
 }
 
 /**

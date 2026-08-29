@@ -16,7 +16,7 @@ other factual assertion the description made about this codebase.
 
 ## 1 · Claim verification
 
-### Claim: "`mcp_tool_calls` logs every tool invocation" — TRUE, with two precise edges
+### Claim: "`mcp_tool_calls` logs every tool invocation" — TRUE, with two precise edges (one since closed)
 
 The table exists (`worker/migrations/0019_mcp.sql:49-61`) and deliberately
 stores **no arguments and no results** — the migration's own comment: *"no
@@ -39,9 +39,10 @@ of a `tools/call`:
 
 The two edges where "every" is not literally true:
 
-1. **A call to a nonexistent tool name** returns an RPC error with no row
-   (`mcp.js:292-294`). Failed probes for tools that don't exist are invisible
-   to the usage table.
+1. **A call to a nonexistent tool name** returned an RPC error with no row
+   (`mcp.js:292-294`). Failed probes for tools that don't exist were invisible
+   to the usage table. **Closed:** such calls now write a row with
+   `status: "denied"`, `error_code: "unknown_tool"`.
 2. **`logToolCall` fails silently by design** (`telemetry.js:56-58` returns
    `false` on any D1 error) — availability of the analysis is prioritised over
    completeness of the log. Correct trade-off; worth knowing when reading the
@@ -53,9 +54,21 @@ matches the table's stated purpose.
 
 ### Claim (implied): the architecture tool is named `algosize_xray_architecture` — FALSE
 
-No such identifier exists anywhere in `worker/src` or `mcp/`. The real tool is
-**`algosize_analyze_architecture`** (`worker/src/mcp/tools/analysis.js:226`).
-Any plan or design prompt must use the real name.
+No such identifier existed anywhere in `worker/src` or `mcp/` when this audit
+was written. The real tool is **`algosize_analyze_architecture`**
+(`worker/src/mcp/tools/analysis.js:226`).
+
+**Resolved since:** rather than only correcting the documents, the gap was
+closed in the product. `algosize_xray_architecture` is now an **alias** that
+resolves to the same tool object (`worker/src/mcp/registry.js`), because the
+architecture analyzer is marketed as the "X-ray" and a model that has read the
+product's own pages reaches for that word — this audit caught a real session
+doing exactly that and getting nothing. The alias shares the canonical tool's
+scope and plan gating, is logged under the canonical name so usage never
+splits one tool in two, and is never advertised in `tools/list` (a catalog
+with two names for one tool reads as two tools). Unknown names that are not
+aliases now get a "did you mean" naming the nearest single match, and no
+suggestion at all when two tools tie — a wrong hint is worse than none.
 
 ### Claim: the repo root has two MCP-PLAN files that may have diverged — TRUE, and the divergence is resolved by reading them
 
@@ -67,9 +80,11 @@ They diverge by 576 diff lines, but they are not competing truths:
 - `MCP-PLAN - Algosize server.md` — status **"plan, written before
   implementation"** (lines 3-5). It is the superseded original, kept verbatim.
 
-Nothing needs reconciling; the second file is historical. Recommendation
-(user's call, not made here): move it to an `archive/` folder or delete it —
-its presence at the root is what caused this confusion in the first place.
+Nothing needs reconciling; the second file is historical.
+
+**Resolved since:** moved to `archive/MCP-PLAN-original-preimplementation.md`.
+Its presence at the root, under a name one character different from the
+as-built document, is what caused this confusion in the first place.
 
 ### Claim: the existing design prompt already specs an Activity feed and Tool catalog — TRUE
 
@@ -201,7 +216,7 @@ Binding rules already enforced in this tree:
   migrations (`worker/migrations/`), MCP tables included. The doc is honest
   about its own commit pin, so this is staleness, not error — but a Part-2
   plan must not inherit its counts.
-- `MCP-PLAN - Algosize server.md` — superseded original, see §1.
+- The superseded MCP-PLAN original — now `archive/MCP-PLAN-original-preimplementation.md`, see §1.
 
 ---
 

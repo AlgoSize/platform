@@ -27,10 +27,12 @@ description: Algosize re-scans your lockfiles and source on every pull request a
           </h1>
           <p class="lede">
             Algosize re-scans your lockfiles and your source on every pull
-            request and again on a schedule. Each advisory carries the CVSS
-            vector it was scored from, the version that fixes it, and the
-            command that gets you there — in your PR, your Security tab, and
-            your inbox.
+            request and again on a schedule — vulnerabilities, cloud cost,
+            algorithmic complexity, infrastructure estimates and an
+            architecture X-ray. Each finding carries what it was derived
+            from: the CVSS vector, the file and line, the version that fixes
+            it. In your PR, your Security tab, your inbox — and, now, inside
+            your AI coding assistant.
           </p>
           <div class="hero-actions">
             <a href="#pricing" class="btn btn-primary">See pricing →</a>
@@ -40,6 +42,7 @@ description: Algosize re-scans your lockfiles and source on every pull request a
             <li><span class="mono">SARIF 2.1.0</span> to the GitHub Security tab</li>
             <li><span class="mono">fail_on</span> threshold gates the build</li>
             <li>Nightly re-scan, <span class="mono">diff-only</span> alerts</li>
+            <li>An <span class="mono">MCP</span> server your assistant can call</li>
           </ul>
         </div>
 
@@ -277,6 +280,184 @@ description: Algosize re-scans your lockfiles and source on every pull request a
 <span class="ok">→</span> sarif uploaded to the security tab  <span class="dim">(category: algosize)</span>
 <span class="warn">✗</span> threshold <span class="num">high</span> exceeded — failing the build</pre>
       </aside>
+    </div>
+  </section>
+
+  <!-- ============= THE SUITE + MCP =============
+       Everything here describes behaviour that ships: the five analyzers are
+       worker/src/analyzers/, the snapshot history is migration 0018, and the
+       MCP server is worker/src/mcp/ with its 22 tools. Nothing on this page
+       promises a capability the code does not have — the whole product is
+       built on findings carrying their evidence, and a landing page that
+       overstates is the same failure one layer up. -->
+  <section class="section" id="suite">
+    <div class="container">
+      <div class="section-head">
+        <span class="eyebrow">What it audits</span>
+        <h2>Five analyzers, one run, one report.</h2>
+        <p>
+          A run is not just a dependency scan. The same submission is read by
+          every analyzer that applies to it, and each one answers with the
+          file and line it read — or says plainly that it could not tell.
+        </p>
+      </div>
+
+      <div class="features">
+
+        <article class="feature">
+          <h3>Dependencies and secrets</h3>
+          <p>
+            Lockfiles resolved against osv.dev, scored with the CVSS vector
+            they were scored from, plus live credentials committed to source
+            with the file and line that holds them.
+          </p>
+          <div class="stat">
+            <span class="value">osv.dev</span>
+            <span class="label">advisory source</span>
+          </div>
+        </article>
+
+        <article class="feature">
+          <h3>Cloud cost and estimates</h3>
+          <p>
+            What the running infrastructure costs, and what a Compose file or
+            a service list would cost before you deploy it — per provider,
+            with the confidence of each figure stated rather than implied.
+          </p>
+          <div class="stat">
+            <span class="value">per provider</span>
+            <span class="label">with confidence</span>
+          </div>
+        </article>
+
+        <article class="feature">
+          <h3>Algorithmic complexity</h3>
+          <p>
+            Big-O of the functions that carry your load, found by parsing the
+            source rather than by running it, with the rewrite that changes
+            the curve.
+          </p>
+          <div class="stat">
+            <span class="value">static</span>
+            <span class="label">no code executed</span>
+          </div>
+        </article>
+
+        <article class="feature">
+          <h3>Architecture X-ray</h3>
+          <p>
+            Your services, datastores and the edges between them, parsed from
+            committed files only. Every node and edge is marked
+            <span class="mono">confirmed</span> or
+            <span class="mono">unconfirmed</span>, and anything the parser
+            could not read is counted and named rather than quietly dropped.
+          </p>
+          <div class="stat">
+            <span class="value">no network</span>
+            <span class="label">committed files only</span>
+          </div>
+        </article>
+
+        <article class="feature">
+          <h3>Drift, captured over time</h3>
+          <p>
+            Every architecture run is snapshotted and chained to the one
+            before it, so "what changed since last week" is a question with a
+            stored answer rather than a memory.
+          </p>
+          <div class="stat">
+            <span class="value">versioned</span>
+            <span class="label">snapshot per run</span>
+          </div>
+        </article>
+
+        <article class="feature">
+          <h3>Monitors that file real runs</h3>
+          <p>
+            A scheduled sweep is not a lesser thing than a manual audit: it
+            produces the same runs, in the same history, with the same
+            reports — and it does not spend your monthly allowance.
+          </p>
+          <div class="stat">
+            <span class="value">no quota</span>
+            <span class="label">scheduled sweeps</span>
+          </div>
+        </article>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= MCP ============= -->
+  <section class="section" id="mcp">
+    <div class="container">
+      <div class="section-head">
+        <span class="eyebrow">In your assistant</span>
+        <h2>Your AI assistant can run the audit itself.</h2>
+        <p>
+          Algosize speaks the Model Context Protocol, so Claude Code, Claude
+          Desktop, Claude.ai and Cursor can run the analyzers and read the
+          results inside the conversation you are already having. Connect with
+          an organisation API key, or approve an OAuth grant with a consent
+          screen that says in words what it does and does not allow.
+        </p>
+      </div>
+
+      <aside class="terminal terminal-wide" aria-label="Example of an assistant calling Algosize tools">
+        <div class="terminal-bar">
+          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          <span class="label">claude code ~ algosize mcp</span>
+        </div>
+<pre class="terminal-body"><span class="prompt">&gt;</span> audit this repo before I open the PR
+<span class="ok">→</span> algosize_analyze_vulnerabilities  <span class="dim">4 lockfiles</span>
+<span class="warn">!</span> minimist 1.2.5 ......... <span class="num">9.8 critical</span>  <span class="dim">fixed in 1.2.6</span>
+<span class="ok">→</span> algosize_analyze_architecture  <span class="dim">31 nodes, 44 edges</span>
+<span class="ok">→</span> algosize_diff_architecture  <span class="dim">1 new edge since main</span>
+<span class="ok">✓</span> run filed <span class="dim">— visible in the dashboard, same as any other</span></pre>
+      </aside>
+
+      <div class="features">
+        <article class="feature">
+          <h3>Twenty-two tools, grouped</h3>
+          <p>
+            Analysis, runs and reports, posture, and monitors. Tools that
+            consume a run say so before they are called, and tools your plan
+            does not include are not offered rather than offered and refused.
+          </p>
+          <div class="stat">
+            <span class="value">22 tools</span>
+            <span class="label">scope-gated</span>
+          </div>
+        </article>
+
+        <article class="feature">
+          <h3>Every call is on the record</h3>
+          <p>
+            The dashboard shows what the assistant actually did, grouped into
+            working sessions: which tools ran, what they cost, what was
+            refused and why. Arguments and results are never stored — they are
+            your source code.
+          </p>
+          <div class="stat">
+            <span class="value">never stored</span>
+            <span class="label">arguments and results</span>
+          </div>
+        </article>
+
+        <article class="feature">
+          <h3>Revocable, and scoped to the org</h3>
+          <p>
+            Credentials belong to the organisation, are stored hashed and
+            shown once, and can be revoked instantly. An MCP connection cannot
+            reach billing, members or credential management, whatever it is
+            asked to do.
+          </p>
+          <div class="stat">
+            <span class="value">instant</span>
+            <span class="label">revocation</span>
+          </div>
+        </article>
+      </div>
     </div>
   </section>
 

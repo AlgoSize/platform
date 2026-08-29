@@ -673,6 +673,7 @@
         "repo": null,
         "commitSha": null,
         "hasInput": true,
+        "monitorId": null,
         "credentialKind": null
       },
       {
@@ -685,6 +686,7 @@
         "repo": null,
         "commitSha": null,
         "hasInput": true,
+        "monitorId": null,
         "credentialKind": null
       },
       {
@@ -697,6 +699,7 @@
         "repo": null,
         "commitSha": null,
         "hasInput": true,
+        "monitorId": null,
         "credentialKind": null
       },
       {
@@ -709,6 +712,7 @@
         "repo": null,
         "commitSha": null,
         "hasInput": true,
+        "monitorId": null,
         "credentialKind": null
       },
       {
@@ -721,6 +725,7 @@
         "repo": null,
         "commitSha": null,
         "hasInput": true,
+        "monitorId": null,
         "credentialKind": null
       }
     ],
@@ -836,9 +841,6 @@
               "type": "number"
             },
             "fixCommand": {
-              "type": "string"
-            },
-            "runId": {
               "type": "string"
             }
           }
@@ -1208,9 +1210,10 @@
               "type": "string",
               "enum": [
                 "ci",
+                "monitor",
                 "manual"
               ],
-              "description": "Only runs from this origin."
+              "description": "Only runs from this origin: ci (a pipeline gate), monitor (a scheduled sweep), or manual (started by a person in the dashboard)."
             }
           },
           "additionalProperties": false
@@ -1927,6 +1930,11 @@
   },
   "/api/mcp/usage": {
     "calls": [],
+    "sessions": [],
+    "preGrouping": {
+      "total": 0,
+      "calls": []
+    },
     "totals": {
       "calls": 0,
       "ok": 0,
@@ -1934,13 +1942,76 @@
       "runsStarted": 0,
       "avgDurationMs": null,
       "busiestTool": null,
+      "sessions": 0,
       "errorRate": null
     },
+    "daily": [
+      {
+        "day": 1784419200,
+        "calls": 0
+      },
+      {
+        "day": 1784505600,
+        "calls": 0
+      },
+      {
+        "day": 1784592000,
+        "calls": 0
+      },
+      {
+        "day": 1784678400,
+        "calls": 0
+      },
+      {
+        "day": 1784764800,
+        "calls": 0
+      },
+      {
+        "day": 1784851200,
+        "calls": 0
+      },
+      {
+        "day": 1784937600,
+        "calls": 0
+      },
+      {
+        "day": 1785024000,
+        "calls": 0
+      },
+      {
+        "day": 1785110400,
+        "calls": 0
+      },
+      {
+        "day": 1785196800,
+        "calls": 0
+      },
+      {
+        "day": 1785283200,
+        "calls": 0
+      },
+      {
+        "day": 1785369600,
+        "calls": 0
+      },
+      {
+        "day": 1785456000,
+        "calls": 0
+      },
+      {
+        "day": 1785542400,
+        "calls": 0
+      }
+    ],
     "comparable": true,
     "since": 1782950400
   },
   "/api/mcp/clients": {
     "connections": []
+  },
+  "/api/arch/snapshots": {
+    "snapshots": [],
+    "basis": "One row per architecture run — manual, CI or nightly sweep — since snapshot history was added."
   },
   "__runs": [
     {

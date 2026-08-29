@@ -4940,6 +4940,59 @@ a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
 .mcp-quota-warn strong { color: var(--accent-warm); }
 
 /* --- Call volume --- */
+/* Activity, grouped by working session. The card is the unit: collapsed it
+   has to be scannable down a page of sessions, expanded it is a narrative. */
+.mcp-session {
+  border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--bg-card); margin-bottom: var(--s-3); overflow: hidden;
+}
+.mcp-session-trouble { border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); }
+.mcp-session-head {
+  display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-2);
+  width: 100%; padding: var(--s-3); background: none; border: 0;
+  color: var(--text); text-align: left; cursor: pointer; font: inherit;
+}
+.mcp-session-head:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
+.mcp-session-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.mcp-session-who { font-weight: 600; flex: 1 1 auto; min-width: 0; }
+.mcp-session-ref { font-size: var(--fs-xs); }
+.mcp-session-chev { color: var(--text-dim); }
+.mcp-session-body { padding: 0 var(--s-3) var(--s-2); border-top: 1px solid var(--border); }
+.mcp-session-more { font-size: var(--fs-xs); padding-top: var(--s-2); }
+.mcp-filter-note { font-size: var(--fs-xs); margin: 0 0 var(--s-3); }
+/* The one-time seam where grouped sessions end and pre-0021 rows begin. */
+.mcp-pre-seam {
+  margin-top: var(--s-4); padding-top: var(--s-3);
+  border-top: 1px dashed var(--border);
+}
+.mcp-pre-seam > p { font-size: var(--fs-xs); margin: 0 0 var(--s-2); }
+@media (max-width: 560px) {
+  /* Stacked rather than horizontally scrolled: the head is the summary and
+     it has to stay readable at the narrowest width. */
+  .mcp-session-head { align-items: flex-start; }
+  .mcp-session-who { flex: 1 1 100%; }
+}
+/* Structural drift, in the X-ray side column. Deliberately quiet: it sits
+   under the findings, and its job is to be readable, not to compete with the
+   canvas for attention. */
+.xray-drift {
+  border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--bg-card); padding: var(--s-3); margin-top: var(--s-3);
+}
+.xray-drift-head { margin: 0 0 var(--s-2); font-size: var(--fs-md); }
+.xray-drift-list { list-style: none; margin: var(--s-2) 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.xray-drift-item {
+  display: flex; align-items: baseline; gap: var(--s-2);
+  padding: var(--s-1) 0; border-bottom: 1px solid var(--border); font-size: 0.82rem;
+}
+.xray-drift-item:last-child { border-bottom: 0; }
+.xray-drift-sign { width: 1ch; font-weight: 700; }
+.xray-drift-added   .xray-drift-sign { color: var(--accent); }
+.xray-drift-removed .xray-drift-sign { color: var(--danger); }
+/* The kind word carries the state so the sign is never the only cue. */
+.xray-drift-kind { color: var(--text-muted); white-space: nowrap; }
+.xray-drift-name { min-width: 0; word-break: break-all; }
+.xray-drift-reduced { margin-top: var(--s-2); }
 .mcp-spark-wrap { display: flex; flex-direction: column; gap: var(--s-2); }
 .mcp-spark-label { font-size: var(--fs-xs); }
 .mcp-spark {

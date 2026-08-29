@@ -43,6 +43,27 @@ Expect `0019` present with all seven checks passing — including
 `runs.credential_kind` and `runs.credential_id`, whose absence is **silent**:
 runs still persist without them, they just lose their provenance label.
 
+## 1b. Apply migration 0021 — session correlation
+
+Ships with the grouped activity feed. Same shape as above:
+
+```
+cd worker
+npx wrangler d1 execute algosize --file=migrations/0021_mcp_session_ref.sql \
+  --remote --env production --config wrangler.toml
+```
+
+Expect `0021` present in the schema check (`mcp_tool_calls.session_ref`).
+
+Its absence is **silent in a specific way worth knowing**: calls keep logging,
+they simply never group, and the dashboard shows every existing row under
+"recorded before session grouping existed" — which is exactly what a
+pre-migration row is, so the UI stays truthful either way. The failure mode is
+a feature that quietly does nothing, not a broken page.
+
+Nothing backfills. Rows written before this migration have no session id to
+recover; they age out of the 30-day window on their own.
+
 ## 2. Add the `.well-known` zone routes
 
 The OAuth discovery documents must be reachable at the apex, which the current
