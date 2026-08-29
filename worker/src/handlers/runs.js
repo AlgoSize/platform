@@ -91,6 +91,14 @@ export const ANALYZERS = Object.freeze(["cost", "vuln", "algo", "arch", "estimat
 export const RUN_SOURCES = Object.freeze(["ci", "monitor", "manual"]);
 
 /**
+ * Complexity labels worst-last, so a sweep's headline can name the worst
+ * grade it found. An unrecognised label sorts to the front (indexOf -1)
+ * rather than winning, because "we could not classify this" is not evidence
+ * of the worst case and must not be reported as if it were.
+ */
+const ALGO_RANK = ["O(1)", "O(log n)", "O(n)", "O(n log n)", "O(n^2)", "O(n^3)", "O(2^n)"];
+
+/**
  * One-line headline metric for the dashboard list. Kept analyzer-specific
  * because the three analyzers don't have a common shape — but each one has
  * an obvious "what's the verdict?" number.
@@ -126,6 +134,22 @@ export function summarize(analyzer, result) {
            `${bySev.critical || 0} crit, ${bySev.high || 0} high`;
   }
   if (analyzer === "algo") {
+    // Two shapes live under "algo". A single run grades one function and has
+    // a bigO and a wall time; a monitor sweep grades every entry in the
+    // repository's optimizer.config.json and has neither — it has a map of
+    // name to complexity. Falling through to the single-function branch gave
+    // the sweep a headline of "unknown · — ms", which is not a summary of
+    // anything and is indistinguishable from a genuinely failed grading.
+    if (result.grades && typeof result.grades === "object") {
+      const names = Object.keys(result.grades);
+      const skipped = (result.skippedEntries || []).length;
+      if (!names.length) return skipped ? `0 graded · ${skipped} skipped` : "nothing to grade";
+      // The worst grade present, because that is the one a reader acts on.
+      const worst = names.map((n) => result.grades[n])
+        .sort((a, b) => ALGO_RANK.indexOf(b) - ALGO_RANK.indexOf(a))[0];
+      return `${names.length} function${names.length === 1 ? "" : "s"} · worst ${worst}` +
+             (skipped ? ` · ${skipped} skipped` : "");
+    }
     const bigO = (result.bigO && result.bigO.label) || "unknown";
     const ms = typeof result.wallTimeMs === "number" ? result.wallTimeMs.toFixed(2) : "—";
     return `${bigO} · ${ms} ms`;

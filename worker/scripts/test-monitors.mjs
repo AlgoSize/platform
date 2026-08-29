@@ -764,6 +764,31 @@ const QUADRATIC = (n) => n * n * 0.0001;   // slope 2 → O(n^2)
   expect(after1.lastAlgo && after1.lastAlgo.byName.sum === "O(n)",
     `the algo baseline graded sum as O(n) (got ${after1.lastAlgo && after1.lastAlgo.byName.sum})`);
 
+  // Every analyzer that produced a result files a run, and each headline has
+  // to summarise the thing that analyzer actually measured. The trap here is
+  // "algo": a sweep grades every entry in optimizer.config.json, while a
+  // single run grades one function — so the single-function headline shape
+  // ("O(n) · 1.50 ms") does not fit, and falling through to it produced
+  // "unknown · — ms", indistinguishable from a grading that failed.
+  {
+    const { listRuns } = await import("../src/handlers/runs.js");
+    const filed = await listRuns(env, { orgId }, { limit: 20, source: "monitor" });
+    const by = {};
+    filed.items.forEach((x) => { by[x.analyzer] = x; });
+    expect(["vuln", "arch", "estimate", "algo"].every((a) => by[a]),
+      `all four analyzers file a run (got ${Object.keys(by).sort().join(",")})`);
+    expect(by.algo && /1 function · worst O\(n\)/.test(by.algo.headline),
+      `the algo headline summarises the sweep, not one function (got "${by.algo && by.algo.headline}")`);
+    expect(by.algo && !/unknown/.test(by.algo.headline),
+      "…and never reads as a failed grading when the grading succeeded");
+    expect(by.estimate && /\$/.test(by.estimate.headline),
+      `the estimate headline names a price (got "${by.estimate && by.estimate.headline}")`);
+    expect(by.arch && /cluster/.test(by.arch.headline),
+      `the arch headline counts clusters (got "${by.arch && by.arch.headline}")`);
+    expect(filed.items.every((x) => x.repo === "https://github.com/o/multi"),
+      "and every one names the repository it read");
+  }
+
   // Run 2 — nothing moved. Silence, across all four analyzers.
   const r2 = await runMonitorCheck(env, m.monitorId, {}, { now: NOW + DAY, sendTransactional: mailbox.send });
   expect(r2.status === "no_change", `an unchanged multi-analyzer run is no_change (got ${r2.status})`);
