@@ -1576,6 +1576,13 @@
       setBusy(btn, true, "Loading…");
       callApi("/api/runs/" + encodeURIComponent(btn.dataset.runId), null, "GET")
         .then(function (run) {
+          // The "View map" button is rendered for EVERY arch run, but a run
+          // only carries a graph when the analyzer actually mapped something —
+          // a sweep that skipped on no_manifests, or an older run stored
+          // before the graph was kept, has none. Without the else below this
+          // returned silently: the button said "Loading…", stopped, and
+          // nothing happened, with no way to tell a broken button from a run
+          // that has nothing to draw.
           if (run && run.result && run.result.graph) {
             state.result = run.result;
             state.runId = run.id || btn.dataset.runId || null;
@@ -1586,6 +1593,20 @@
             var panel = document.getElementById("panel-arch");
             if (panel && typeof panel.scrollIntoView === "function") {
               panel.scrollIntoView({ behavior: "smooth", block: "start" });
+            }
+          } else {
+            var out = document.getElementById("output-arch");
+            if (out) {
+              while (out.firstChild) out.removeChild(out.firstChild);
+              out.appendChild(core.errorState(
+                "This run has no architecture map stored, so there is nothing to open. " +
+                "A run records one only when the analyzer found manifests to map."));
+              var p = document.getElementById("panel-arch");
+              if (p && typeof p.scrollIntoView === "function") {
+                p.scrollIntoView({ behavior: "smooth", block: "start" });
+              }
+            } else {
+              window.alert("This run has no architecture map stored, so there is nothing to open.");
             }
           }
         })
