@@ -212,6 +212,62 @@ group("the Worker's own pull-request gate actually covers the Worker");
     "…and the workflow does run the full suite, which is the only reason the filter matters");
 }
 
+// ===========================================================================
+group("every generated gate is valid bash, and its jq actually interpolates");
+// ===========================================================================
+// These generators are JS template literals, so a single backslash never
+// reaches the YAML: `\\` + newline is a JS line continuation that deletes the
+// newline, and `\\(` collapses to `(`. Both mistakes shipped — the estimate and
+// architecture gates had their multi-line shell crushed onto one line, an
+// unescaped `\\(` that made `find` a bash syntax error, and jq interpolations
+// written `"x=(.y)"` instead of `"x=\\(.y)"`, which emits the literal text
+// rather than the value.
+//
+// It stayed invisible for weeks because ALGOSIZE_API_KEY was never set on this
+// repository: every run skipped at the key check and reported success. The
+// moment a real key landed, two of the three gates failed on their first run.
+// A green CI check that never executed its own body proves nothing, so these
+// assertions read the generated YAML rather than trusting that it ran.
+{
+  const { execFileSync } = await import("node:child_process");
+  const { writeFileSync, mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "gates-"));
+
+  for (const g of GATES) {
+    // Every `run: |` block, dedented, with GitHub expressions blanked — they
+    // are substituted before bash ever sees them, and `${{ ... }}` is not
+    // valid shell on its own.
+    const blocks = [...g.yaml.matchAll(/run: \|\n([\s\S]*?)(?=\n {6}- name:|\n {6}- uses:|\n *$)/g)]
+      .map((m) => m[1].replace(/\$\{\{[^}]*\}\}/g, "X"))
+      .map((b) => b.split("\n").map((l) => l.replace(/^ {10}/, "")).join("\n"));
+
+    let bad = null;
+    blocks.forEach((b, i) => {
+      // A heredoc body is another language (python here); bash -n still parses
+      // the heredoc itself, which is what we want to check.
+      const f = join(dir, `${g.name.replace(/\W/g, "_")}-${i}.sh`);
+      writeFileSync(f, b);
+      try { execFileSync("bash", ["-n", f], { stdio: "pipe" }); }
+      catch (err) { if (!bad) bad = String(err.stderr || err).split("\n")[0]; }
+    });
+    expect(bad === null, `${g.name} — every run block parses as bash (${bad || "ok"})`);
+
+    // The collapse signature: a `find`/`curl`/`jq` line carrying a long run of
+    // spaces is a line continuation that JS ate.
+    const collapsed = g.yaml.split("\n").find((l) => /\s{8,}\S/.test(l.trim()));
+    expect(!collapsed,
+      `${g.name} — no line-continuation was swallowed into one long line`);
+
+    // jq interpolation must keep its backslash, or it prints its own source.
+    const badJq = g.yaml.split("\n").find((l) =>
+      /^\s*[|"']*\s*"?\w+=\((\.|\$)/.test(l) && !l.includes("=\\("));
+    expect(!badJq,
+      `${g.name} — jq interpolations are \\( … ), not bare ( … ) (${badJq ? badJq.trim() : "ok"})`);
+  }
+}
+
 console.log("");
 if (failures) {
   console.log(`\x1b[31m  ${failures} ci-gate test(s) failed\x1b[0m`);

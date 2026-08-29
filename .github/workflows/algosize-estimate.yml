@@ -61,9 +61,16 @@ jobs:
         env:
           ALGOSIZE_API_KEY: ${{ secrets.ALGOSIZE_API_KEY }}
         run: |
-          jq -n             --rawfile compose "${{ steps.budget.outputs.compose }}"             --argjson providers '${{ steps.budget.outputs.providers }}'             '{inputType:"compose", content:$compose, options:{providers:$providers}}' > payload.json
+          jq -n \
+            --rawfile compose "${{ steps.budget.outputs.compose }}" \
+            --argjson providers '${{ steps.budget.outputs.providers }}' \
+            '{inputType:"compose", content:$compose, options:{providers:$providers}}' > payload.json
 
-          HTTP=$(curl -sS -o response.json -w '%{http_code}'             -X POST "https://algosize.com/api/estimate"             -H "Authorization: Bearer $ALGOSIZE_API_KEY"             -H "Content-Type: application/json"             --data @payload.json)
+          HTTP=$(curl -sS -o response.json -w '%{http_code}' \
+            -X POST "https://algosize.com/api/estimate" \
+            -H "Authorization: Bearer $ALGOSIZE_API_KEY" \
+            -H "Content-Type: application/json" \
+            --data @payload.json)
 
           if [ "$HTTP" != "200" ]; then
             echo "::warning::The estimator returned HTTP $HTTP — annotating without a verdict."
@@ -76,9 +83,9 @@ jobs:
           # excluded rather than counted as zero.
           jq -r '[.providers[] | select(.estimatedTotalMicroUsd != null)]
                  | sort_by(.estimatedTotalMicroUsd) | .[0]
-                 | "cheapest_usd=(.estimatedTotalMicroUsd / 1000000)",
-                   "cheapest_name=(.providerName // .providerId)"' response.json >> "$GITHUB_OUTPUT"
-          jq -r '"resources=(.normalizedSpec.resources | length)"' response.json >> "$GITHUB_OUTPUT"
+                 | "cheapest_usd=\(.estimatedTotalMicroUsd / 1000000)",
+                   "cheapest_name=\(.providerName // .providerId)"' response.json >> "$GITHUB_OUTPUT"
+          jq -r '"resources=\(.normalizedSpec.resources | length)"' response.json >> "$GITHUB_OUTPUT"
 
       - name: Comment and gate
         if: steps.key.outputs.skip != 'true' && steps.budget.outputs.skip != 'true' && steps.run.outputs.skip != 'true'
@@ -113,7 +120,8 @@ jobs:
             echo "_No cloud account was contacted and no credential was used._"
           } > comment.md
 
-          gh pr comment "$PR" --body-file comment.md --edit-last ||             gh pr comment "$PR" --body-file comment.md
+          gh pr comment "$PR" --body-file comment.md --edit-last || \
+            gh pr comment "$PR" --body-file comment.md
 
           if [ "$FAIL" = "1" ]; then
             echo "::error::Estimated monthly cost $$USD exceeds the $$CEILING ceiling."

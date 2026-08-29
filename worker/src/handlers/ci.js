@@ -966,15 +966,15 @@ jobs:
         env:
           ALGOSIZE_API_KEY: \${{ secrets.ALGOSIZE_API_KEY }}
         run: |
-          jq -n \
-            --rawfile compose "\${{ steps.budget.outputs.compose }}" \
-            --argjson providers '\${{ steps.budget.outputs.providers }}' \
+          jq -n \\
+            --rawfile compose "\${{ steps.budget.outputs.compose }}" \\
+            --argjson providers '\${{ steps.budget.outputs.providers }}' \\
             '{inputType:"compose", content:$compose, options:{providers:$providers}}' > payload.json
 
-          HTTP=$(curl -sS -o response.json -w '%{http_code}' \
-            -X POST "${origin}/api/estimate" \
-            -H "Authorization: Bearer $ALGOSIZE_API_KEY" \
-            -H "Content-Type: application/json" \
+          HTTP=$(curl -sS -o response.json -w '%{http_code}' \\
+            -X POST "${origin}/api/estimate" \\
+            -H "Authorization: Bearer $ALGOSIZE_API_KEY" \\
+            -H "Content-Type: application/json" \\
             --data @payload.json)
 
           if [ "$HTTP" != "200" ]; then
@@ -988,9 +988,9 @@ jobs:
           # excluded rather than counted as zero.
           jq -r '[.providers[] | select(.estimatedTotalMicroUsd != null)]
                  | sort_by(.estimatedTotalMicroUsd) | .[0]
-                 | "cheapest_usd=\(.estimatedTotalMicroUsd / 1000000)",
-                   "cheapest_name=\(.providerName // .providerId)"' response.json >> "$GITHUB_OUTPUT"
-          jq -r '"resources=\(.normalizedSpec.resources | length)"' response.json >> "$GITHUB_OUTPUT"
+                 | "cheapest_usd=\\(.estimatedTotalMicroUsd / 1000000)",
+                   "cheapest_name=\\(.providerName // .providerId)"' response.json >> "$GITHUB_OUTPUT"
+          jq -r '"resources=\\(.normalizedSpec.resources | length)"' response.json >> "$GITHUB_OUTPUT"
 
       - name: Comment and gate
         if: steps.key.outputs.skip != 'true' && steps.budget.outputs.skip != 'true' && steps.run.outputs.skip != 'true'
@@ -1025,7 +1025,7 @@ jobs:
             echo "_No cloud account was contacted and no credential was used._"
           } > comment.md
 
-          gh pr comment "$PR" --body-file comment.md --edit-last || \
+          gh pr comment "$PR" --body-file comment.md --edit-last || \\
             gh pr comment "$PR" --body-file comment.md
 
           if [ "$FAIL" = "1" ]; then
@@ -1106,13 +1106,13 @@ jobs:
         run: |
           # Source only, and bounded. Build output and vendored dependencies
           # carry no signal about YOUR architecture and would dominate the graph.
-          find . \
-            -path ./node_modules -prune -o \
-            -path ./.git -prune -o \
-            -path ./dist -prune -o \
-            -path ./build -prune -o \
-            -path ./vendor -prune -o \
-            -type f \( -name '*.js' -o -name '*.mjs' -o -name '*.ts' -o -name '*.tsx' -o -name '*.py' -o -name '*.go' \) \
+          find . \\
+            -path ./node_modules -prune -o \\
+            -path ./.git -prune -o \\
+            -path ./dist -prune -o \\
+            -path ./build -prune -o \\
+            -path ./vendor -prune -o \\
+            -type f \\( -name '*.js' -o -name '*.mjs' -o -name '*.ts' -o -name '*.tsx' -o -name '*.py' -o -name '*.go' \\) \\
             -size -200k -print | head -400 | sed 's|^\./||' > files.txt
 
           COUNT=$(wc -l < files.txt | tr -d ' ')
@@ -1128,9 +1128,9 @@ jobs:
         env:
           ALGOSIZE_API_KEY: \${{ secrets.ALGOSIZE_API_KEY }}
         run: |
-          jq -Rn --arg repo "\${{ github.repository }}" \
-                 --arg ref "\${{ github.head_ref }}" \
-                 --arg sha "\${{ github.event.pull_request.head.sha }}" \
+          jq -Rn --arg repo "\${{ github.repository }}" \\
+                 --arg ref "\${{ github.head_ref }}" \\
+                 --arg sha "\${{ github.event.pull_request.head.sha }}" \\
             '{repo:$repo, ref:$ref, commit_sha:$sha, arch_fail_on:"none",
               files:[inputs | {path:., content:""}]}' < files.txt > skeleton.json
 
@@ -1150,10 +1150,10 @@ jobs:
           json.dump(skel, open("/dev/stdout", "w"))
           PY
 
-          HTTP=$(curl -sS -o response.json -w '%{http_code}' \
-            -X POST "${origin}/api/ci/runs" \
-            -H "Authorization: Bearer $ALGOSIZE_API_KEY" \
-            -H "Content-Type: application/json" \
+          HTTP=$(curl -sS -o response.json -w '%{http_code}' \\
+            -X POST "${origin}/api/ci/runs" \\
+            -H "Authorization: Bearer $ALGOSIZE_API_KEY" \\
+            -H "Content-Type: application/json" \\
             --data @payload.json)
 
           if [ "$HTTP" != "200" ]; then
@@ -1163,10 +1163,10 @@ jobs:
           fi
 
           jq -r '.architecture
-                 | "clusters=\(.summary.clusters // 0)",
-                   "findings=\(.summary.findings // 0)",
-                   "worst=\(.worstSeverity // "none")",
-                   "failed=\(.failed)"' response.json >> "$GITHUB_OUTPUT"
+                 | "clusters=\\(.summary.clusters // 0)",
+                   "findings=\\(.summary.findings // 0)",
+                   "worst=\\(.worstSeverity // "none")",
+                   "failed=\\(.failed)"' response.json >> "$GITHUB_OUTPUT"
 
       - name: Comment
         if: steps.key.outputs.skip != 'true' && steps.collect.outputs.skip != 'true' && steps.run.outputs.skip != 'true'
@@ -1180,7 +1180,7 @@ jobs:
             echo
             echo "\${{ steps.collect.outputs.count }} files · \${{ steps.run.outputs.clusters }} clusters · \${{ steps.run.outputs.findings }} findings (worst: \${{ steps.run.outputs.worst }})"
           } > comment.md
-          gh pr comment "$PR" --body-file comment.md --edit-last || \
+          gh pr comment "$PR" --body-file comment.md --edit-last || \\
             gh pr comment "$PR" --body-file comment.md
 
           if [ "\${{ steps.run.outputs.failed }}" = "true" ]; then

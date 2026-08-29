@@ -38,7 +38,14 @@ jobs:
         run: |
           # Source only, and bounded. Build output and vendored dependencies
           # carry no signal about YOUR architecture and would dominate the graph.
-          find .             -path ./node_modules -prune -o             -path ./.git -prune -o             -path ./dist -prune -o             -path ./build -prune -o             -path ./vendor -prune -o             -type f ( -name '*.js' -o -name '*.mjs' -o -name '*.ts' -o -name '*.tsx' -o -name '*.py' -o -name '*.go' )             -size -200k -print | head -400 | sed 's|^./||' > files.txt
+          find . \
+            -path ./node_modules -prune -o \
+            -path ./.git -prune -o \
+            -path ./dist -prune -o \
+            -path ./build -prune -o \
+            -path ./vendor -prune -o \
+            -type f \( -name '*.js' -o -name '*.mjs' -o -name '*.ts' -o -name '*.tsx' -o -name '*.py' -o -name '*.go' \) \
+            -size -200k -print | head -400 | sed 's|^./||' > files.txt
 
           COUNT=$(wc -l < files.txt | tr -d ' ')
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
@@ -53,7 +60,10 @@ jobs:
         env:
           ALGOSIZE_API_KEY: ${{ secrets.ALGOSIZE_API_KEY }}
         run: |
-          jq -Rn --arg repo "${{ github.repository }}"                  --arg ref "${{ github.head_ref }}"                  --arg sha "${{ github.event.pull_request.head.sha }}"             '{repo:$repo, ref:$ref, commit_sha:$sha, arch_fail_on:"none",
+          jq -Rn --arg repo "${{ github.repository }}" \
+                 --arg ref "${{ github.head_ref }}" \
+                 --arg sha "${{ github.event.pull_request.head.sha }}" \
+            '{repo:$repo, ref:$ref, commit_sha:$sha, arch_fail_on:"none",
               files:[inputs | {path:., content:""}]}' < files.txt > skeleton.json
 
           # Read each file into its entry. Done in jq rather than in the shell
@@ -72,7 +82,11 @@ jobs:
           json.dump(skel, open("/dev/stdout", "w"))
           PY
 
-          HTTP=$(curl -sS -o response.json -w '%{http_code}'             -X POST "https://algosize.com/api/ci/runs"             -H "Authorization: Bearer $ALGOSIZE_API_KEY"             -H "Content-Type: application/json"             --data @payload.json)
+          HTTP=$(curl -sS -o response.json -w '%{http_code}' \
+            -X POST "https://algosize.com/api/ci/runs" \
+            -H "Authorization: Bearer $ALGOSIZE_API_KEY" \
+            -H "Content-Type: application/json" \
+            --data @payload.json)
 
           if [ "$HTTP" != "200" ]; then
             echo "::warning::The architecture endpoint returned HTTP $HTTP — annotating without a verdict."
@@ -81,10 +95,10 @@ jobs:
           fi
 
           jq -r '.architecture
-                 | "clusters=(.summary.clusters // 0)",
-                   "findings=(.summary.findings // 0)",
-                   "worst=(.worstSeverity // "none")",
-                   "failed=(.failed)"' response.json >> "$GITHUB_OUTPUT"
+                 | "clusters=\(.summary.clusters // 0)",
+                   "findings=\(.summary.findings // 0)",
+                   "worst=\(.worstSeverity // "none")",
+                   "failed=\(.failed)"' response.json >> "$GITHUB_OUTPUT"
 
       - name: Comment
         if: steps.key.outputs.skip != 'true' && steps.collect.outputs.skip != 'true' && steps.run.outputs.skip != 'true'
@@ -98,7 +112,8 @@ jobs:
             echo
             echo "${{ steps.collect.outputs.count }} files · ${{ steps.run.outputs.clusters }} clusters · ${{ steps.run.outputs.findings }} findings (worst: ${{ steps.run.outputs.worst }})"
           } > comment.md
-          gh pr comment "$PR" --body-file comment.md --edit-last ||             gh pr comment "$PR" --body-file comment.md
+          gh pr comment "$PR" --body-file comment.md --edit-last || \
+            gh pr comment "$PR" --body-file comment.md
 
           if [ "${{ steps.run.outputs.failed }}" = "true" ]; then
             echo "::error::Architecture findings exceeded the configured threshold."
