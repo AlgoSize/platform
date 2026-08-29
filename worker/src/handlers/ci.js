@@ -895,10 +895,12 @@ export function ciEstimateSnippetHandler(request, env) {
 
 export function buildBudgetExample() {
   return JSON.stringify({
-    "$comment": "monthlyCeilingUsd is the number that fails a build, checked against the CHEAPEST priced provider. Omit it (or set it to null) to annotate the pull request without ever failing — which is the right setting until you have watched a few runs and trust the figure. `compose` is repo-root-relative.",
+    "$comment": "monthlyCeilingUsd is the number that fails a build, checked against the CHEAPEST priced provider. Omit it (or set it to null) to annotate the pull request without ever failing — which is the right setting until you have watched a few runs and trust the figure. `compose` is repo-root-relative. `cur` names a COMMITTED Cost & Usage Report for the cloud-spend gate; leave it null unless you actually commit one, and the gate will skip with a notice rather than fail. monthlySpendCeilingUsd is that gate's ceiling, and is about money already spent, not money projected.",
     compose: "docker-compose.yml",
     monthlyCeilingUsd: null,
     providers: ["hetzner", "aws"],
+    cur: null,
+    monthlySpendCeilingUsd: null,
   }, null, 2);
 }
 
@@ -1030,6 +1032,181 @@ jobs:
 
           if [ "$FAIL" = "1" ]; then
             echo "::error::Estimated monthly cost \$$USD exceeds the \$$CEILING ceiling."
+            exit 1
+          fi
+`;
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/ci/cost-snippet
+// ---------------------------------------------------------------------------
+
+/**
+ * The cloud-spend gate.
+ *
+ * The awkward one, and the reason it shipped last: every other gate reads
+ * something a repository naturally contains — a lockfile, a compose file, a
+ * wrangler.toml. A Cost & Usage Report is a billing export, often hundreds of
+ * megabytes, frequently containing account ids, and almost nobody commits one.
+ *
+ * So this gate is built to be ABSENT most of the time and to say so quietly:
+ * with no CUR committed it skips with a notice, exactly as a missing key
+ * does, and never turns a pull request red for a file that was never meant to
+ * be there. It earns its place for the teams who DO commit a trimmed monthly
+ * export — the spend is then reviewed in the pull request that changes it,
+ * next to the infrastructure that caused it, rather than in a console nobody
+ * opens.
+ *
+ * It reads the same algosize.budget.json the estimator uses rather than
+ * inventing a second config file: both answer a question about money, and one
+ * file that holds every threshold is one file to review.
+ *
+ * Like the estimator's gate, no cloud account is contacted. The CUR is a file
+ * the repository already has; there is no connector here and no credential is
+ * accepted.
+ */
+export function ciCostSnippetHandler(request, env) {
+  const origin = (env.SITE_ORIGIN || "https://algosize.com").replace(/\/$/, "");
+  return json({
+    filename: ".github/workflows/algosize-cost.yml",
+    configFilename: "algosize.budget.json",
+    secretName: "ALGOSIZE_API_KEY",
+    setupSteps: [
+      "Use the same ALGOSIZE_API_KEY repository secret every other gate uses — there is nothing new to create.",
+      "Commit a Cost & Usage Report export and name it in algosize.budget.json under `cur`. Without one the gate skips with a notice and never fails a build.",
+      "Commit the workflow file below.",
+    ],
+    configExample: buildBudgetExample(),
+    workflow: buildCostWorkflow({ origin }),
+  }, 200);
+}
+
+export function buildCostWorkflow({ origin }) {
+  return `name: Algosize cloud spend
+
+# Analyses a COMMITTED Cost & Usage Report on every pull request and reports
+# the biggest spenders and savings. When a spend ceiling is declared it fails
+# the build; without one it annotates and never fails.
+#
+# No cloud account is contacted and no credential is accepted. The CUR is a
+# file this repository already contains — if it does not contain one, this
+# gate skips with a notice rather than turning the pull request red for a
+# file that was never meant to be committed.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  cost:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for the API key
+        id: key
+        env:
+          ALGOSIZE_API_KEY: \${{ secrets.ALGOSIZE_API_KEY }}
+        run: |
+          if [ -z "$ALGOSIZE_API_KEY" ]; then
+            echo "::notice::ALGOSIZE_API_KEY is not set — skipping the cloud-spend analysis."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # A missing CUR is the NORMAL case, not a misconfiguration: a billing
+      # export is large and usually private. Skipping quietly is the whole
+      # reason this gate is safe to paste into any repository.
+      - name: Locate the CUR export
+        if: steps.key.outputs.skip != 'true'
+        id: cur
+        run: |
+          CUR=
+          CEILING=
+          if [ -f algosize.budget.json ]; then
+            CUR=$(jq -r '.cur // empty' algosize.budget.json)
+            CEILING=$(jq -r '.monthlySpendCeilingUsd // empty' algosize.budget.json)
+          fi
+          if [ -z "$CUR" ]; then
+            echo "::notice::No \\\`cur\\\` named in algosize.budget.json — nothing to analyse."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif [ ! -f "$CUR" ]; then
+            echo "::notice::$CUR is named in algosize.budget.json but is not committed — nothing to analyse."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "cur=$CUR" >> "$GITHUB_OUTPUT"
+            echo "ceiling=$CEILING" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Analyse the report
+        if: steps.key.outputs.skip != 'true' && steps.cur.outputs.skip != 'true'
+        id: run
+        env:
+          ALGOSIZE_API_KEY: \${{ secrets.ALGOSIZE_API_KEY }}
+        run: |
+          HTTP=$(curl -sS -o response.json -w '%{http_code}' \\
+            -X POST "${origin}/api/analyze/cost" \\
+            -H "Authorization: Bearer $ALGOSIZE_API_KEY" \\
+            -H "Content-Type: text/csv" \\
+            --data-binary @"\${{ steps.cur.outputs.cur }}")
+
+          if [ "$HTTP" != "200" ]; then
+            echo "::warning::The cost analyzer returned HTTP $HTTP — annotating without a verdict."
+            jq -r '.message // .error // "no detail"' response.json || true
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          jq -r '"spend=\\(.currentSpend // 0)",
+                 "savings_pct=\\(.totalSavingsPct // 0)",
+                 "wins=\\(.suggestions | length)"' response.json >> "$GITHUB_OUTPUT"
+          # Top three savings by value, as one markdown table.
+          jq -r '"| Win | Impact | Est. monthly saving |",
+                 "|---|---|---|",
+                 (.suggestions | sort_by(-.savingsEstimate) | .[0:3][]
+                  | "| \\(.title) | \\(.impact) | $\\(.savingsEstimate | floor) |")' response.json > table.md
+
+      - name: Comment and gate
+        if: steps.key.outputs.skip != 'true' && steps.cur.outputs.skip != 'true' && steps.run.outputs.skip != 'true'
+        env:
+          GH_TOKEN: \${{ github.token }}
+          CEILING: \${{ steps.cur.outputs.ceiling }}
+          SPEND:   \${{ steps.run.outputs.spend }}
+          PCT:     \${{ steps.run.outputs.savings_pct }}
+          WINS:    \${{ steps.run.outputs.wins }}
+          PR: \${{ github.event.pull_request.number }}
+        run: |
+          VERDICT="No spend ceiling is set, so this is an annotation only."
+          FAIL=0
+          if [ -n "$CEILING" ]; then
+            if awk "BEGIN{exit !($SPEND > $CEILING)}"; then
+              VERDICT="Over the \\$$CEILING/mo ceiling."
+              FAIL=1
+            else
+              VERDICT="Within the \\$$CEILING/mo ceiling."
+            fi
+          fi
+
+          {
+            echo "<!-- algosize-cost -->"
+            echo "### Cloud spend"
+            echo
+            echo "**\\$$SPEND / month** in the committed report — $WINS savings win(s), up to $PCT% recoverable."
+            echo
+            cat table.md
+            echo
+            echo "$VERDICT"
+            echo
+            echo "_Read from the committed Cost & Usage Report. No cloud account was contacted and no credential was used._"
+          } > comment.md
+
+          gh pr comment "$PR" --body-file comment.md --edit-last || \\
+            gh pr comment "$PR" --body-file comment.md
+
+          if [ "$FAIL" = "1" ]; then
+            echo "::error::Monthly spend \\$$SPEND exceeds the \\$$CEILING ceiling."
             exit 1
           fi
 `;

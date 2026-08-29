@@ -1,9 +1,11 @@
 {
-  "$comment": "monthlyCeilingUsd is the number that fails a build, checked against the CHEAPEST priced provider. Omit it (or set it to null) to annotate the pull request without ever failing — which is the right setting until you have watched a few runs and trust the figure. `compose` is repo-root-relative.",
+  "$comment": "monthlyCeilingUsd is the number that fails a build, checked against the CHEAPEST priced provider. Omit it (or set it to null) to annotate the pull request without ever failing — which is the right setting until you have watched a few runs and trust the figure. `compose` is repo-root-relative. `cur` names a COMMITTED Cost & Usage Report for the cloud-spend gate; leave it null unless you actually commit one, and the gate will skip with a notice rather than fail. monthlySpendCeilingUsd is that gate's ceiling, and is about money already spent, not money projected.",
   "compose": "docker-compose.yml",
   "monthlyCeilingUsd": null,
   "providers": [
     "hetzner",
     "aws"
-  ]
+  ],
+  "cur": null,
+  "monthlySpendCeilingUsd": null
 }

@@ -28,8 +28,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
   buildWorkflow, buildOptimizerWorkflow, buildEstimateWorkflow,
-  buildArchitectureWorkflow, buildBudgetExample, buildOptimizerConfigExample,
-} from "../src/handlers/ci.js";
+  buildArchitectureWorkflow, buildBudgetExample, buildOptimizerConfigExample, buildCostWorkflow } from "../src/handlers/ci.js";
 import {
   ciSnippetHandler, ciOptimizerSnippetHandler,
   ciEstimateSnippetHandler, ciArchitectureSnippetHandler,
@@ -54,6 +53,8 @@ const GATES = [
     file: ".github/workflows/algosize-estimate.yml" },
   { name: "architecture", yaml: buildArchitectureWorkflow({ origin: ORIGIN }),
     file: ".github/workflows/algosize-architecture.yml" },
+  { name: "cloud spend", yaml: buildCostWorkflow({ origin: ORIGIN }),
+    file: ".github/workflows/algosize-cost.yml" },
 ];
 
 // ===========================================================================
@@ -256,6 +257,12 @@ group("every generated gate is valid bash, and its jq actually interpolates");
 
     // The collapse signature: a `find`/`curl`/`jq` line carrying a long run of
     // spaces is a line continuation that JS ate.
+    //
+    // It cannot tell that from deliberate column alignment, and it should not
+    // be loosened to try: this assertion caught two gates that had never once
+    // run, and a heuristic that occasionally asks an author to use fewer
+    // alignment spaces is cheap next to one that misses a dead workflow. If
+    // it fires on a line you wrote on purpose, shorten the padding.
     const collapsed = g.yaml.split("\n").find((l) => /\s{8,}\S/.test(l.trim()));
     expect(!collapsed,
       `${g.name} — no line-continuation was swallowed into one long line`);
