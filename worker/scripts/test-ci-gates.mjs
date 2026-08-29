@@ -171,6 +171,47 @@ for (const g of GATES) {
   }
 }
 
+// ===========================================================================
+group("the Worker's own pull-request gate actually covers the Worker");
+// ===========================================================================
+// Not a customer-facing gate — this is ours, and it is here because its
+// failure mode is the quietest one in the file header: "a gate that silently
+// stops running is worse than one that never ran." A workflow whose path
+// filter does not match the change under review does not run, reports
+// nothing, and leaves the pull request looking green.
+//
+// That happened. mcp.yml was the ONLY workflow running `npm test` on a pull
+// request, and its filter listed MCP paths only — so a change to the router,
+// the monitors, quota or auth matched nothing, ran no tests, and merged on
+// the strength of four analyzer checks that scan the repo without executing
+// it. It was caught by a PR rewriting the queue entrypoint, which is roughly
+// the worst place to have no coverage.
+{
+  const wf = join(REPO, ".github", "workflows", "mcp.yml");
+  expect(existsSync(wf), "the pull-request gate exists");
+  const yaml = readFileSync(wf, "utf8");
+
+  // The pull_request block specifically. The push block is deliberately
+  // narrower — worker.yml already runs the suite on every push to main, and
+  // duplicating it there would double every deploy's CI time for nothing.
+  const prPaths = /pull_request:\s*\n\s*paths:\s*\n((?:\s*-\s*"[^"]+"\s*\n)+)/.exec(yaml);
+  expect(Boolean(prPaths), "…and filters pull requests by path");
+  const patterns = (prPaths ? prPaths[1] : "").match(/"([^"]+)"/g)?.map((x) => x.slice(1, -1)) || [];
+
+  expect(patterns.includes("worker/**"),
+    `the pull-request filter covers ALL of worker/ (got: ${patterns.join(", ")})`);
+
+  // The specific regression: a filter that names sub-paths of worker/ instead
+  // of worker/** is how this broke, and it reads as more precise rather than
+  // less safe.
+  const narrow = patterns.filter((x) => x.startsWith("worker/") && x !== "worker/**");
+  expect(narrow.length === 0,
+    `…and names no narrower worker/ path that would shadow it (found: ${narrow.join(", ") || "none"})`);
+
+  expect(/run: npm test/.test(yaml),
+    "…and the workflow does run the full suite, which is the only reason the filter matters");
+}
+
 console.log("");
 if (failures) {
   console.log(`\x1b[31m  ${failures} ci-gate test(s) failed\x1b[0m`);
