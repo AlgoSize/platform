@@ -4,3 +4,4 @@
 - [Stripe checkout API contract](stripe-checkout-api.md) — createCheckoutSession takes priceId/seatPriceId; checkout handler reads `tier` (plan is compat alias).
 - [Optional integrations](optional-integrations.md) — OpenAI and Google service-account features are intentionally deferred; graceful degradation is acceptable.
 - [Worker secret recovery tooling](worker-secret-recovery-tooling.md) — use the Worker project's local Wrangler binary for production secret operations, not the obsolete global executable.
+- [MCP rollout gates](mcp-rollout-gates.md) — the transport 401s before feature gating; use authenticated checks and subject overrides for staged pilots.
