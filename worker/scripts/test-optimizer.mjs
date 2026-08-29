@@ -275,6 +275,60 @@ console.log("\nsynthetic input shapes\n");
   expect(synthInputForSize("str", 10) === null, "other shapes → null (probe skipped)");
 }
 
+// ---------------------------------------------------------------------------
+console.log("\na Worker with no sandbox says so, instead of blaming the code\n");
+// ---------------------------------------------------------------------------
+//
+// Cloudflare Workers forbid `new Function` outright, so the in-process
+// fallback in runInSandbox cannot execute in a deployed Worker — it works
+// under Node (this suite, the Replit server, the CI entrypoint) and nowhere
+// else. What came back was V8's own sentence wearing the wrong label:
+//
+//   { error: "compile_error",
+//     message: "Code generation from strings disallowed for this context" }
+//
+// The nightly optimizer sweep printed that once per entry, so a monitor whose
+// optimizer.config.json was entirely correct reported "Every entry in
+// optimizer.config.json was skipped" — sending the owner to audit a file in
+// which nothing was wrong. Simulated here by a runUserCode whose compile step
+// fails the way a Worker's does.
+{
+  const { runInSandbox } = await import("../src/handlers/analyze.js");
+  const { explainUnavailable } = await import("../src/handlers/monitors.js");
+
+  // No SANDBOX binding, and a runtime that refuses to compile: the shape a
+  // deployed Worker presents today.
+  const real = globalThis.Function;
+  let out;
+  try {
+    // eslint-disable-next-line no-global-assign
+    globalThis.Function = function () {
+      throw new EvalError("Code generation from strings disallowed for this context");
+    };
+    out = await runInSandbox({}, "function f(x){return x;}", 1);
+  } finally {
+    globalThis.Function = real;
+  }
+
+  expect(out && out.ok === false, "an unconfigured sandbox is a failure, not a silent pass");
+  expect(out && out.error === "sandbox_not_configured",
+    `and is named for its actual cause, not compile_error (got "${out && out.error}")`);
+  expect(out && !/code generation from strings/i.test(out.message || ""),
+    "the message is ours, not V8's — the user cannot act on V8's");
+  expect(out && /SANDBOX/.test(out.message || ""),
+    "and names the binding an operator has to provide");
+
+  // The sweep must abort the pass on this rather than list one identical
+  // failure per entry, the same way it already does for an unreachable
+  // sandbox — a half-recorded baseline reports the missing half as a
+  // regression the next night.
+  const sentence = explainUnavailable("sandbox_not_configured");
+  expect(/deployment/.test(sentence) && /not a problem with your/.test(sentence),
+    "and the monitor panel says whose problem it is");
+  expect(sentence !== explainUnavailable("__unknown__"),
+    "the reason has its own sentence rather than falling through to the generic one");
+}
+
 // ---------- summary ----------
 console.log("");
 if (failures === 0) {

@@ -323,7 +323,11 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
   // Transient skips are worth an operator's eyes; permanent ones are the
   // owner's configuration and would only be noise in Sentry.
   for (const skip of skips) {
-    if (skip.reason === "github_throttled" || skip.reason === "sandbox_unreachable") {
+    // sandbox_not_configured belongs here too: it is ours to fix, not the
+    // repository owner's, and it will not clear on its own the way a throttle
+    // or a transient sandbox outage does.
+    if (skip.reason === "github_throttled" || skip.reason === "sandbox_unreachable" ||
+        skip.reason === "sandbox_not_configured") {
       await captureException(env, ctx,
         new Error(`monitor ${monitorId}: ${skip.analyzer} skipped (${skip.reason})`),
         { tags: { source: "monitors", phase: skip.analyzer, reason: skip.reason },
