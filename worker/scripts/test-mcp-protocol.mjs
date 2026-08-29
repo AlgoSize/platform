@@ -513,6 +513,46 @@ group("the usage summary the dashboard draws");
 }
 
 // ---------------------------------------------------------------------------
+group("the enabled/disabled gate, and what a probe can actually see");
+{
+  // mcpAuth sits ahead of the handler, so an unauthenticated caller is
+  // answered 401 BEFORE mcpEnabled is ever consulted. That ordering is
+  // deliberate — the 401 carries the WWW-Authenticate header that is the
+  // whole mechanism by which an OAuth client discovers it can authenticate.
+  //
+  // The operational consequence is the part worth pinning: an unauthenticated
+  // probe CANNOT distinguish enabled from disabled. Two versions of the
+  // deploy runbook told operators to expect 404 from a bare POST and to read
+  // a 401 as proof the flag was set. Both were wrong, and the second is the
+  // dangerous one: it turns "the route is deployed" into false evidence of an
+  // enablement that may never have happened.
+  const off = makeEnv({ MCP_ENABLED: "" }); await seed(off);
+  const on  = makeEnv();                    await seed(on);   // MCP_ENABLED: "true"
+
+  const bare = (env) => worker.fetch(new Request("https://algosize.com/api/mcp", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify(INIT),
+  }), env, ctx);
+
+  const bareOff = await bare(off);
+  const bareOn  = await bare(on);
+  expect(bareOff.status === 401 && bareOn.status === 401,
+    `an unauthenticated POST is 401 in BOTH states (off=${bareOff.status}, on=${bareOn.status}) — ` +
+    "it says the route is deployed and nothing about the gate");
+  expect((bareOff.headers.get("WWW-Authenticate") || "").includes("resource_metadata"),
+    "…and carries the WWW-Authenticate header even while disabled, so OAuth discovery still works");
+
+  // Authenticated, the gate is visible and answers exactly as designed.
+  const authedOff = await worker.fetch(rpc(INIT), off, ctx);
+  const authedOn  = await worker.fetch(rpc(INIT), on,  ctx);
+  expect(authedOff.status === 404,
+    `an AUTHENTICATED caller sees 404 while disabled (got ${authedOff.status}) — ` +
+    "404 not 403, because an endpoint nobody is entitled to use should not confirm it exists");
+  expect(authedOn.status === 200,
+    `…and 200 once enabled (got ${authedOn.status}) — this is the only probe that answers the question`);
+}
+
+// ---------------------------------------------------------------------------
 group("discovery documents");
 {
   const env = makeEnv(); await seed(env);

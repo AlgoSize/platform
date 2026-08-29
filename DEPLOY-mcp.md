@@ -12,9 +12,9 @@ resolves a placeholder id and fails with "database not found".
 
 ## 0. What merging this does — nothing
 
-`MCP_ENABLED` is unset, so `/api/mcp` returns **404** for everyone. The flag
-lookup fails shut, so a D1 hiccup cannot open it either. Merging is safe on its
-own.
+`MCP_ENABLED` is unset, so `/api/mcp` refuses every caller: 404 for an
+authenticated one, 401 for an unauthenticated one (see §4). The flag lookup
+fails shut, so a D1 hiccup cannot open it either. Merging is safe on its own.
 
 The one change that takes effect immediately on merge is the §1.10 fix: runs
 made with an API key now persist and appear in `GET /api/runs`. That is a bug
@@ -74,12 +74,28 @@ there fails the production deploy.
 
 ## 4. Verify the endpoint is closed
 
+**An unauthenticated probe cannot answer this.** `mcpAuth` runs ahead of the
+handler and 401s before the flag is ever read — that ordering is deliberate
+(its `WWW-Authenticate` header is what lets an OAuth client discover it can
+authenticate at all), so a bare POST returns 401 whether MCP is on or off:
+
 ```
 curl -s -o /dev/null -w "%{http_code}\n" https://algosize.com/api/mcp -X POST
 ```
 
-Expect **404** — the flag is off. A 401 here would mean `MCP_ENABLED` is
-somehow set.
+Expect **401 in both states**. It tells you the route is deployed and nothing
+more. An earlier version of this runbook said to expect 404 here and to read
+a 401 as proof the flag was set; both were wrong.
+
+To actually check the gate, authenticate. With a real API key, a disabled
+surface answers **404** and an enabled one completes `initialize`:
+
+```
+curl -s -o /dev/null -w "%{http_code}\n" -X POST https://algosize.com/api/mcp \
+  -H "Authorization: Bearer $ALGOSIZE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"curl","version":"1"},"capabilities":{}}}'
+```
 
 The manifest is public by design and should already answer:
 
