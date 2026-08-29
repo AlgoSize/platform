@@ -11,7 +11,7 @@ Algosize helps engineering teams cut cloud spend, find vulnerabilities, and opti
 
 ## Tech stack
 - **Frontend:** Jekyll ~> 4.3.2 (Ruby 3.2), vanilla HTML/CSS, plain `fetch` for API calls.
-- **Backend:** Cloudflare Worker on Node.js 20 tooling (wrangler), Web Crypto for JWT and Stripe webhook signature verification.
+- **Backend:** Cloudflare Worker on Node.js 22 tooling (wrangler 4, which requires Node >= 22), Web Crypto for JWT and Stripe webhook signature verification.
 - **Storage:** Cloudflare D1 (`DB`, db `algosize`) holds the canonical `users` and `runs` rows (per-user analyzer history). Cloudflare KV is used only for `SESSIONS` (rotating JWT store + Stripe-event dedup) and `USERS` (monthly quota counters at `quota:<userId>:<YYYY-MM>` — high write-rate workload). The legacy `RUNS` KV namespace was retired when run history moved to D1 (Task #25).
 - **Payments:** Stripe (Checkout + webhooks), called via `fetch` — no Node SDK.
 

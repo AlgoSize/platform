@@ -442,7 +442,7 @@ async function readResource(msg, cx, entitled) {
   ctx.waitUntil(logToolCall(env, {
     orgId: identity.orgId, toolName: `resource:${match.descriptor.tool}`,
     authMethod: identity.authMethod, scopeUsed: match.descriptor.scope,
-    status: outcome.isError ? OUTCOME.ERROR : OUTCOME.OK, errorCode: outcome.errorCode || null, sessionId,
+    status: outcome.isError ? OUTCOME.ERROR : OUTCOME.OK, errorCode: outcome.errorCode || null,
     sessionId,
   }));
 

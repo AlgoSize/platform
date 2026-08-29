@@ -39,8 +39,15 @@ They were `.json` until the estimator was wired into the router, at which point
 `wrangler dev` refused to build: importing JSON from an ES module needs an
 import attribute, and there is no spelling that works in both places this code
 runs. Node 22 accepts only `with { type: "json" }` (it removed `assert`); the
-esbuild inside wrangler 3.78 accepts only `assert` (it predates `with`). A
+esbuild inside wrangler 3.78 accepted only `assert` (it predated `with`). A
 plain attribute-less import works in esbuild and throws in Node.
+
+That specific conflict is gone — wrangler 4 bundles an esbuild that speaks
+`with`, so both sides would now agree on one spelling. The files stay `.js`
+anyway, because the reason they are worth keeping was never the attribute: a
+frozen object literal is what lets `scripts/test-estimator.mjs` prove the
+catalog holds no logic, and `.json` would trade that proof for a file
+extension.
 
 So each file exports one frozen object literal instead, which needs no
 attribute anywhere. **This is a packaging workaround, not permission to put

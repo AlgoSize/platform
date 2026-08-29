@@ -33,8 +33,9 @@ You'll need accounts for: **GitHub** (admin on this repo), **Cloudflare**
 Local prerequisites:
 
 ```bash
-# Node 20+, npm
-node -v       # v20.x
+# Node 22+, npm. Not 20: wrangler 4's bin exits below 22, so every
+# `wrangler ...` command in this document needs it.
+node -v       # v22.x
 
 # Install the repo's Worker dependencies — wrangler ships in here.
 # You MUST run this on a fresh clone before any `wrangler` command below
@@ -43,7 +44,7 @@ cd worker && npm ci && cd -
 
 # (Optional) install wrangler globally if you'd rather type `wrangler ...`
 # instead of `./node_modules/.bin/wrangler ...`:
-npm i -g wrangler@^3.78.0
+npm i -g wrangler@^4.127.1
 
 # Stripe CLI (only needed for §5 webhook testing & §6 verification).
 # macOS:   brew install stripe/stripe-cli/stripe

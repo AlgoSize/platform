@@ -78,11 +78,16 @@ jobs:
       # the binary directly rather than `npx wrangler`, which would fetch
       # whatever the latest major is on every run. The Cloudflare Workers
       # Builds image did exactly that (npx wrangler@4.124.0, unpinned) — this
-      # installs the exact 3.x version worker/package-lock.json pins instead,
-      # the same one every local test in this repo's history has run against.
+      # installs the exact version worker/package-lock.json pins instead, the
+      # same one every local test in this repo's history has run against.
+      #
+      # Node 22, not 20: wrangler 4's bin exits on anything older. The pin is
+      # asserted against the lockfile's engines.node in
+      # worker/scripts/test-wrangler-config.mjs, so the next floor bump fails
+      # a test instead of a deploy.
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "npm"
           cache-dependency-path: worker/package-lock.json
 
