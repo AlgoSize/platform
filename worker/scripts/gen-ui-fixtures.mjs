@@ -31,6 +31,9 @@ import { ciSnippetHandler, ciOptimizerSnippetHandler,
 import { getReferralsHandler } from "../src/handlers/referrals.js";
 import { listMonitorsHandler } from "../src/handlers/monitors.js";
 import { scorecardHandler } from "../src/handlers/scorecard.js";
+import {
+  mcpManifestHandler, mcpUsageHandler, mcpListClientsHandler,
+} from "../src/handlers/mcp.js";
 import { monitorRouteHandler } from "../src/handlers/monitors.js";
 import { meHandler } from "../src/handlers/me.js";
 import { listRunsHandler } from "../src/handlers/runs.js";
@@ -278,6 +281,14 @@ const run = async () => {
   await cap("/api/monitors/route", monitorRouteHandler);
   await cap("/api/scorecard", scorecardHandler);
   await cap("/api/runs", listRunsHandler);
+
+  // The MCP page. The manifest is generated from the real registry, so a tool
+  // added to the Worker shows up in the visual audit's catalog without anyone
+  // hand-editing a fixture — which is the whole reason these payloads are
+  // generated rather than written.
+  await cap("/api/mcp/manifest", mcpManifestHandler);
+  await cap("/api/mcp/usage", mcpUsageHandler);
+  await cap("/api/mcp/clients", mcpListClientsHandler);
 
   // One report payload per analyzer, keyed by run id, so the visual audit can
   // open each report layout.

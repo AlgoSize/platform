@@ -4709,3 +4709,185 @@ a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
   .report-table-scroll { overflow-x: visible; }
   .report-table { min-width: 0; }
 }
+
+/* ==========================================================================
+   MCP Connections (#/mcp)
+   --------------------------------------------------------------------------
+   Reuses the panel head/body split, the chips and the button pair from the
+   rest of the dashboard, so this reads as a page that was always here. What
+   is new is the setup card's three steps, the client picker, the tool
+   catalog, and the code blocks.
+
+   Every status cue below pairs its colour with a word or a glyph. That is a
+   product-wide rule and it matters most here, where a reader is deciding
+   whether something is connected or revoked.
+   ========================================================================== */
+
+#mcp-body { display: flex; flex-direction: column; gap: var(--s-4); min-width: 0; }
+.mcp-panel { margin-bottom: 0; }
+
+/* ---- connection status ---- */
+.mcp-status { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-2); }
+.mcp-status-text { font-weight: 600; }
+.mcp-dot { width: 8px; height: 8px; border-radius: 999px; flex: 0 0 auto; }
+.mcp-dot-on  { background: #34d399; }
+.mcp-dot-off { background: #5b6373; }
+
+.mcp-endpoint {
+  display: flex; align-items: center; gap: var(--s-2);
+  flex-wrap: wrap; min-width: 0;
+}
+.mcp-url {
+  flex: 1 1 260px; min-width: 0;
+  padding: 9px 12px; border-radius: 10px;
+  background: #0d1118; border: 1px solid var(--border);
+  /* The endpoint is the one value people select by hand when the copy button
+     is not what they want, so it stays selectable and wraps rather than
+     scrolling out of reach. */
+  user-select: all; word-break: break-all;
+}
+/* The copy control sits inside a row with the value it copies, so it must not
+   stretch: it is the smallest thing in that row and stays that way. */
+.mcp-copy { flex: 0 0 auto; }
+.mcp-copied { color: var(--accent); border-color: var(--accent); }
+/* The clipboard fallback needs a real focusable textarea in the document;
+   `display:none` would make select() a no-op. */
+.mcp-offscreen { position: absolute; left: -9999px; top: 0; opacity: 0; }
+
+/* ---- setup steps ---- */
+.mcp-step { display: flex; align-items: center; gap: var(--s-2); margin-top: var(--s-2); }
+.mcp-step-n {
+  width: 22px; height: 22px; flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px; background: var(--border); color: var(--text);
+  font-size: 0.7rem; font-weight: 700;
+}
+.mcp-step-t { font-weight: 600; }
+
+.mcp-clients { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--s-2); }
+.mcp-client {
+  display: flex; flex-direction: column; gap: 2px; text-align: left;
+  padding: 11px 13px; border-radius: 10px;
+  border: 1px solid var(--border); background: #0d1118; color: var(--text);
+  cursor: pointer; min-width: 0;
+}
+.mcp-client:hover { border-color: #2a3340; }
+.mcp-client:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mcp-client-on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, #0d1118); }
+.mcp-client-name { font-weight: 600; }
+.mcp-client-kind { font-size: var(--fs-xs); }
+
+/* ---- key picker ---- */
+.mcp-keys { display: flex; flex-direction: column; gap: var(--s-2); }
+.mcp-key {
+  display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap;
+  padding: 10px 13px; border-radius: 10px; text-align: left;
+  border: 1px solid var(--border); background: #0d1118; color: var(--text);
+  cursor: pointer; min-width: 0;
+}
+.mcp-key:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mcp-key-on { border-color: var(--accent); }
+.mcp-key-name { font-weight: 600; flex: 1 1 auto; min-width: 0; }
+.mcp-empty { display: flex; flex-direction: column; gap: var(--s-3); align-items: flex-start; }
+.mcp-link { color: var(--accent); text-decoration: none; }
+.mcp-link:hover { text-decoration: underline; }
+
+/* ---- code blocks ---- */
+.mcp-code { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.mcp-code-head {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s-2);
+  padding: 7px 12px; background: #0d1118; border-bottom: 1px solid var(--border);
+}
+.mcp-pre {
+  margin: 0; padding: var(--s-4);
+  background: #080b11; font-size: 0.82rem; line-height: 1.6;
+  /* Wide config lines scroll inside the block rather than widening the page. */
+  overflow-x: auto; white-space: pre;
+}
+
+/* ---- catalog ---- */
+.mcp-search { max-width: 220px; }
+.mcp-legend { display: flex; flex-wrap: wrap; gap: var(--s-4); padding-bottom: var(--s-2); }
+.mcp-legend-item { display: inline-flex; align-items: center; gap: var(--s-2); font-size: var(--fs-xs); }
+.mcp-group {
+  margin: var(--s-3) 0 0; font-size: var(--fs-sm); font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim);
+}
+.mcp-tools { display: flex; flex-direction: column; gap: 6px; }
+.mcp-tool { border: 1px solid var(--border); border-radius: 10px; background: #0d1118; }
+.mcp-tool[open] { border-color: #2a3340; }
+.mcp-tool-head {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s-3);
+  padding: 10px 13px; cursor: pointer; list-style: none; flex-wrap: wrap;
+}
+.mcp-tool-head::-webkit-details-marker { display: none; }
+.mcp-tool-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mcp-tool-name { font-size: 0.84rem; min-width: 0; word-break: break-all; }
+.mcp-badges { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.mcp-badge { font-size: 0.6rem; }
+.mcp-badge-metered     { color: #fbbf24; border-color: #4a3a12; }
+.mcp-badge-read        { color: #8a93a3; }
+.mcp-badge-public      { color: #f59e0b; border-color: #5a3d0a; }
+.mcp-badge-destructive { color: #ef4444; border-color: #4a1620; }
+.mcp-badge-plan        { color: var(--accent); border-color: #14453c; }
+.mcp-tool-body {
+  padding: 0 13px 13px; display: flex; flex-direction: column; gap: var(--s-2);
+  border-top: 1px solid var(--border-soft);
+}
+.mcp-params { display: flex; flex-direction: column; gap: 4px; }
+.mcp-param { display: flex; gap: var(--s-3); flex-wrap: wrap; font-size: var(--fs-xs); }
+
+/* ---- connected clients ---- */
+.mcp-conn {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--s-3); flex-wrap: wrap;
+  padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px;
+  background: #0d1118;
+}
+/* A revoked row stays legible rather than being greyed into unreadability —
+   it is history someone may need to check, not decoration. */
+.mcp-conn-off { opacity: 0.72; }
+.mcp-conn-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.mcp-conn-name { font-weight: 600; }
+.mcp-conn-right { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+.mcp-confirm {
+  flex: 1 1 100%;
+  margin-top: var(--s-3); padding: var(--s-3);
+  border: 1px solid #4a1620; border-radius: 10px; background: #16090d;
+}
+/* Revoke is destructive, so it carries the danger colour even before the
+   confirmation opens — the weight should match the consequence at the point
+   someone is deciding whether to click, not after. */
+.mcp-revoke { color: #e08a9a; }
+.mcp-revoke:hover { border-color: #4a1620; }
+.mcp-confirm p { margin: 0 0 var(--s-3); font-size: var(--fs-sm); }
+.mcp-confirm-actions { display: flex; gap: var(--s-2); flex-wrap: wrap; }
+
+/* ---- activity ---- */
+.mcp-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: var(--s-4); }
+.mcp-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.mcp-stat-label {
+  font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--text-dim);
+}
+.mcp-stat-value { font-size: var(--fs-md); font-weight: 600; }
+.mcp-feed { display: flex; flex-direction: column; gap: 2px; }
+.mcp-call {
+  display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap;
+  padding: 8px 0; border-bottom: 1px solid var(--border-soft);
+}
+.mcp-call:last-child { border-bottom: 0; }
+.mcp-call-tool { flex: 1 1 200px; min-width: 0; font-size: 0.82rem; word-break: break-all; }
+
+/* ---- security ---- */
+.mcp-facts { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: var(--s-3); }
+.mcp-facts li { display: flex; gap: var(--s-3); font-size: var(--fs-sm); }
+.mcp-fact-mark { color: var(--text-dim); flex: 0 0 auto; }
+
+@media (max-width: 560px) {
+  /* The three setup steps stack, and the client picker becomes one column —
+     five side-by-side cards at 390px would be unreadable slivers. */
+  .mcp-clients { grid-template-columns: 1fr; }
+  .mcp-search { max-width: none; width: 100%; }
+  .mcp-conn { align-items: flex-start; }
+}

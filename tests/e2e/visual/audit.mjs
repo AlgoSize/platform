@@ -74,6 +74,7 @@ const VIEWS = [
   ["#/optimizer", "Algorithm optimizer"],
   ["#/estimate",  "Cost estimator"],
   ["#/account",   "Account"],
+  ["#/mcp",       "MCP Connections"],
   ["#/report/run_vuln",     "Report · dependency audit"],
   ["#/report/run_arch",     "Report · architecture"],
   ["#/report/run_algo",     "Report · complexity"],

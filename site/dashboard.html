@@ -1039,6 +1039,24 @@ permalink: /dashboard/
          markup, several of them render three or four different states, and a
          static skeleton for all ten would be mostly hidden elements — the
          same reasoning the Team screen's branding form already follows. -->
+    <!-- MCP Connections (migrations/0019). Reached from a Workspace tool card
+         and from Team, not from the tab strip — it is a peer of the analyzer
+         benches rather than a third top-level destination. -->
+    <div id="view-mcp" class="dash-view" hidden>
+      <div class="dash-head">
+        <span class="eyebrow">MCP Connections</span>
+        <h2 class="dash-view-title">Run Algosize from your AI assistant.</h2>
+        <p class="lede">
+          Connect Claude Code, Claude Desktop, Claude.ai or Cursor and the
+          analyzers become tools inside a conversation — scan a repository, read
+          a report, check the scorecard, without leaving the editor. Access is
+          organisation-scoped, every call is logged, and it can never reach
+          billing, members or API keys.
+        </p>
+      </div>
+      <div id="mcp-body"><div class="panel-empty">Loading…</div></div>
+    </div>
+
     <div id="view-account" class="dash-view" hidden>
       <div class="dash-head">
         <span class="eyebrow">Account</span>
@@ -1248,4 +1266,5 @@ permalink: /dashboard/
 <script src="{{ '/assets/js/dash-scanner.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-workspace.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-account.js' | relative_url }}" defer></script>
+    <script src="{{ '/assets/js/dash-mcp.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-router.js' | relative_url }}" defer></script>

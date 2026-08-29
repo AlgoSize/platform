@@ -672,7 +672,8 @@
         "source": "ci",
         "repo": null,
         "commitSha": null,
-        "hasInput": true
+        "hasInput": true,
+        "credentialKind": null
       },
       {
         "id": "run_arch",
@@ -683,7 +684,8 @@
         "source": "manual",
         "repo": null,
         "commitSha": null,
-        "hasInput": true
+        "hasInput": true,
+        "credentialKind": null
       },
       {
         "id": "run_cost",
@@ -694,7 +696,8 @@
         "source": "manual",
         "repo": null,
         "commitSha": null,
-        "hasInput": true
+        "hasInput": true,
+        "credentialKind": null
       },
       {
         "id": "run_estimate",
@@ -705,7 +708,8 @@
         "source": "manual",
         "repo": null,
         "commitSha": null,
-        "hasInput": true
+        "hasInput": true,
+        "credentialKind": null
       },
       {
         "id": "run_vuln",
@@ -716,10 +720,1227 @@
         "source": "ci",
         "repo": null,
         "commitSha": null,
-        "hasInput": true
+        "hasInput": true,
+        "credentialKind": null
       }
     ],
     "nextCursor": null
+  },
+  "/api/mcp/manifest": {
+    "name": "algosize",
+    "version": "1.0.0",
+    "protocolVersions": [
+      "2025-06-18",
+      "2025-03-26",
+      "2024-11-05"
+    ],
+    "endpoint": "https://algosize.com/api/mcp",
+    "instructions": "Algosize analyses codebases and infrastructure: dependency vulnerabilities, cloud and infrastructure cost, algorithmic complexity, and architecture. Analysis tools consume the organisation's monthly run allowance — before starting a new analysis, check algosize_list_runs for a recent result that already answers the question. Read-only tools are free; use them freely. algosize_share_run creates a link that anyone who has it can open, so only call it when the user has asked for something shareable.",
+    "groups": [
+      {
+        "id": "analysis",
+        "label": "Analysis",
+        "tools": [
+          "algosize_analyze_vulnerabilities",
+          "algosize_analyze_cost",
+          "algosize_analyze_complexity",
+          "algosize_analyze_architecture",
+          "algosize_estimate_infrastructure",
+          "algosize_list_cost_providers",
+          "algosize_generate_fix"
+        ]
+      },
+      {
+        "id": "runs",
+        "label": "Runs & Reports",
+        "tools": [
+          "algosize_list_runs",
+          "algosize_get_run",
+          "algosize_get_run_report",
+          "algosize_share_run"
+        ]
+      },
+      {
+        "id": "posture",
+        "label": "Posture",
+        "tools": [
+          "algosize_get_scorecard",
+          "algosize_list_arch_snapshots",
+          "algosize_diff_architecture",
+          "algosize_get_ci_snippet",
+          "algosize_whoami"
+        ]
+      },
+      {
+        "id": "monitors",
+        "label": "Monitors",
+        "tools": [
+          "algosize_list_monitors",
+          "algosize_create_monitor",
+          "algosize_update_monitor",
+          "algosize_delete_monitor",
+          "algosize_run_monitor_now",
+          "algosize_get_monitor_result"
+        ]
+      }
+    ],
+    "tools": [
+      {
+        "name": "algosize_analyze_vulnerabilities",
+        "title": "Scan dependencies for vulnerabilities",
+        "description": "Audit a project's dependencies against known advisories. Give it a GitHub repository URL and it fetches and parses the lockfiles itself; that is the accurate path and the one to prefer. CONSUMES ONE RUN from the organisation's monthly allowance. Before calling it, check algosize_list_runs for a recent 'vuln' run on the same repository — repeating an audit that has not changed wastes the allowance.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "repoUrl": {
+              "type": "string",
+              "description": "A GitHub repository URL, e.g. https://github.com/owner/name. Preferred over `files`."
+            },
+            "files": {
+              "type": "array",
+              "description": "The files to analyse. Send real file contents, not summaries.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Repository-relative path, e.g. \"docker-compose.yml\"."
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "The file's full text."
+                  }
+                },
+                "required": [
+                  "path",
+                  "content"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 1,
+              "maxItems": 400
+            }
+          },
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "counts": {
+              "type": "object"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "packagesScanned": {
+              "type": "number"
+            },
+            "fixCommand": {
+              "type": "string"
+            },
+            "runId": {
+              "type": "string"
+            }
+          }
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        },
+        "_meta": {
+          "algosize/metered": true,
+          "algosize/scope": "algosize:analyze",
+          "algosize/paidOnly": false
+        }
+      },
+      {
+        "name": "algosize_analyze_cost",
+        "title": "Analyse cloud spend",
+        "description": "Find savings in an existing cloud bill. Takes a list of running services with their monthly cost and returns ranked reduction opportunities. This analyses spend you ALREADY have — to price infrastructure you have not built yet, use algosize_estimate_infrastructure instead. CONSUMES ONE RUN.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "services": {
+              "type": "array",
+              "description": "The services making up the current bill.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Service name, e.g. \"RDS\"."
+                  },
+                  "monthlyCost": {
+                    "type": "number",
+                    "description": "Current monthly cost in USD."
+                  },
+                  "region": {
+                    "type": "string"
+                  },
+                  "utilization": {
+                    "type": "number",
+                    "description": "Average utilisation 0-1, when known."
+                  }
+                },
+                "required": [
+                  "name",
+                  "monthlyCost"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "services"
+          ],
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "currentSpend": {
+              "type": "number"
+            },
+            "totalSavingsPct": {
+              "type": "number"
+            },
+            "suggestions": {
+              "type": "array"
+            }
+          }
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        },
+        "_meta": {
+          "algosize/metered": true,
+          "algosize/scope": "algosize:analyze",
+          "algosize/paidOnly": false
+        }
+      },
+      {
+        "name": "algosize_analyze_complexity",
+        "title": "Measure algorithmic complexity",
+        "description": "Run a JavaScript function against generated inputs, measure how its runtime grows, and infer its Big-O complexity, with a suggested rewrite when a better one exists. The code is executed in an isolated sandbox, so it must be self-contained and must not need network or filesystem access. CONSUMES ONE RUN.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string",
+              "description": "A self-contained JavaScript function, including its declaration. No imports, no I/O."
+            },
+            "sampleInput": {
+              "description": "Optional representative input used to seed the measurement."
+            }
+          },
+          "required": [
+            "code"
+          ],
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "bigO": {
+              "type": "string"
+            },
+            "wallTimeMs": {
+              "type": "number"
+            },
+            "suggestion": {
+              "type": "string"
+            }
+          }
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        },
+        "_meta": {
+          "algosize/metered": true,
+          "algosize/scope": "algosize:analyze",
+          "algosize/paidOnly": false
+        }
+      },
+      {
+        "name": "algosize_analyze_architecture",
+        "title": "X-ray a system's architecture",
+        "description": "Build a dependency graph of a system from its configuration files — wrangler.toml, docker-compose.yml, Kubernetes manifests, Terraform — and report structural findings. Send the config files, not application source: source contributes almost nothing to the graph and costs context. CONSUMES ONE RUN.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "files": {
+              "type": "array",
+              "description": "The files to analyse. Send real file contents, not summaries.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Repository-relative path, e.g. \"docker-compose.yml\"."
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "The file's full text."
+                  }
+                },
+                "required": [
+                  "path",
+                  "content"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 1,
+              "maxItems": 400
+            }
+          },
+          "required": [
+            "files"
+          ],
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "nodes": {
+              "type": "number"
+            },
+            "edges": {
+              "type": "number"
+            },
+            "findings": {
+              "type": "array"
+            },
+            "complete": {
+              "type": "boolean"
+            }
+          }
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        },
+        "_meta": {
+          "algosize/metered": true,
+          "algosize/scope": "algosize:analyze",
+          "algosize/paidOnly": false
+        }
+      },
+      {
+        "name": "algosize_estimate_infrastructure",
+        "title": "Estimate infrastructure cost",
+        "description": "Price infrastructure from its definition — a Terraform plan, docker-compose file, Kubernetes manifest, or a manual resource list — across cloud providers, using published list prices. This prices what you are ABOUT TO build; to find savings in a bill you already pay, use algosize_analyze_cost. Nothing is contacted at any cloud provider and no credentials are ever needed. CONSUMES ONE RUN.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "inputType": {
+              "type": "string",
+              "enum": [
+                "kubernetes",
+                "compose",
+                "terraform-plan",
+                "manual",
+                "normalized"
+              ],
+              "description": "Which format `content` is in."
+            },
+            "content": {
+              "description": "The plan, manifest or resource list. A string for text formats, an object for JSON ones."
+            },
+            "providers": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Optional provider ids to price against. Omit to price all of them."
+            },
+            "region": {
+              "type": "string",
+              "description": "Optional region hint, e.g. \"us-east-1\"."
+            }
+          },
+          "required": [
+            "inputType",
+            "content"
+          ],
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "providers": {
+              "type": "array"
+            },
+            "warnings": {
+              "type": "array"
+            },
+            "currency": {
+              "type": "string"
+            }
+          }
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        },
+        "_meta": {
+          "algosize/metered": true,
+          "algosize/scope": "algosize:analyze",
+          "algosize/paidOnly": false
+        }
+      },
+      {
+        "name": "algosize_list_cost_providers",
+        "title": "List priceable cloud providers",
+        "description": "List the cloud providers algosize_estimate_infrastructure can price against, with each one's regions and how fresh its price data is. Free and read-only — call it before an estimate when you need to know which provider ids are valid.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "providers": {
+              "type": "array"
+            },
+            "catalogVersion": {
+              "type": "string"
+            }
+          }
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "_meta": {
+          "algosize/metered": false,
+          "algosize/scope": "algosize:read",
+          "algosize/paidOnly": false
+        }
+      },
+      {
+        "name": "algosize_generate_fix",
+        "title": "Generate a fix for a finding",
+        "description": "Produce a concrete remediation for one finding produced by another Algosize tool. Free — it does NOT consume a run. Pass the finding as it was returned rather than a paraphrase; the generator keys off its exact fields.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "description": "The finding's kind, exactly as returned by the analyzer."
+            },
+            "finding": {
+              "type": "object",
+              "description": "The finding object, passed through unchanged."
+            }
+          },
+          "required": [
+            "kind",
+            "finding"
+          ],
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string"
+            },
+            "fix": {}
+          }
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        },
+        "_meta": {
+          "algosize/metered": false,
+          "algosize/scope": "algosize:analyze",
+          "algosize/paidOnly": false
+        }
+      },
+      {
+        "name": "algosize_list_runs",
+        "title": "List recent analysis runs",
+        "description": "List this organisation's recent analysis runs, newest first. Free and read-only. Call this BEFORE any metered analysis tool: if a recent run already covers the same repository and analyzer, read it with algosize_get_run instead of paying for a new one.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "description": "How many to return. Default 20."
+            },
+            "cursor": {
+              "type": "string",
+              "description": "Pagination cursor from a previous call's nextCursor."
+            },
+            "analyzer": {
+              "type": "string",
+              "enum": [
+                "cost",
+                "vuln",
+                "algo",
+                "arch",
+                "estimate"
+              ],
+              "description": "Only runs from this analyzer."
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "ci",
+                "manual"
+              ],
+              "description": "Only runs from this origin."
+            }
+          },
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array"
+            },
+            "nextCursor": {
+              "type": "string"
+            }
+          }
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "_meta": {
+          "algosize/metered": false,
+          "algosize/scope": "algosize:read",
+          "algosize/paidOnly": false
+        }
+      },
+      {
+        "name": "algosize_get_run",
+        "title": "Read one analysis run",
+        "description": "Fetch the full stored result of a single run by id, including every finding. Free and read-only. Use it to read an existing result rather than re-running the analysis.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "runId": {
+              "type": "string",
+              "description": "The run id, from algosize_list_runs."
+            }
+          },
+          "required": [
+            "runId"
+          ],
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "analyzer": {
+              "type": "string"
+            },
+            "result": {}
+          }
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "_meta": {
+          "algosize/metered": false,
+          "algosize/scope": "algosize:read",
+          "algosize/paidOnly": false
+        }
+      },
+      {
+        "name": "algosize_get_run_report",
+        "title": "Read a run's rendered report",
+        "description": "Fetch a run's report. `json` returns the structured result; `sarif`, `cyclonedx` and `csv` are produced for dependency-audit runs only and will be refused for other analyzers. Free and read-only. HTML is deliberately not offered here — ask for json and describe it instead.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "runId": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string",
+              "enum": [
+                "json",
+                "sarif",
+                "cyclonedx",
+                "csv"
+              ],
+              "description": "Default json. The last three are dependency-audit runs only."
+            }
+          },
+          "required": [
+            "runId"
+          ],
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "format": {
+              "type": "string"
+            },
+            "report": {}
+          }
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "_meta": {
+          "algosize/metered": false,
+          "algosize/scope": "algosize:read",
+          "algosize/paidOnly": false
+        }
+      },
+      {
+        "name": "algosize_share_run",
+        "title": "Create a public link to a report",
+        "description": "CREATES A PUBLICLY REACHABLE LINK to this run's report — anyone who has the URL can open it without signing in. Only call this when the user has explicitly asked for something to share externally; never call it to read a report yourself, which algosize_get_run_report does privately. The link expires, and can be revoked from the dashboard.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "runId": {
+              "type": "string"
+            },
+            "expiresInDays": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 90,
+              "description": "Link lifetime. The server applies its own default and maximum."
+            }
+          },
+          "required": [
+            "runId"
+          ],
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string"
+            },
+            "expiresAt": {
+              "type": "number"
+            }
+          }
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": true
+        },
+        "_meta": {
+          "algosize/metered": false,
+          "algosize/scope": "algosize:manage",
+          "algosize/paidOnly": false
+        }
+      },
+      {
+        "name": "algosize_get_scorecard",
+        "title": "Read the engineering scorecard",
+        "description": "One graded row per monitored repository across security, cost, complexity and architecture. Free and read-only, and the fastest way to see overall posture without running anything. Each cell reports its own kind: `grade` is a real result, `stale` is an old one, `pending` means the first run has not finished, and `off` means that analyzer is not enabled — treat those four as genuinely different, never as a missing score.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "rows": {
+              "type": "array"
+            },
+            "columns": {
+              "type": "array"
+            }
+          }
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "_meta": {
+          "algosize/metered": false,
+          "algosize/scope": "algosize:read",
+          "algosize/paidOnly": false
+        }
+      },
+      {
+        "name": "algosize_list_arch_snapshots",
+        "title": "List architecture snapshots",
+        "description": "List stored architecture snapshots for this organisation, newest first. Each snapshot is one captured graph; pairs of them are what algosize_diff_architecture compares. Free and read-only.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "repoUrl": {
+              "type": "string",
+              "description": "Filter to one repository. Pass an empty string for manual uploads, which have no repository."
+            },
+            "branch": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "snapshots": {
+              "type": "array"
+            }
+          }
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "_meta": {
+          "algosize/metered": false,
+          "algosize/scope": "algosize:read",
+          "algosize/paidOnly": false
+        }
+      },
+      {
+        "name": "algosize_diff_architecture",
+        "title": "Diff two architecture snapshots",
+        "description": "Compare an architecture snapshot against an earlier one and report which components and dependencies were added or removed — the 'did this change add a dependency on the payments database' question. Pass only `to` to compare it against whatever preceded it. Free and read-only. A result with comparable=false means there was nothing to compare against, which is NOT the same as no changes.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "to": {
+              "type": "string",
+              "description": "The snapshot to diff."
+            },
+            "from": {
+              "type": "string",
+              "description": "Optional baseline. Defaults to the snapshot recorded before `to`."
+            }
+          },
+          "required": [
+            "to"
+          ],
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "diff": {
+              "type": "object"
+            },
+            "note": {
+              "type": "string"
+            }
+          }
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "_meta": {
+          "algosize/metered": false,
+          "algosize/scope": "algosize:read",
+          "algosize/paidOnly": false
+        }
+      },
+      {
+        "name": "algosize_get_ci_snippet",
+        "title": "Get a CI workflow snippet",
+        "description": "Return a ready-to-commit GitHub Actions workflow that runs one Algosize check on every pull request. Free and read-only. The snippet references a repository secret by name and never contains a key — the user creates the key themselves in the dashboard.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "audit",
+                "optimizer",
+                "estimate",
+                "architecture"
+              ],
+              "description": "Which gate: audit (dependencies), optimizer, estimate (cost), or architecture."
+            },
+            "failOn": {
+              "type": "string",
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low",
+                "none"
+              ],
+              "description": "audit only — severity at which the build fails. Default high."
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "filename": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "secretName": {
+              "type": "string"
+            }
+          }
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "_meta": {
+          "algosize/metered": false,
+          "algosize/scope": "algosize:read",
+          "algosize/paidOnly": false
+        }
+      },
+      {
+        "name": "algosize_whoami",
+        "title": "Show the connected account",
+        "description": "Report which Algosize account this connection is acting as, its plan, and how much of the monthly run allowance is left. Free and read-only. Call it first when a metered tool is refused, to see whether the allowance is the reason.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "plan": {
+              "type": "string"
+            },
+            "active": {
+              "type": "boolean"
+            },
+            "monthlyRunsUsed": {
+              "type": "number"
+            },
+            "monthlyRunsLimit": {
+              "type": "number"
+            },
+            "authMethod": {
+              "type": "string"
+            }
+          }
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "_meta": {
+          "algosize/metered": false,
+          "algosize/scope": "algosize:read",
+          "algosize/paidOnly": false
+        }
+      },
+      {
+        "name": "algosize_list_monitors",
+        "title": "List scheduled monitors",
+        "description": "List the repositories under scheduled watch, with each one's schedule, enabled analyzers, last result and health. Free and read-only.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "monitors": {
+              "type": "array"
+            },
+            "monitorsUsed": {
+              "type": "number"
+            }
+          }
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "_meta": {
+          "algosize/metered": false,
+          "algosize/scope": "algosize:read",
+          "algosize/paidOnly": false
+        }
+      },
+      {
+        "name": "algosize_create_monitor",
+        "title": "Watch a repository on a schedule",
+        "description": "Put a GitHub repository under scheduled watch so the chosen analyzers run automatically and alert on new findings. Creating a monitor does not itself consume a run; each scheduled sweep it later performs does. Requires a paid plan once the free monitor limit is reached.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "repoUrl": {
+              "type": "string",
+              "description": "https://github.com/owner/name"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "schedule": {
+              "type": "string",
+              "enum": [
+                "daily",
+                "weekly"
+              ],
+              "description": "Default daily."
+            },
+            "runAtHour": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 23,
+              "description": "UTC hour to run at. Omit for any sweep."
+            },
+            "analyzers": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "vuln",
+                  "arch",
+                  "estimate",
+                  "algo"
+                ]
+              },
+              "description": "Which analyzers this monitor runs."
+            }
+          },
+          "required": [
+            "repoUrl"
+          ],
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "monitor": {
+              "type": "object"
+            }
+          }
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        },
+        "_meta": {
+          "algosize/metered": false,
+          "algosize/scope": "algosize:manage",
+          "algosize/paidOnly": false
+        }
+      },
+      {
+        "name": "algosize_update_monitor",
+        "title": "Change a monitor's analyzers, schedule or paused state",
+        "description": "Change one existing monitor: which analyzers it runs, when it runs, or whether it is paused. Supply only the fields you are changing. Pausing stops future sweeps without losing history.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "monitorId": {
+              "type": "string"
+            },
+            "analyzers": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "vuln",
+                  "arch",
+                  "estimate",
+                  "algo"
+                ]
+              }
+            },
+            "schedule": {
+              "type": "string",
+              "enum": [
+                "daily",
+                "weekly"
+              ]
+            },
+            "runAtHour": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 23
+            },
+            "paused": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "monitorId"
+          ],
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "monitor": {
+              "type": "object"
+            },
+            "applied": {
+              "type": "array"
+            }
+          }
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        },
+        "_meta": {
+          "algosize/metered": false,
+          "algosize/scope": "algosize:manage",
+          "algosize/paidOnly": false
+        }
+      },
+      {
+        "name": "algosize_delete_monitor",
+        "title": "Stop watching a repository",
+        "description": "Permanently remove a monitor. The repository stops being analysed on a schedule and stops alerting. Past run history is kept. If the intent is a temporary stop, use algosize_update_monitor with paused=true instead — that is reversible and this is not.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "monitorId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "monitorId"
+          ],
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "removed": {
+              "type": "boolean"
+            }
+          }
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": true,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "_meta": {
+          "algosize/metered": false,
+          "algosize/scope": "algosize:manage",
+          "algosize/paidOnly": false
+        }
+      },
+      {
+        "name": "algosize_run_monitor_now",
+        "title": "Run a monitor immediately",
+        "description": "Queue an out-of-schedule sweep for one monitor. Returns as soon as the work is queued, not when it finishes — read the result afterwards with algosize_get_monitor_result. The sweep itself consumes runs from the monthly allowance, one per enabled analyzer, even though this call does not. Refused if the monitor is paused.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "monitorId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "monitorId"
+          ],
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "queued": {
+              "type": "boolean"
+            }
+          }
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        },
+        "_meta": {
+          "algosize/metered": false,
+          "algosize/scope": "algosize:manage",
+          "algosize/paidOnly": false
+        }
+      },
+      {
+        "name": "algosize_get_monitor_result",
+        "title": "Read a monitor's latest analyzer result",
+        "description": "Read the most recent result one analyzer produced for one monitored repository, with its baseline and the delta since. Free and read-only. The reply's `status` distinguishes a real result from an analyzer that is not enabled and from one whose first run has not landed — do not read the last two as 'nothing found'.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "monitorId": {
+              "type": "string"
+            },
+            "analyzer": {
+              "type": "string",
+              "enum": [
+                "vuln",
+                "arch",
+                "estimate",
+                "algo"
+              ]
+            }
+          },
+          "required": [
+            "monitorId",
+            "analyzer"
+          ],
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string"
+            },
+            "result": {},
+            "delta": {}
+          }
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "_meta": {
+          "algosize/metered": false,
+          "algosize/scope": "algosize:read",
+          "algosize/paidOnly": false
+        }
+      }
+    ],
+    "prompts": [
+      {
+        "name": "audit_repository",
+        "title": "Audit a repository end to end",
+        "description": "Dependency scan, architecture x-ray, then a prioritised list of what to fix first.",
+        "arguments": [
+          {
+            "name": "repoUrl",
+            "description": "https://github.com/owner/name",
+            "required": true
+          },
+          {
+            "name": "branch",
+            "description": "Branch to audit. Defaults to the repository's default branch.",
+            "required": false
+          }
+        ]
+      },
+      {
+        "name": "explain_findings",
+        "title": "Explain a run's findings",
+        "description": "Turn one analysis run into an explanation pitched at a chosen audience.",
+        "arguments": [
+          {
+            "name": "runId",
+            "description": "The run to explain.",
+            "required": true
+          },
+          {
+            "name": "audience",
+            "description": "engineer or exec. Defaults to engineer.",
+            "required": false
+          }
+        ]
+      },
+      {
+        "name": "pre_release_check",
+        "title": "Pre-release gate",
+        "description": "A pass/fail summary suitable for pasting into a pull request.",
+        "arguments": [
+          {
+            "name": "repoUrl",
+            "description": "https://github.com/owner/name",
+            "required": true
+          }
+        ]
+      }
+    ]
+  },
+  "/api/mcp/usage": {
+    "calls": [],
+    "totals": {
+      "calls": 0,
+      "ok": 0,
+      "quotaRefused": 0,
+      "runsStarted": 0,
+      "avgDurationMs": null,
+      "busiestTool": null,
+      "errorRate": null
+    },
+    "comparable": true,
+    "since": 1782950400
+  },
+  "/api/mcp/clients": {
+    "connections": []
   },
   "__runs": [
     {

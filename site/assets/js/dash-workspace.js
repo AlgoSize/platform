@@ -55,6 +55,13 @@
       glyph: "◴", route: "#/cost", analyzer: null,
       answers: "Where an existing AWS bill is going, and the savings ranked by size.",
       cta: "Read a CUR file" },
+    // Not an analyzer, and deliberately in the same grid anyway: connecting an
+    // assistant is something you do to the whole workspace, and burying it in
+    // settings is how an integration nobody discovers gets built.
+    { id: "mcp",       name: "MCP connections",      short: "MCP",
+      glyph: "⇄", route: "#/mcp", analyzer: null,
+      answers: "Run every tool on this page from Claude Code, Claude Desktop, Claude.ai or Cursor.",
+      cta: "Connect an assistant" },
   ];
 
   // ------------------------------------------------------------------ load
