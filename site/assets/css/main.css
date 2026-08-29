@@ -2209,6 +2209,14 @@ code, .mono {
   border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
   color: var(--accent);
 }
+/* A scheduled sweep, not a gate. Warm rather than accent so the two
+   automated origins are distinguishable at a glance in a mixed feed —
+   scanning for "what did CI block" must not turn up last night's sweeps. */
+.tag-monitor {
+  background: color-mix(in srgb, var(--accent-warm) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-warm) 32%, transparent);
+  color: var(--accent-warm);
+}
 .run-item-origin { color: var(--text-dim); font-size: var(--fs-xs); }
 
 /* --- Modals --- */
@@ -4884,10 +4892,74 @@ a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
 .mcp-facts li { display: flex; gap: var(--s-3); font-size: var(--fs-sm); }
 .mcp-fact-mark { color: var(--text-dim); flex: 0 0 auto; }
 
+/* --- Connection test --- */
+.mcp-test {
+  display: flex; flex-direction: column; gap: var(--s-3);
+  padding: var(--s-4); border: 1px solid var(--border); border-radius: 10px;
+  background: var(--bg-elevated); align-items: flex-start;
+}
+.mcp-test-state { display: flex; gap: var(--s-3); align-items: flex-start; flex-wrap: wrap; font-size: var(--fs-sm); }
+.mcp-test-state .acct-dim { flex: 1 1 24ch; min-width: 0; }
+.chip.mcp-test-idle { background: transparent; border: 1px solid var(--border); color: var(--text-muted); }
+.chip.mcp-test-ok {
+  background: color-mix(in srgb, var(--accent-2) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-2) 38%, transparent);
+  color: var(--accent-2);
+}
+.chip.mcp-test-fail {
+  background: color-mix(in srgb, #ef4444 14%, transparent);
+  border: 1px solid color-mix(in srgb, #ef4444 42%, transparent);
+  color: #f3c4c4;
+}
+
+/* --- Monthly run allowance --- */
+.mcp-quota-head { display: flex; gap: var(--s-3); align-items: baseline; flex-wrap: wrap; }
+.mcp-quota-count { font-size: var(--fs-lg); font-weight: 600; font-variant-numeric: tabular-nums; }
+/* Countable boxes, one per run. A percentage bar answers "how full" when the
+   question is "how many left", and at five units those are different reads. */
+.mcp-quota-meter { display: flex; gap: 5px; }
+.mcp-quota-seg {
+  flex: 1 1 0; height: 9px; border-radius: 3px;
+  border: 1px solid var(--border); background: transparent;
+}
+.mcp-quota-seg-on   { background: var(--accent);      border-color: var(--accent); }
+.mcp-quota-seg-low  { background: var(--accent-warm); border-color: var(--accent-warm); }
+.mcp-quota-seg-out  { background: var(--accent-warm); border-color: var(--accent-warm); }
+.mcp-quota-note {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: var(--s-3); border: 1px solid var(--border); border-radius: 9px;
+  background: var(--bg-elevated); font-size: var(--fs-sm);
+}
+/* Amber, never red: being out of runs is a well-formed call meeting a limit
+   the customer chose, not a fault. Drawing it as an error sends the reader
+   off to debug a connection that is working exactly as designed. */
+.mcp-quota-warn {
+  border-color: color-mix(in srgb, var(--accent-warm) 42%, transparent);
+  background: color-mix(in srgb, var(--accent-warm) 7%, transparent);
+}
+.mcp-quota-warn strong { color: var(--accent-warm); }
+
+/* --- Call volume --- */
+.mcp-spark-wrap { display: flex; flex-direction: column; gap: var(--s-2); }
+.mcp-spark-label { font-size: var(--fs-xs); }
+.mcp-spark {
+  display: flex; align-items: flex-end; gap: 3px; height: 44px;
+  padding: var(--s-2); border: 1px solid var(--border-soft); border-radius: 9px;
+  background: var(--bg-elevated);
+}
+.mcp-spark-bar {
+  flex: 1 1 0; min-width: 3px; border-radius: 2px 2px 0 0;
+  background: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+/* A quiet day is drawn, not omitted: an empty column and a missing column
+   look the same, and only one of them means "nobody called that day". */
+.mcp-spark-zero { background: var(--border); }
+
 @media (max-width: 560px) {
   /* The three setup steps stack, and the client picker becomes one column —
      five side-by-side cards at 390px would be unreadable slivers. */
   .mcp-clients { grid-template-columns: 1fr; }
   .mcp-search { max-width: none; width: 100%; }
   .mcp-conn { align-items: flex-start; }
+  .mcp-test-state { flex-direction: column; }
 }

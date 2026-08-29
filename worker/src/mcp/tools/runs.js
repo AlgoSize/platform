@@ -9,9 +9,15 @@ import { CHAINS } from "../chains.js";
 import { SCOPES, failureOf, READ_ONLY, MUTATING, clip } from "./_shared.js";
 
 // Kept as a literal rather than imported from handlers/runs.js — importing a
-// handler module into tools/ is what the purity guard forbids. The tool test
-// asserts this matches the handler's own ANALYZERS list.
+// handler module into tools/ is what the purity guard forbids.
+// test-mcp-purity.mjs asserts this matches the handler's own ANALYZERS list.
 const ANALYZERS = ["cost", "vuln", "algo", "arch", "estimate"];
+
+// Same reason, same rule: mirrors RUN_SOURCES in handlers/runs.js, asserted
+// by test-mcp-purity.mjs. "monitor" is the one that matters here — a scheduled
+// sweep files its audit as a run, and without this value in the enum an
+// assistant has no way to ask what the nightly monitors found.
+const SOURCES = ["ci", "monitor", "manual"];
 
 export const RUN_TOOLS = [
   {
@@ -31,7 +37,12 @@ export const RUN_TOOLS = [
         limit:    { type: "integer", minimum: 1, maximum: 50, description: "How many to return. Default 20." },
         cursor:   { type: "string", description: "Pagination cursor from a previous call's nextCursor." },
         analyzer: { type: "string", enum: ANALYZERS, description: "Only runs from this analyzer." },
-        source:   { type: "string", enum: ["ci", "manual"], description: "Only runs from this origin." },
+        source: {
+          type: "string", enum: SOURCES,
+          description:
+            "Only runs from this origin: ci (a pipeline gate), monitor (a scheduled sweep), " +
+            "or manual (started by a person in the dashboard).",
+        },
       },
       additionalProperties: false,
     },
@@ -53,7 +64,8 @@ export const RUN_TOOLS = [
       return {
         text: items.length
           ? `${items.length} run(s):\n` + items.map((r) =>
-              `• ${r.id} — ${r.analyzer}${r.repo ? ` on ${r.repo}` : ""} — ` +
+              `• ${r.id} — ${r.analyzer}${r.repo ? ` on ${r.repo}` : ""} ` +
+              `[${r.source || "manual"}] — ` +
               `${r.headline || "no summary"} (${new Date(r.createdAt).toISOString()})`).join("\n")
           : "No runs recorded for this organisation yet.",
         structured: { items, nextCursor: d.nextCursor || null },

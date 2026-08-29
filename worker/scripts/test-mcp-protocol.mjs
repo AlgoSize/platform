@@ -449,6 +449,39 @@ group("session teardown");
 }
 
 // ---------------------------------------------------------------------------
+group("the usage summary the dashboard draws");
+{
+  const env = makeEnv(); await seed(env);
+  const waits = [];
+  const wctx = { waitUntil: (p) => { waits.push(Promise.resolve(p).catch(() => {})); } };
+  const init = await worker.fetch(rpc(INIT), env, wctx);
+  const sid = init.headers.get("Mcp-Session-Id");
+  await worker.fetch(rpc({
+    jsonrpc: "2.0", id: 30, method: "tools/call",
+    params: { name: "algosize_list_runs", arguments: { limit: 5 } },
+  }, { sessionId: sid }), env, wctx);
+  await Promise.all(waits);
+
+  const usage = await (await worker.fetch(
+    new Request("https://algosize.com/api/mcp/usage", {
+      headers: { authorization: `Bearer ${API_KEY}` },
+    }), env, wctx)).json();
+
+  const { DAILY_WINDOW_DAYS } = await import("../src/mcp/telemetry.js");
+  expect(Array.isArray(usage.daily) && usage.daily.length === DAILY_WINDOW_DAYS,
+    `the call-volume series covers ${DAILY_WINDOW_DAYS} days (got ${usage.daily && usage.daily.length})`);
+  // Dense, not sparse. A chart that closes up its quiet days turns "twice, a
+  // week apart" into "twice, back to back" — the shape is the information.
+  expect(usage.daily.every((d) => typeof d.calls === "number"),
+    "…with an entry for every day, including the ones with no calls");
+  expect(usage.daily[usage.daily.length - 1].calls >= 1,
+    "…and today's bucket counts the call just made");
+  const days = usage.daily.map((d) => d.day);
+  expect(days.every((d, i) => i === 0 || d - days[i - 1] === 86400),
+    "…in ascending, evenly spaced day boundaries");
+}
+
+// ---------------------------------------------------------------------------
 group("discovery documents");
 {
   const env = makeEnv(); await seed(env);

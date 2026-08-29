@@ -764,6 +764,31 @@ const QUADRATIC = (n) => n * n * 0.0001;   // slope 2 → O(n^2)
   expect(after1.lastAlgo && after1.lastAlgo.byName.sum === "O(n)",
     `the algo baseline graded sum as O(n) (got ${after1.lastAlgo && after1.lastAlgo.byName.sum})`);
 
+  // Every analyzer that produced a result files a run, and each headline has
+  // to summarise the thing that analyzer actually measured. The trap here is
+  // "algo": a sweep grades every entry in optimizer.config.json, while a
+  // single run grades one function — so the single-function headline shape
+  // ("O(n) · 1.50 ms") does not fit, and falling through to it produced
+  // "unknown · — ms", indistinguishable from a grading that failed.
+  {
+    const { listRuns } = await import("../src/handlers/runs.js");
+    const filed = await listRuns(env, { orgId }, { limit: 20, source: "monitor" });
+    const by = {};
+    filed.items.forEach((x) => { by[x.analyzer] = x; });
+    expect(["vuln", "arch", "estimate", "algo"].every((a) => by[a]),
+      `all four analyzers file a run (got ${Object.keys(by).sort().join(",")})`);
+    expect(by.algo && /1 function · worst O\(n\)/.test(by.algo.headline),
+      `the algo headline summarises the sweep, not one function (got "${by.algo && by.algo.headline}")`);
+    expect(by.algo && !/unknown/.test(by.algo.headline),
+      "…and never reads as a failed grading when the grading succeeded");
+    expect(by.estimate && /\$/.test(by.estimate.headline),
+      `the estimate headline names a price (got "${by.estimate && by.estimate.headline}")`);
+    expect(by.arch && /cluster/.test(by.arch.headline),
+      `the arch headline counts clusters (got "${by.arch && by.arch.headline}")`);
+    expect(filed.items.every((x) => x.repo === "https://github.com/o/multi"),
+      "and every one names the repository it read");
+  }
+
   // Run 2 — nothing moved. Silence, across all four analyzers.
   const r2 = await runMonitorCheck(env, m.monitorId, {}, { now: NOW + DAY, sendTransactional: mailbox.send });
   expect(r2.status === "no_change", `an unchanged multi-analyzer run is no_change (got ${r2.status})`);
@@ -847,6 +872,83 @@ console.log("\nthe optimizer CI snippet\n");
     "the workflow grades through the same API endpoint as the dashboard");
   expect(body.workflow.includes("ALGOSIZE_API_KEY") && /skip/i.test(body.workflow),
     "and skips itself with a notice while the secret is missing — never a red build");
+}
+
+// ---------------------------------------------------------------------------
+// A sweep files its audit as a run
+// ---------------------------------------------------------------------------
+// Until this existed, "what did the nightly monitor find" had no answer that
+// outlived the next sweep: the result went onto the monitor row, which holds
+// only the latest one. A CI audit and a scheduled audit are the same work on
+// the same repository, and only one of them was answerable.
+{
+  const { listRuns, listRunsHandler } = await import("../src/handlers/runs.js");
+  const { peekUsage } = await import("../src/quota.js");
+
+  const env = makeEnv();
+  const orgId = await seedOrg(env, { userId: "usr_file", email: "file@example.com" });
+  const m = await createMonitor(env, { orgId, repoUrl: "https://github.com/a/b" });
+
+  const mailbox = makeMailbox();
+  env.FETCH = makeAuditFetch({ vulns: [{ id: "GHSA-f1", package: "lodash", fixedIn: "4.17.21" }] });
+  const r1 = await runMonitorCheck(env, m.monitorId, {}, { now: NOW, sendTransactional: mailbox.send });
+
+  expect(r1.runIds && typeof r1.runIds.vuln === "string",
+    `the sweep reports the run id it filed (got ${JSON.stringify(r1.runIds)})`);
+
+  const all = await listRuns(env, { orgId }, { limit: 20 });
+  const filed = all.items.find((x) => x.id === r1.runIds.vuln);
+  expect(!!filed, "the audit is in run history like any other run");
+  expect(filed && filed.source === "monitor",
+    `…tagged monitor, not ci and not manual (got ${filed && filed.source})`);
+  expect(filed && filed.analyzer === "vuln", "…under the analyzer that produced it");
+  expect(filed && filed.repo === "https://github.com/a/b",
+    `…naming the repository it read (got ${filed && filed.repo})`);
+  expect(filed && filed.monitorId === m.monitorId,
+    "…and the monitor that scheduled it, so a run nobody started can say why it happened");
+
+  // The whole reason a sweep is worth filing: the history survives the next
+  // sweep, which the monitor row's single last_* result never did.
+  env.FETCH = makeAuditFetch({ vulns: [
+    { id: "GHSA-f1", package: "lodash", fixedIn: "4.17.21" },
+    { id: "GHSA-f2", package: "express", fixedIn: "4.18.0" },
+  ] });
+  const r2 = await runMonitorCheck(env, m.monitorId, {}, { now: NOW + DAY, sendTransactional: mailbox.send });
+  const after = await listRuns(env, { orgId }, { limit: 20, source: "monitor" });
+  expect(after.items.length === 2,
+    `a second sweep adds a second run rather than overwriting the first (got ${after.items.length})`);
+  expect(after.items.some((x) => x.id === r1.runIds.vuln) &&
+         after.items.some((x) => x.id === r2.runIds.vuln),
+    "…and both are still readable");
+
+  // Scheduled work must not spend the allowance the customer is keeping for
+  // work they are actually doing. A nightly monitor would empty a free plan
+  // inside a week and the first symptom would be an unexplained refusal.
+  expect(await peekUsage(env, orgId) === 0 && await peekUsage(env, "usr_file") === 0,
+    "a sweep consumes no quota — neither the org's meter nor the owner's");
+
+  // The filter, from the outside. This is the request an assistant makes.
+  const req = authed("usr_file", { url: "https://algosize.com/api/runs?source=monitor&limit=20" });
+  const res = await listRunsHandler(req, env);
+  const body = await res.json();
+  expect(res.status === 200 && body.items.length === 2,
+    `?source=monitor returns the swept runs (got ${res.status}, ${body.items && body.items.length})`);
+  expect(body.items.every((x) => x.source === "monitor"), "…and only those");
+
+  const manual = await listRuns(env, { orgId }, { limit: 20, source: "manual" });
+  expect(manual.items.length === 0,
+    "a swept run is not 'manual' either — manual means a person started it");
+
+  // An unrecognised filter must not quietly widen to everything. That failure
+  // reads as "there are no runs of that kind", which is the opposite of true
+  // and is exactly what ?source=monitor did before monitor was a real value.
+  const bad = await listRunsHandler(
+    authed("usr_file", { url: "https://algosize.com/api/runs?source=nightly" }), env);
+  expect(bad.status === 400,
+    `an unknown source is refused rather than ignored (got ${bad.status})`);
+  const badBody = await bad.json();
+  expect(/monitor/.test(badBody.message || ""),
+    "…and the refusal names the values that do work");
 }
 
 // ---------- summary ----------

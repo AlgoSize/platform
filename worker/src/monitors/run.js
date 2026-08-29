@@ -14,6 +14,7 @@
 // transient GitHub or OSV outage retries just the monitor it hit.
 
 import { runLockfileAudit } from "../handlers/analyze.js";
+import { persistRun } from "../handlers/runs.js";
 import { resolveMonitorRoute, monitorSlackText } from "./routing.js";
 import { postToSlack } from "../slack.js";
 import { sendTransactional as defaultSendTransactional } from "../email/transactional.js";
@@ -105,6 +106,72 @@ export async function sweepDueMonitors(env, ctx, { now, cron = null } = {}) {
 }
 
 /**
+ * File a sweep's results as runs.
+ *
+ * A scheduled audit and a CI audit are the same work on the same repository,
+ * and until this existed only one of them was answerable. `/api/ci/runs`
+ * persists what it finds, so "what did the pipeline flag last night" has an
+ * answer with a run id, a report and a SARIF export behind it; a monitor
+ * sweep wrote its result onto the monitor row and nowhere else, so the same
+ * question about the nightly sweep had no answer at all — not in run history,
+ * not through `algosize_list_runs`, not as a downloadable report. The monitor
+ * row keeps only the LATEST sweep, so the history was not merely hidden, it
+ * did not exist.
+ *
+ * `source: "monitor"` is what separates the two afterwards, and it is a third
+ * value rather than a reuse of "ci": a nightly sweep nobody asked for and a
+ * gate that blocked a pull request are different evidence, and a reader
+ * filtering for one does not want the other.
+ *
+ * These runs cost NO quota, deliberately. A sweep the customer scheduled once
+ * and then stopped thinking about must not quietly drain the allowance they
+ * are keeping for work they are actually doing — a nightly monitor would
+ * exhaust a free plan inside a week and the first symptom would be a manual
+ * analysis refused for reasons nobody could see. Metering lives on the HTTP
+ * routes (`enforceQuota` in the chain); nothing here goes near one.
+ *
+ * Never throws, and never awaited on the critical path's behalf: the sweep's
+ * job is the baseline and the alert. Losing a run row to a D1 hiccup is worth
+ * strictly less than re-delivering the message and re-sending every email
+ * that already went out.
+ */
+async function persistSweepRuns(env, ctx, monitor, filings, nowSec) {
+  const ids = {};
+  for (const f of filings) {
+    try {
+      const run = await persistRun(env, {
+        orgId:  monitor.orgId,
+        // A schedule authenticates as nobody. The org owns the row, exactly as
+        // it does for a CI run, so the sweep stays visible to the whole team
+        // and outlives whoever created the monitor.
+        userId: null,
+        analyzer: f.analyzer,
+        source:   "monitor",
+        // `repo` and `ref` under the names listRuns already reads for CI, so
+        // one shaping path serves both origins instead of two that drift.
+        // Paths and identities only — never the fetched file contents, which
+        // are the customer's source.
+        input: {
+          monitorId: monitor.monitorId,
+          repo:      monitor.repoUrl,
+          ref:       monitor.branch || null,
+          scheduled: true,
+          sweptAt:   nowSec,
+        },
+        result: f.result,
+      });
+      if (run && run.id) ids[f.analyzer] = run.id;
+    } catch (err) {
+      await captureException(env, ctx, err, {
+        tags: { source: "monitors", phase: "persist_run", reason: f.analyzer },
+        extra: { monitorId: monitor.monitorId, analyzer: f.analyzer },
+      });
+    }
+  }
+  return ids;
+}
+
+/**
  * The queue consumer's per-message body: run one monitor end to end.
  *
  * Returns a result object describing what happened. Throwing is reserved for
@@ -168,6 +235,12 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
   const advisories = Array.isArray(result && result.advisories) ? result.advisories : [];
   const diff = diffAdvisories(advisories, monitor.lastAdvisoryIds);
 
+  // What this sweep will file as runs (see persistSweepRuns below). Collected
+  // as the analyzers finish rather than reconstructed afterwards, because an
+  // analyzer that skipped has no result to file and the skip list does not
+  // carry one.
+  const filings = [{ analyzer: "vuln", result }];
+
   // ---- secondary analyzers (migrations/0016) ------------------------------
   // Each runs only when its toggle is on, reads only committed repo files,
   // and fails SOFT: a skip is captured and its baseline stays untouched
@@ -183,6 +256,7 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
     if (arch.status === "ok") {
       archDiff = diffArchFindings(arch.findings, arch.keys, monitor.lastArchKeys);
       archBaseline = archDiff.currentKeys;
+      if (arch.result) filings.push({ analyzer: "arch", result: arch.result });
 
       // The nightly snapshot (migrations/0018). This is the one that makes the
       // history CONTINUOUS rather than a scattering of whenever-someone-clicked
@@ -221,6 +295,7 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
       estDiff = diffEstimate(est.byProvider, monitor.lastEstimate);
       estBaseline = { byProvider: est.byProvider, at: nowSec };
       estProviders = est.providers;
+      if (est.result) filings.push({ analyzer: "estimate", result: est.result });
     } else if (est.status === "no_compose") {
       estBaseline = { byProvider: {}, at: nowSec };
       skips.push({ analyzer: "estimate", reason: "no_compose" });
@@ -236,6 +311,7 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
       algoDiff = diffAlgoGrades(algo.grades, monitor.lastAlgo);
       algoBaseline = { byName: algo.grades, at: nowSec };
       algoSkippedEntries = algo.skippedEntries || [];
+      filings.push({ analyzer: "algo", result: { grades: algo.grades, skippedEntries: algo.skippedEntries || [] } });
     } else if (algo.status === "no_config") {
       algoBaseline = { byName: {}, at: nowSec };
       skips.push({ analyzer: "algo", reason: "no_config" });
@@ -287,6 +363,11 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
     },
   });
 
+  // After the baseline, before the alert. After, because a run row must never
+  // be able to cost the sweep its baseline; before, because the alert email
+  // carries links and the run ids have to exist by the time it is built.
+  const runIds = await persistSweepRuns(env, ctx, monitor, filings, nowSec);
+
   const anySecondaryAlert =
     (archDiff && archDiff.shouldAlert) ||
     (estDiff && estDiff.shouldAlert) ||
@@ -300,6 +381,7 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
       resolvedCount: diff.resolvedKeys.length,
       analyzersRun: analyzers,
       skips,
+      runIds,
     };
   }
 
@@ -319,6 +401,7 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
       reason: route.reason,
       analyzersRun: analyzers,
       skips,
+      runIds,
     };
   }
 
@@ -404,6 +487,7 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
     estimateChanged:   !!(estDiff && estDiff.shouldAlert),
     algoRegressions:   algoDiff ? algoDiff.regressions.length : 0,
     skips,
+    runIds,
   };
 }
 

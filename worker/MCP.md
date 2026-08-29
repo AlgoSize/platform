@@ -156,6 +156,33 @@ No scope grants key creation, billing, member management, or `/api/admin`.
 Those routes have **no tool and no chain entry at all** — absent, not gated —
 so no scope bug can reach them.
 
+## Where a run came from
+
+`algosize_list_runs` filters on three sources, and they are three rather than
+two because the distinctions are ones a reader acts on:
+
+| `source` | Means |
+|---|---|
+| `ci` | a pipeline gate — a person was waiting on it, and it names a commit |
+| `monitor` | a scheduled sweep — nobody asked, and it names a repository |
+| `manual` | started by a person in the dashboard (stored as NULL) |
+
+Monitor sweeps only became listable when they started filing runs. Before
+that a sweep wrote its result onto the monitor row, which holds the **latest**
+sweep and nothing else — so a nightly audit had no run id, no report, no
+SARIF export, and no history at all. A CI audit and a scheduled audit are the
+same work on the same repository; only one of them was answerable.
+
+Those filed runs cost **no quota**. Metering lives on the HTTP routes
+(`enforceQuota` in the chain) and the sweep goes nowhere near one: a schedule
+the customer set once must not drain the allowance they are keeping for work
+they are actually doing.
+
+An unrecognised `?source` is refused with a 400 rather than ignored. Ignoring
+it returns every run, which reads as "there are no runs of that kind" — the
+opposite of true, and precisely what `?source=monitor` did before `monitor`
+was a real value.
+
 ## Errors: `isError` result vs JSON-RPC error
 
 A tool that ran and failed returns an `isError` **result**. A JSON-RPC
