@@ -19,12 +19,33 @@
 // are estimates, not benchmark output — good enough to rank and to place on a
 // graph, not a published benchmark.
 
-export const TASK_FAMILIES = Object.freeze([
-  "embeddings", "reranking", "summarization", "finding_explanation",
-  "repo_summarization", "vuln_classification", "triage", "fix_suggestion",
-  "multifile_fix", "support_chat", "report_writing", "visual_reasoning",
-  "moderation",
-]);
+// Each task family, and what the job actually IS.
+//
+// The bare ids were enough while the only consumer was recommend(), which does
+// not care what "multifile_fix" means. A person choosing a model does: an
+// explorer that lists seven slugs and no descriptions asks the reader to
+// already know the routing table they came to read. The description lives here
+// beside the tiers it explains, so it cannot drift from them the way a copy
+// deck in a frontend would.
+import { costOf, PRICE_PROVENANCE } from "./pricing.js";
+
+export const TASK_FAMILY_META = Object.freeze({
+  embeddings: "Turning code into vectors so a sink can be found by meaning rather than by grep.",
+  reranking: "Ordering a retrieved set before a model spends context reading it.",
+  summarization: "Compressing a long input into something a person will actually read.",
+  finding_explanation: "Saying what one finding means, in the words of whoever has to fix it.",
+  repo_summarization: "Describing a whole repository from its structure and manifests.",
+  vuln_classification: "Judging exploitability and severity with the full function and its callers in view.",
+  triage: "Reading every raw finding with a short window and calling it true, false, or escalate.",
+  fix_suggestion: "Writing a single-file patch that removes the finding and nothing else.",
+  multifile_fix: "Changing call sites across files without losing the thread — context is the constraint.",
+  support_chat: "Answering a customer's question about their own results.",
+  report_writing: "Turning findings into prose a non-engineer will act on.",
+  visual_reasoning: "Reading a screenshot or diagram as evidence.",
+  moderation: "Deciding whether an input is safe to process at all.",
+});
+
+export const TASK_FAMILIES = Object.freeze(Object.keys(TASK_FAMILY_META));
 
 export const TIERS = Object.freeze(["primary", "secondary", "budget", "avoid"]);
 
@@ -191,10 +212,39 @@ export function recommend(taskFamily, opts = {}) {
 // ---------------------------------------------------------------------------
 
 const GRAPHS = {
-  cost_vs_capability: { x: { key: "costScore", label: "Cheaper →" }, y: { key: "capability", label: "More capable →" } },
-  latency_vs_quality: { x: { key: "latencyScore", label: "Faster →" }, y: { key: "capability", label: "Higher quality →" } },
-  cost_vs_autofix:    { x: { key: "costScore", label: "Cheaper →" }, y: { key: "coding", label: "Better at code →" } },
+  cost_vs_capability: {
+    x: { key: "costScore", label: "Cost efficiency", low: "expensive", high: "cheap" },
+    y: { key: "capability", label: "Capability", low: "weaker", high: "stronger" },
+    note: "The general-purpose view: what you get per dollar.",
+  },
+  latency_vs_quality: {
+    x: { key: "latencyScore", label: "Speed", low: "slow", high: "fast" },
+    // Keyed on capability and LABELLED capability. There is no separate quality
+    // score in this registry, and calling the axis "quality" while plotting
+    // capability would invent a measurement the data does not contain.
+    y: { key: "capability", label: "Capability", low: "weaker", high: "stronger" },
+    note: "For stages that run on every finding, speed is a cost.",
+  },
+  cost_vs_autofix: {
+    x: { key: "costScore", label: "Cost efficiency", low: "expensive", high: "cheap" },
+    y: { key: "coding", label: "Coding ability", low: "weaker", high: "stronger" },
+    note: "The autofix view — only coding ability counts here.",
+  },
 };
+
+/** Real $/1M in and out for a model, or nulls when it is not priced. */
+function priceHint(model) {
+  const inOnly = costOf(model, { inputTokens: 1_000_000, outputTokens: 0 });
+  const outOnly = costOf(model, { inputTokens: 0, outputTokens: 1_000_000 });
+  return {
+    inputPer1M: inOnly.priced ? round6(inOnly.totalCostUsd) : null,
+    // Null, not zero: an embedding model emits no output tokens, and "$0.00
+    // per 1M out" reads as free rather than as inapplicable.
+    outputPer1M: outOnly.priced && outOnly.totalCostUsd > 0 ? round6(outOnly.totalCostUsd) : null,
+    verified: inOnly.priced ? inOnly.verified : false,
+  };
+}
+function round6(n) { return typeof n === "number" ? Math.round(n * 1e6) / 1e6 : null; }
 
 export const GRAPH_KINDS = Object.freeze(Object.keys(GRAPHS).concat(["model_fit_by_task"]));
 
@@ -215,10 +265,18 @@ export function graphData(kind, filter = {}) {
 
   if (kind === "model_fit_by_task") {
     return {
-      kind, families: TASK_FAMILIES,
+      kind,
+      families: TASK_FAMILIES.map((f) => ({ id: f, description: TASK_FAMILY_META[f] || "" })),
+      provenance: PRICE_PROVENANCE,
       rows: models.map((x) => ({
-        model: x.model, label: x.label, deprecated: x.deprecated,
-        fit: Object.fromEntries(TASK_FAMILIES.map((f) => [f, x.tasks[f] || null])),
+        model: x.model, label: x.label, deprecated: x.deprecated, scored: x.scored,
+        contextWindow: x.contextWindow, priceHint: priceHint(x.model), notes: x.notes,
+        // THREE states, not two. A family this model was never rated for is
+        // "unrated"; one it is explicitly marked away from is "avoid". Folding
+        // both into a blank cell loses the stronger fact — that somebody looked
+        // at this pairing and said no — and leaves a reader to guess which
+        // blank means "nobody checked".
+        fit: Object.fromEntries(TASK_FAMILIES.map((f) => [f, x.tasks[f] || "unrated"])),
       })),
     };
   }
@@ -226,12 +284,36 @@ export function graphData(kind, filter = {}) {
   const g = GRAPHS[kind];
   if (!g) throw new Error(`unknown graph kind: ${kind}`);
   return {
-    kind, x: g.x, y: g.y,
+    kind, x: g.x, y: g.y, note: g.note,
+    provenance: PRICE_PROVENANCE,
     points: models.map((x) => ({
       model: x.model, label: x.label, provider: x.provider,
       x: x[g.x.key], y: x[g.y.key],
-      deprecated: x.deprecated, scored: x.scored,
+      deprecated: x.deprecated,
+      // false = these quality scores are seeded engineering estimates, not
+      // benchmark output. The flag has always been in the registry; it has to
+      // reach the screen, or a 0–100 score reads as a measurement.
+      scored: x.scored,
       p50Ms: x.p50Ms, contextWindow: x.contextWindow,
+      // The best tier this model holds anywhere, which is what colours it on a
+      // plot. "avoid" is not a tier a dot earns — a model only ever marked
+      // avoid is unrated for colouring purposes.
+      bestTier: bestTierOf(x),
+      priceHint: priceHint(x.model),
+      notes: x.notes,
     })),
   };
+}
+
+const TIER_RANK = { primary: 3, secondary: 2, budget: 1 };
+
+/** The strongest tier a model holds across every family. "avoid" never counts. */
+export function bestTierOf(model) {
+  let best = null, bestRank = 0;
+  for (const family of Object.keys(model.tasks || {})) {
+    const tier = model.tasks[family];
+    const r = TIER_RANK[tier] || 0;
+    if (r > bestRank) { bestRank = r; best = tier; }
+  }
+  return best;
 }

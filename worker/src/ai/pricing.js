@@ -27,6 +27,25 @@
 // not "confirmed against the live page today".
 // The refresh procedure is docs/ai-ops/WORKERS-AI-METERING-PLAN.md.
 
+// WHERE THESE NUMBERS CAME FROM, as data rather than as a comment.
+//
+// Any surface that shows a price has to be able to say what it is showing:
+// a relayed figure with a date and a source, not a confirmed rate. Keeping
+// that as prose in this file meant every caller re-typed the caveat, and a
+// re-typed caveat goes stale the moment the prices are refreshed and the copy
+// is not. `relayedOn` is the single place that date lives.
+export const PRICE_PROVENANCE = Object.freeze({
+  relayedOn: "2026-08",
+  sourceUrl: "https://developers.cloudflare.com/workers-ai/models/",
+  sourceName: "Cloudflare Workers AI models page",
+  // "has a real source", NOT "re-confirmed against the live page today".
+  // The sandbox egress proxy blocks developers.cloudflare.com, so the
+  // reconciliation is an operator/Replit job — see docs/ai-ops/REPLIT-PROMPTS.md.
+  confirmedAgainstBill: false,
+  caveat: "Relayed from Cloudflare's published rates, not re-confirmed against a bill. " +
+    "Directional — re-check before billing a customer from them.",
+});
+
 // USD per 1,000 Neurons, above the free daily allocation. Sourced.
 export const NEURON_PRICE = Object.freeze({
   usdPer1000: 0.011,
