@@ -120,16 +120,19 @@ function makeDom() {
  * Boot admin.js with a scripted fetch and drive it to the AI spend page.
  * Returns the id registry plus the list of URLs the panel actually requested.
  */
-function bootPanel(routes) {
+function bootPanel(routes, opts = {}) {
   const { document, registry } = makeDom();
   const requests = [];
+  const failStatus = opts.failStatus || {};
   const fetchImpl = (url, options) => {
     const path = String(url);
     requests.push(path);
     const key = Object.keys(routes).find((k) => path.indexOf(k) === 0);
     const body = key ? routes[key](path, options) : { error: "not_stubbed" };
+    const failKey = Object.keys(failStatus).find((k) => path.indexOf(k) === 0);
+    const status = failKey ? failStatus[failKey] : 200;
     return Promise.resolve({
-      ok: true, status: 200,
+      ok: status >= 200 && status < 300, status,
       text: () => Promise.resolve(JSON.stringify(body)),
       json: () => Promise.resolve(body),
     });
@@ -364,6 +367,43 @@ group("an expensive request is explainable");
     "rather than 0 tok");
   expect(/cost \$0\.33/.test(textOf(rows[0])) && /margin \$0\.08/.test(textOf(rows[0])),
     "cost of goods and margin are shown apart from the customer price");
+}
+
+group("an unapplied migration reads as an operator action, not a failed load");
+
+{
+  // The production report: pointed at a database without migration 0025, the
+  // panel said "Could not load this section / internal_error" — which tells an
+  // operator nothing about the one thing they can actually do.
+  const routes = {
+    "/api/me": () => ME,
+    "/api/admin/settings": () => SETTINGS,
+    "/api/admin/ai-usage": () => ({
+      error: "schema_missing",
+      migration: "0025_ai_usage",
+      missing: { kind: "table", name: "ai_usage" },
+      state: "unreadable",
+      message: "This database has no table `ai_usage`, so there is no AI usage to read. " +
+        "Migration 0025_ai_usage has not been applied here — migrations are applied by hand, " +
+        "so a deploy does not create it. Settings → Environment lists which migrations this " +
+        "database actually has.",
+    }),
+  };
+  // The panel's api() rejects on a non-2xx, so mark this one as the 500 it is.
+  const { registry } = bootPanel(routes, { failStatus: { "/api/admin/ai-usage": 500 } });
+  await flush();
+
+  const text = textOf(registry.get("adm-aiusage-summary"));
+  expect(/0025_ai_usage/.test(text),
+    "the panel names the missing migration rather than saying the section failed to load");
+  expect(/applied by hand/.test(text),
+    "…and says why a deploy did not create it");
+  expect(!/Try again/.test(text),
+    "…and offers no Try again, which would send someone round a loop that cannot succeed");
+  expect(/Settings → Environment/.test(text),
+    "…pointing instead at the section that lists what this database actually has");
+  expect(!/\$0/.test(text) && !/\$0\.00/.test(text),
+    "…and paints no zeroes: a schema gap is not a month with no spend");
 }
 
 console.log("");

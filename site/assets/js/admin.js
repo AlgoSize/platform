@@ -200,6 +200,23 @@
   }
 
   function errorBox(err, retry) {
+    // A missing migration is not a failure to load — it is a database that
+    // does not have the table yet, which is an operator action, not a retry.
+    // Offering "Try again" for it would send someone round a loop that cannot
+    // succeed, so this branch names the migration and points at the Schema
+    // section that lists what this database actually has.
+    if (err && err.code === "schema_missing") {
+      var actions = [el("button", {
+        class: "adm-btn", type: "button", text: "Open Settings → Environment",
+        onclick: function () { window.location.hash = "#settings/environment"; },
+      })];
+      return stateBox(
+        "error",
+        "This database is missing " + (err.body && err.body.migration ? err.body.migration : "a migration"),
+        err.message || "The table this section reads does not exist here.",
+        actions,
+      );
+    }
     return stateBox(
       "error",
       "Could not load this section",
