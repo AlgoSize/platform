@@ -15,12 +15,17 @@
 //   pending  the analyzer is switched on and has never produced a result
 //   off      the analyzer is not switched on for this monitor at all
 //
+// Every cell that is not a grade also carries a `fix`: the single change that
+// would make it one, or null when the answer is "nothing you can do". A grid
+// full of accurate blanks is only half a product — the reader still has to
+// guess whose move it is.
+//
 // `off` and `pending` are deliberately distinct. "You have not enabled cost
 // analysis" and "cost analysis is enabled and has not found a compose file"
 // are different problems with different fixes, and a single grey dash for
 // both would hide the second one forever.
 
-import { requireOrgContext, explainUnavailable } from "./monitors.js";
+import { requireOrgContext, explainUnavailable, fixUnavailable } from "./monitors.js";
 import { listMonitors } from "../monitors/_store.js";
 import { gradeForScore, scoreForCounts, worstSeverity } from "../analyzers/audit.js";
 import { formatMicroUsd, bigORank } from "../monitors/analyzers.js";
@@ -28,7 +33,14 @@ import { formatMicroUsd, bigORank } from "../monitors/analyzers.js";
 /** Columns, in display order. Ids are stable — the UI keys off them. */
 export const SCORECARD_COLUMNS = Object.freeze([
   { id: "security",     label: "Security",     analyzer: "vuln" },
-  { id: "cost",         label: "Cost",         analyzer: "estimate" },
+  // Two money columns, and the labels have to keep them apart. "Cost" alone
+  // sat above the compose-file ESTIMATOR — a projection from list prices for
+  // infrastructure that may not exist yet — while the analyzer that reads
+  // your actual bill had no column at all. One of those is a forecast and the
+  // other is a fact, and a single word for both is how a reader comes away
+  // believing the forecast is the bill.
+  { id: "cost",         label: "Infra cost",   analyzer: "estimate" },
+  { id: "spend",        label: "Cloud spend",  analyzer: "cost" },
   { id: "complexity",   label: "Complexity",   analyzer: "algo" },
   { id: "architecture", label: "Architecture", analyzer: "arch" },
 ]);
@@ -79,6 +91,7 @@ function scorecardRow(m) {
     cells: {
       security:     securityCell(m, on, stale),
       cost:         costCell(m, on, stale),
+      spend:        spendCell(m, on, stale),
       complexity:   complexityCell(m, on, stale),
       architecture: architectureCell(m, on, stale),
     },
@@ -90,8 +103,12 @@ function shortRepo(url) {
   return String(url || "").replace(/^https?:\/\/(www\.)?github\.com\//, "");
 }
 
-function off()                 { return { kind: "off", note: null, value: null, rank: null }; }
-function pending(note)         { return { kind: "pending", note, value: null, rank: null }; }
+// `fix` is the one thing the reader can change to make this cell produce a
+// number, or null when there is nothing for them to do. It is the difference
+// between a grid that reports gaps and one that closes them: every empty cell
+// on this board was, until now, a true sentence and a dead end.
+function off()                 { return { kind: "off", note: null, fix: null, value: null, rank: null }; }
+function pending(note, fix = null) { return { kind: "pending", note, fix, value: null, rank: null }; }
 /**
  * The analyzer is switched on and the sweep ran, but this analyzer produced
  * nothing — no manifests, no compose file, no runnable config.
@@ -103,7 +120,7 @@ function pending(note)         { return { kind: "pending", note, value: null, ra
  * a clean bill of health for a repository the X-ray never read. A grid whose
  * zeros cannot be trusted is worse than one with gaps in it.
  */
-function unmeasured(note)      { return { kind: "unmeasured", note, value: null, rank: null }; }
+function unmeasured(note, fix = null) { return { kind: "unmeasured", note, fix, value: null, rank: null }; }
 
 /**
  * Why this analyzer produced nothing in the last sweep, or null if it did.
@@ -115,10 +132,11 @@ function unmeasured(note)      { return { kind: "unmeasured", note, value: null,
 function skipFor(m, analyzer) {
   if (!Array.isArray(m.lastSkips)) return null;
   const hit = m.lastSkips.find((s) => s && s.analyzer === analyzer);
-  return hit ? explainUnavailable(hit.reason) : null;
+  if (!hit) return null;
+  return { note: explainUnavailable(hit.reason), fix: fixUnavailable(hit.reason) };
 }
 function graded(value, note, rank, stale) {
-  return { kind: stale ? "stale" : "grade", value, note, rank };
+  return { kind: stale ? "stale" : "grade", value, note, fix: null, rank };
 }
 
 // ---------------------------------------------------------------------------
@@ -162,7 +180,7 @@ function securityCell(m, on, stale) {
 function costCell(m, on, stale) {
   if (!on.includes("estimate")) return off();
   const skipped = skipFor(m, "estimate");
-  if (skipped) return unmeasured(skipped);
+  if (skipped) return unmeasured(skipped.note, skipped.fix);
   const est = m.lastEstimate;
   if (!est) return pending("No estimate recorded yet.");
 
@@ -170,7 +188,9 @@ function costCell(m, on, stale) {
   if (!entries.length) {
     // A recorded-but-empty baseline is the sweep's way of saying it looked
     // and found no compose file. That is a real answer, not a missing one.
-    return pending("No compose file found in the repository.");
+    // (Rows swept since migration 0022 take the skipFor branch above; this
+    // is the pre-0022 path, and it gets the same fix line either way.)
+    return pending("No compose file found in the repository.", fixUnavailable("no_compose"));
   }
   entries.sort((a, b) => a[1] - b[1]);
   const [providerId, micro] = entries[0];
@@ -188,12 +208,14 @@ function costCell(m, on, stale) {
 function complexityCell(m, on, stale) {
   if (!on.includes("algo")) return off();
   const skipped = skipFor(m, "algo");
-  if (skipped) return unmeasured(skipped);
+  if (skipped) return unmeasured(skipped.note, skipped.fix);
   const algo = m.lastAlgo;
   if (!algo) return pending("No complexity run recorded yet.");
 
   const names = Object.keys(algo.byName || {});
-  if (!names.length) return pending("No optimizer.config.json in the repository.");
+  if (!names.length) {
+    return pending("No optimizer.config.json in the repository.", fixUnavailable("no_config"));
+  }
 
   let worstLabel = null, worstRank = -1;
   for (const name of names) {
@@ -215,15 +237,78 @@ function complexityCell(m, on, stale) {
 function architectureCell(m, on, stale) {
   if (!on.includes("arch")) return off();
   const skipped = skipFor(m, "arch");
-  if (skipped) return unmeasured(skipped);
+  if (skipped) return unmeasured(skipped.note, skipped.fix);
   const keys = m.lastArchKeys;
   if (keys === null) return pending("No architecture run recorded yet.");
   return graded(
     String(keys.length),
-    keys.length === 0
-      ? "No findings in the last sweep."
-      : `${keys.length} open finding${keys.length === 1 ? "" : "s"}.`,
+    archNote(keys.length, m.lastArchScope),
     keys.length,
     stale,
   );
+}
+
+/**
+ * What the number means, with the evidence behind it when we have it.
+ *
+ * "No findings in the last sweep" was the same sentence for a sweep that
+ * mapped forty services and cleared them and one that mapped a single file
+ * and had nothing to say. The scope (migrations/0023) is what separates
+ * those, and its absence — a row last swept before the column existed — falls
+ * back to the old wording rather than asserting a scope of zero.
+ */
+function archNote(count, scope) {
+  const measured = scope && typeof scope.services === "number"
+    ? `${scope.services} service${scope.services === 1 ? "" : "s"}` +
+      (scope.complete ? "" : " (partial read)")
+    : null;
+  if (count === 0) {
+    return measured
+      ? `No findings across ${measured}.`
+      : "No findings in the last sweep.";
+  }
+  const open = `${count} open finding${count === 1 ? "" : "s"}`;
+  return measured ? `${open} across ${measured}.` : `${open}.`;
+}
+
+// ---------------------------------------------------------------------------
+// Cloud spend — what the committed cost export says you are actually paying.
+// ---------------------------------------------------------------------------
+//
+// Distinct from the Infra cost column in the way a bank statement is distinct
+// from a quote. That one prices a compose file against published list rates
+// for infrastructure that may never be provisioned; this one reads a Cost &
+// Usage Report you committed and reports the total on it.
+//
+// Graded on WASTE, not on size, which is the only ranking that makes the
+// column actionable: the most expensive repository you own is not a problem
+// if none of that spend is avoidable, and a small bill that is 60% idle
+// capacity is. So the rank is the dollars the analyzer believes are
+// recoverable, and the biggest recoverable number sorts to the top.
+function spendCell(m, on, stale) {
+  if (!on.includes("cost")) return off();
+  const skipped = skipFor(m, "cost");
+  if (skipped) return unmeasured(skipped.note, skipped.fix);
+
+  const c = m.lastCost;
+  // No stored figure and no recorded skip. Either the sweep predates
+  // migration 0023 or the analyzer was switched on and has not run yet —
+  // both are honestly "pending", and neither is a zero bill.
+  if (!c) return pending("No cloud-spend run recorded yet.", fixUnavailable("no_cur"));
+
+  const savings = Math.round(c.currentSpend * (c.totalSavingsPct || 0)) / 100;
+  return graded(
+    formatUsd(c.currentSpend) + "/mo",
+    c.suggestions
+      ? `${formatUsd(savings)} of it looks recoverable across ${c.suggestions} suggestion${c.suggestions === 1 ? "" : "s"}.`
+      : "Nothing in this export looks recoverable.",
+    savings,
+    stale,
+  );
+}
+
+/** Whole dollars with thousands separators — a bill, not a unit price. */
+function formatUsd(n) {
+  const v = Math.round(Number(n) || 0);
+  return "$" + String(v).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }

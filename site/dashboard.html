@@ -127,9 +127,11 @@ permalink: /dashboard/
       <!-- ============= SERVICE SCORECARD (D-8) =============
            One row per watched repo, one column per analyzer, read from
            GET /api/scorecard — which reads stored monitor baselines and
-           nothing else. Cells are graded / stale / pending / off, and the
-           difference matters: a blank that reads as a pass would turn "we
-           never looked" into "we looked and it was fine". -->
+           nothing else. Cells are graded / stale / pending / unmeasured /
+           off, and the difference matters: a blank that reads as a pass would
+           turn "we never looked" into "we looked and it was fine". Every
+           blank also carries the one change that would fill it, or nothing at
+           all when the condition clears on its own. -->
       <section class="panel" id="panel-scorecard">
         <header class="panel-head">
           <div class="panel-heading">

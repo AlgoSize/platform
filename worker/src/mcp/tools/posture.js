@@ -17,11 +17,16 @@ export const POSTURE_TOOLS = [
     name: "algosize_get_scorecard",
     title: "Read the engineering scorecard",
     description:
-      "One graded row per monitored repository across security, cost, complexity and architecture. " +
-      "Free and read-only, and the fastest way to see overall posture without running anything. " +
+      "One graded row per monitored repository across security, infrastructure cost, cloud spend, " +
+      "complexity and architecture. Free and read-only, and the fastest way to see overall posture " +
+      "without running anything. Note that the two money columns answer different questions: " +
+      "`cost` prices a committed compose file against published list rates, and `spend` reads a " +
+      "committed cost export and reports what is actually being paid. " +
       "Each cell reports its own kind: `grade` is a real result, `stale` is an old one, `pending` " +
-      "means the first run has not finished, and `off` means that analyzer is not enabled — treat " +
-      "those four as genuinely different, never as a missing score.",
+      "means the first run has not finished, `unmeasured` means the sweep ran and this analyzer " +
+      "produced nothing, and `off` means that analyzer is not enabled — treat those five as " +
+      "genuinely different, never as a missing score. A cell that is not a grade may also carry a " +
+      "`fix`: the one change that would turn it into one.",
     scope: SCOPES.READ,
     paidOnly: false,
     metered: false,
@@ -44,7 +49,13 @@ export const POSTURE_TOOLS = [
               const cells = Object.entries(r.cells || {})
                 .map(([k, c]) => `${k}=${c.kind === "grade" ? c.value : c.kind}`)
                 .join(" ");
-              return `• ${r.repo}${r.branch ? `#${r.branch}` : ""} — ${cells}`;
+              // The fixes, once each. A caller that can only see "unmeasured"
+              // knows something is missing and not what to do about it, which
+              // is the same dead end the grid itself used to be.
+              const fixes = [...new Set((Object.values(r.cells || {}))
+                .map((c) => c && c.fix).filter(Boolean))];
+              return `• ${r.repo}${r.branch ? `#${r.branch}` : ""} — ${cells}` +
+                fixes.map((f) => `\n    ↳ ${f}`).join("");
             }).join("\n") + `\n\n${d.basis || ""}`
           : `No repositories are graded. ${d.basis || "A repository has to be under watch to be graded."}`,
         structured: { rows, columns: d.columns || [], basis: d.basis || null },

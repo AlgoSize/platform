@@ -1,17 +1,70 @@
 # Cloudflare / Replit operator tasks
 
-Four things this session could not do from a code checkout, because each needs
+Five things this session could not do from a code checkout, because each needs
 Cloudflare account access. Everything else found today was fixed in code.
 
-Ordered by what is actually blocking a feature. Task 1 is the only one that
-currently stops something working; 2 and 3 are gaps you would feel later; 4 is
-optional.
+Ordered by what is actually blocking a feature. Task 0 and Task 1 each stop
+something working today; 2 and 3 are gaps you would feel later; 4 is optional.
 
 **A note on how to read this file.** Every claim below was verified against
 this repository in the session that wrote it, and the file paths and line
 references are real. What is NOT verified is the live Cloudflare state — that
 is exactly what Task 1 asks you to check, because no code checkout can see it.
 Where I am inferring rather than asserting, it says so.
+
+---
+
+## Task 0 — Apply migration `0023_scorecard_evidence.sql` to production D1
+
+**Why this matters:** without it the Service scorecard's new **Cloud spend**
+column reads "first run pending" forever, however many nightly sweeps succeed,
+and the Architecture column's zero goes back to being a number nobody can
+check. Nothing errors — the sweep writes the figures, the UPDATE silently has
+nowhere to put them. That is the same shape as every other bug in this
+session: an omission that nothing throws on.
+
+Nothing in `.github/workflows/` runs `d1 execute` or `migrations apply`, on
+purpose — a schema change lands when a human decides, not when a merge
+happens. So this is yours to run.
+
+The migration is additive and non-destructive. Two nullable columns on an
+existing table; no data rewritten, no column dropped, no downtime window:
+
+```sql
+ALTER TABLE monitors ADD COLUMN last_cost_json TEXT;
+ALTER TABLE monitors ADD COLUMN last_arch_scope_json TEXT;
+```
+
+```bash
+cd worker
+./node_modules/.bin/wrangler d1 execute algosize \
+  --file=migrations/0023_scorecard_evidence.sql \
+  --remote --env production --config wrangler.toml
+```
+
+`--config wrangler.toml` is not optional even where it looks redundant: the
+repo root has a `wrangler.jsonc` that shadows it, and that shadowing caused a
+production incident on 2026-08-20.
+
+**Then verify from outside, not from the command's exit code.** Open
+`https://algosize.com/api/admin/schema-check` signed in as an admin and expect
+migration `0023` present and applied (its checks are `monitors.last_cost_json`
+and `monitors.last_arch_scope_json`), `ok:true`, and 23 migrations total.
+
+If it reports NOT applied, say so and stop — do not re-run more than once. A
+repeated `ALTER TABLE` on a column that already exists is an error, not an
+idempotent no-op, and the second failure would look exactly like the first
+never landing.
+
+**What to expect afterwards, so nothing reads as a bug.** Nothing backfills.
+Both columns stay NULL until each monitor's next sweep, and NULL renders as
+"first run pending" / the old architecture wording — never as a zero. Cloud
+spend additionally needs a `cur` path in that repository's
+`algosize.budget.json` pointing at a committed cost export; without one the
+cell says so and names the file to change. This repository's own
+`algosize.budget.json` has `"cur": null`, so AlgoSize/platform will keep
+reading "not measured" there until you point it at an export — which is
+correct, not a defect.
 
 ---
 
@@ -166,16 +219,16 @@ cd worker
 
 ---
 
-## Not an operator task, but the next real gap
+## Closed since this file was first written
 
-The Cloud cost analyzer is the only analyzer that cannot be scheduled. The
-dashboard says so plainly — *"This one reads a file you upload and keeps
-nothing, so there is no standing result to show."* Every other tool has a
-nightly half; cost has none, because its only input path is an interactive CUR
-upload.
+**The Cloud cost analyzer can now be scheduled.** It used to be the only
+analyzer with no nightly half, because its only input was an interactive CUR
+upload. It now reads the `cur` path out of `algosize.budget.json` on the same
+schedule as the others, files a run, and — with Task 0 applied — keeps a
+standing figure the scorecard grades in its own **Cloud spend** column.
 
-The shape to fix it already exists: the `algosize-cost.yml` CI gate reads a
-`cur` path out of `algosize.budget.json`, so a monitor could read the same
-committed export on the same schedule as the other analyzers and file a run.
-That is a feature to build in code, not a Cloudflare setting — noted here only
-so it is not lost.
+That column is deliberately separate from **Infra cost**, which was previously
+labelled just "Cost". They answer different questions and one word for both was
+misleading: Infra cost prices a committed compose file against published list
+rates for infrastructure that may never be provisioned, while Cloud spend reads
+an export of what you were actually billed.

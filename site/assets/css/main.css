@@ -4364,6 +4364,24 @@ a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* The actionable half of an empty cell. It is deliberately the one thing in
+   the grid that WRAPS: every other line here truncates because a clipped
+   number is still a number, but a clipped instruction is not an instruction.
+   Clamped to three lines so one long sentence cannot push a row twice as tall
+   as its neighbours, with the full text on the title attribute. */
+.scorecard-fix {
+  font-size: 0.63rem;
+  line-height: 1.35;
+  color: var(--text-muted);
+  border-left: 2px solid var(--border);
+  padding-left: var(--s-2);
+  margin-top: 2px;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.scorecard-cell-unmeasured .scorecard-fix { border-left-color: var(--accent-warm); }
 .scorecard-pending { font-size: 0.72rem; font-weight: 600; color: var(--accent); white-space: nowrap; }
 .scorecard-off     { font-size: 0.72rem; font-weight: 600; color: var(--text-dim); white-space: nowrap; }
 .scorecard-enable  {

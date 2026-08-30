@@ -760,6 +760,13 @@ const QUADRATIC = (n) => n * n * 0.0001;   // slope 2 → O(n^2)
 
   const after1 = await getMonitorById(env, m.monitorId);
   expect(Array.isArray(after1.lastArchKeys), "the arch baseline is recorded");
+  // …and beside it, what the X-ray actually READ (migrations/0023). Without
+  // this the finding count is unfalsifiable: "0 findings in the last sweep"
+  // is the same sentence whether forty services were mapped and cleared or
+  // one file was parsed and had nothing to say.
+  expect(after1.lastArchScope && typeof after1.lastArchScope.services === "number" &&
+         after1.lastArchScope.at === NOW,
+    `the sweep records the X-ray's scope (got ${JSON.stringify(after1.lastArchScope)})`);
   expect(after1.lastEstimate && Object.keys(after1.lastEstimate.byProvider).length > 0,
     "the estimate baseline holds per-provider totals");
   expect(after1.lastAlgo && after1.lastAlgo.byName.sum === "O(n)",
@@ -1208,6 +1215,19 @@ console.log("\ncloud spend can be watched, which it could not be before\n");
   // Deliberately no baseline and no alert: a bill differs every day, so a diff
   // would report Tuesday differing from Monday as a finding.
   expect(mailbox.sent.length === 0, "and sends no email — a bill changing is not an alert");
+
+  // …but "keeps nothing to diff against" and "keeps nothing at all" are two
+  // different decisions, and only the first one was ever argued for. The
+  // scorecard grades exclusively from stored results, so with nothing stored
+  // the one analyzer you could schedule was the one the grid could not see.
+  // migrations/0023 stores the LATEST figures, never a comparison.
+  const swept = await getMonitorById(env, m.monitorId);
+  expect(swept.lastCost && swept.lastCost.currentSpend > 0,
+    `the sweep stores the spend figure (got ${JSON.stringify(swept.lastCost)})`);
+  expect(swept.lastCost.at === NOW,
+    "…dated, so the scorecard can say how old the bill it is showing is");
+  expect(typeof swept.lastCost.suggestions === "number",
+    "…with how many savings it found, so a figure can say what is recoverable");
 }
 
 {

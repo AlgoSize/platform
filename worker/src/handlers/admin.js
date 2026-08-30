@@ -282,6 +282,12 @@ const MIGRATIONS = Object.freeze([
     // Absence is silent too, and in the worst direction: without it a skipped
     // analyzer's empty baseline renders as a measured zero.
     checks: [{ table: "monitors", column: "last_skips_json" }] },
+  { id: "0023", name: "scorecard_evidence",
+    // Silent again: without these the Cloud spend column is permanently
+    // "first run pending" no matter how many sweeps succeed, and the
+    // architecture zero goes back to being unfalsifiable.
+    checks: [{ table: "monitors", column: "last_cost_json" },
+             { table: "monitors", column: "last_arch_scope_json" }] },
 ]);
 
 /** Plain SQLite identifier — the only shape we will interpolate into a PRAGMA. */

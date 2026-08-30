@@ -133,6 +133,30 @@ group("the scorecard never turns 'not measured' into a pass");
     "and the Worker distinguishes pending from off — different problems, different fixes");
   expect(/scorecard-cell-stale \.scorecard-value/.test(css),
     "a stale value is styled apart from a current one");
+
+  // An accurate blank is only half a product: the reader still has to guess
+  // whether the next move is theirs or ours. Every non-grade cell carries a
+  // `fix`, and the renderer has to put it on the screen — a field the API
+  // sends and the page drops is indistinguishable from one that was never
+  // built, which is exactly how the cloud-spend column stayed invisible.
+  expect(/fix: null/.test(scorecard) && /fixUnavailable/.test(scorecard),
+    "the Worker attaches a fix to the cells that have one, and null to the cells that do not");
+  expect(/cell\.fix/.test(wsJs) && /scorecard-fix/.test(wsJs),
+    "dash-workspace.js renders it");
+  expect(/\.scorecard-fix\b/.test(css), "…and it is styled");
+  // It is the one line in the grid that must WRAP. Every other line truncates
+  // because a clipped number is still a number; a clipped instruction is not
+  // an instruction.
+  expect(!/\.scorecard-fix\s*\{[^}]*white-space:\s*nowrap/.test(css),
+    "…and is not clamped to one line the way the numbers are");
+
+  // Five analyzers can be scheduled, so five columns are graded. The sort
+  // controls and the header are built from the API's column list, not from a
+  // literal, so this is the only place a missing column can hide.
+  expect(/state\.scorecard && state\.scorecard\.columns/.test(wsJs),
+    "the sort controls are built from the API's columns, so a new column needs no frontend edit");
+  expect(/\(data\.columns \|\| \[\]\)\.forEach/.test(wsJs),
+    "…and so is the table header");
   expect(/if \(av === null && bv === null\) return 0;/.test(wsJs) &&
          /if \(av === null\) return 1;/.test(wsJs),
     "unmeasured rows sort LAST, so a repo with no baseline is never top of the board");
@@ -230,8 +254,16 @@ group("the new classes are styled, and none are dead");
   // "route-row-" + (wired ? "on" : "off"). The extractor sees the stem, so
   // the stem is checked against the variants that actually exist rather than
   // being reported as an unstyled class that no rule could ever match.
+  //
+  // The cell-kind list is DERIVED from scorecard.js rather than written out
+  // here. The literal that used to sit in this slot went stale the moment a
+  // fifth kind was added, and it failed in the unhelpful direction: it named
+  // the new rule as dead CSS instead of naming the kind nobody had styled.
+  const CELL_KINDS = uniq(matchAll(scorecard, /kind:\s*"([a-z]+)"/g)
+    .concat(matchAll(scorecard, /kind:\s*stale \? "([a-z]+)" : "([a-z]+)"/g)));
   const RUNTIME = {
-    "scorecard-cell-": ["grade", "stale", "pending", "off"],
+    "scorecard-cell-": CELL_KINDS.concat(["grade", "stale"]).filter(
+      (k, i, a) => a.indexOf(k) === i),
     "route-row-": ["on", "off"],
     "ws-pulse-": ["ok", "warn", "bad"],
   };

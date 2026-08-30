@@ -385,6 +385,13 @@
       if (!m.lastAlgo.functions) return "no config";
       return m.lastAlgo.functions + " function" + (m.lastAlgo.functions === 1 ? "" : "s") + " graded";
     }
+    if (key === "cost") {
+      // No stored figure means no committed cost export has been read yet.
+      // "no CUR named" would be a guess — the sweep records the reason
+      // separately — so this says only what it knows.
+      if (!m.lastCost) return "first run pending";
+      return "$" + Math.round(m.lastCost.currentSpend).toLocaleString() + "/mo";
+    }
     return null;
   }
 

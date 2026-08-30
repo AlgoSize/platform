@@ -115,6 +115,15 @@ function publicMonitor(m) {
     lastAlgo: m.lastAlgo
       ? { functions: Object.keys(m.lastAlgo.byName).length, at: m.lastAlgo.at }
       : null,
+    // Cloud spend (migrations/0023). The cost chip was the one analyzer chip
+    // on this row that rendered with no summary at all, for the same reason
+    // the scorecard had no column for it: there was nothing stored to show.
+    lastCost: m.lastCost
+      ? { currentSpend: m.lastCost.currentSpend,
+          totalSavingsPct: m.lastCost.totalSavingsPct,
+          suggestions: m.lastCost.suggestions,
+          at: m.lastCost.at }
+      : null,
     // Health of the last ATTEMPT, which is not the same fact as lastRunAt
     // (migrations/0017). A monitor whose last three sweeps were skipped by a
     // GitHub outage still reports a lastRunAt from a week ago and looks
@@ -669,4 +678,47 @@ export function explainUnavailable(reason) {
     analyzer_failed:    "The analyzer could not process this repository's files.",
   };
   return MAP[reason] || "The analyzer could not produce a result for this repository just now.";
+}
+
+/**
+ * The one thing to change to make this analyzer produce a result — or null
+ * when there is nothing the reader can do.
+ *
+ * explainUnavailable says what happened. On its own that is a dead end: "No
+ * compose file was found in this repository" is true, and leaves a reader
+ * looking at an empty cell with no idea whether it is their move or ours.
+ * Every entry below names a file and a change; the reasons that clear on
+ * their own (a throttle, a transient sandbox outage) deliberately return null
+ * rather than inventing busywork, and sandbox_not_configured returns a
+ * sentence that says the work is OURS, because pointing the repository owner
+ * at their own config was exactly the bug that made it worth saying.
+ */
+export function fixUnavailable(reason) {
+  const MAP = {
+    no_manifests:
+      "Commit a manifest the X-ray can read — package.json, requirements.txt, go.mod, a compose file or Terraform — on the branch this monitor watches.",
+    no_compose:
+      "Commit a docker-compose.yml, or point `compose` in algosize.budget.json at the one you already use.",
+    no_cur:
+      "Set `cur` in algosize.budget.json to the path of a committed Cost & Usage Report export.",
+    cur_missing:
+      "Commit the export `cur` names, or change `cur` to a path that exists on this branch.",
+    cur_too_large:
+      "Commit a monthly rollup of the export rather than the full line-item report.",
+    budget_invalid:
+      "Fix the JSON in algosize.budget.json — the sweep cannot parse it as written.",
+    cost_failed:
+      "Check the committed export is a Cost & Usage Report CSV with its header row intact.",
+    no_config:
+      "Add an optimizer.config.json at the repository root naming the functions to measure.",
+    config_invalid:
+      "Fix the JSON in optimizer.config.json — the sweep cannot parse it as written.",
+    no_entries_ran:
+      "Open the Algorithm optimizer for this repository; every entry's own reason is listed there.",
+    bad_repo_url:
+      "Re-create this monitor with a https://github.com/owner/name URL.",
+    sandbox_not_configured:
+      "Nothing to change in your repository — this one is ours, and the next sweep grades it once the sandbox is deployed.",
+  };
+  return MAP[reason] || null;
 }
