@@ -303,6 +303,12 @@ const MIGRATIONS = Object.freeze([
     checks: [{ table: "ai_usage", column: "neurons_consumed" },
              { table: "ai_usage", column: "algosize_price" },
              { table: "margin_config", column: "margin_rate" }] },
+  { id: "0026", name: "fix_pipeline",
+    // Multi-model fix pipeline routing. Absent, resolveStageModel silently
+    // falls back to the recommendation engine for every stage — the pipeline
+    // still runs, but an operator's routing overrides are ignored, so the
+    // schema check exists to make a missing table visible rather than silent.
+    checks: [{ table: "model_routing_config", column: "model_id" }] },
 ]);
 
 /** Plain SQLite identifier — the only shape we will interpolate into a PRAGMA. */

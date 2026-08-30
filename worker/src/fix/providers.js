@@ -211,7 +211,11 @@ function makeProvider(id, chat) {
       if (!r.ok) return { ok: false, configured: r.configured !== false, error: r.configured === false ? "provider_not_configured" : "provider_failed", message: r.reason };
       const parsed = parseFixReply(r.reply);
       if (!parsed.ok) return { ok: false, configured: true, error: parsed.error, message: parsed.message, rawReplyChars: r.reply.length };
-      return { ok: true, raw: parsed.value, provider: id, model: r.model || null };
+      // usage is additive/optional — carried so a caller (the multi-model
+      // pipeline) can meter the fix call through the same ai_usage path the
+      // other stages use, rather than recording a real fix as $0. Absent on
+      // providers that do not surface token usage (e.g. the Anthropic leg).
+      return { ok: true, raw: parsed.value, provider: id, model: r.model || null, usage: r.usage || null };
     },
 
     /** Same task, previous failure reasons folded in as hard constraints. */

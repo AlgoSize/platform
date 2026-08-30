@@ -147,6 +147,9 @@ export async function runFixPipeline({ finding, files, frameworks = [], provider
   // ---- attempt 1 ----------------------------------------------------------
   let attempt = await agent.createFixProposal(task, env);
   let proposal = null, validation = null, patch = null, retried = false;
+  // The token usage of the attempt that produced the CHOSEN proposal, so a
+  // caller can meter the fix call. Additive — existing callers ignore it.
+  let modelUsage = null;
 
   const settle = (raw) => {
     const normalized = toFixProposal(raw, task, { provider: agent.id, model: attempt.model });
@@ -157,7 +160,7 @@ export async function runFixPipeline({ finding, files, frameworks = [], provider
 
   if (attempt.ok) {
     const settled = settle(attempt.raw);
-    if (settled.ok) ({ proposal, validation, patch } = settled);
+    if (settled.ok) { ({ proposal, validation, patch } = settled); modelUsage = attempt.usage || null; }
     else attempt = { ok: false, error: settled.error, message: settled.message };
   }
 
@@ -178,7 +181,7 @@ export async function runFixPipeline({ finding, files, frameworks = [], provider
         // improvement; a failed retry leaves the first (annotated) result in
         // place so the caller sees the best attempt, not the last one.
         const better = !validation || settled.validation.verdict === "passed_static";
-        if (better) ({ proposal, validation, patch } = settled);
+        if (better) { ({ proposal, validation, patch } = settled); modelUsage = second.usage || null; }
       }
     }
   }
@@ -208,6 +211,9 @@ export async function runFixPipeline({ finding, files, frameworks = [], provider
     patch,
     retried,
     record,
+    // Token usage of the chosen attempt, for callers that meter the fix call
+    // (the multi-model pipeline). null when the provider did not surface it.
+    modelUsage,
     // The one-line truth for a UI badge: a fix is APPLYABLE when it passed
     // every static check; anything else is a draft that needs a human.
     applyable: validation.verdict === "passed_static",
