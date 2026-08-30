@@ -9,6 +9,8 @@
 // ingester actually reads, because emitting more of the schema than we can
 // populate honestly produces a file that validates and says nothing.
 
+import { fingerprintOf } from "./sast/schema.js";
+
 const SARIF_VERSION = "2.1.0";
 const SARIF_SCHEMA  = "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json";
 
@@ -250,4 +252,128 @@ export function toSarif(result, { runId = null, siteOrigin = "" } = {}) {
       },
     }],
   };
+}
+
+
+// ---------------------------------------------------------------------------
+// SARIF IMPORT — external scanners' results as normalized findings
+// ---------------------------------------------------------------------------
+//
+// The reverse direction: a SARIF log produced by ANY scanner becomes findings
+// in the platform's own shape, so external results flow through the same
+// grouping, prioritization and fix pipeline as native ones. Mapping rules:
+//
+//   severity     security-severity when present (the CVSS-ish scale GitHub
+//                sorts on), else the three-level `level` — error→high,
+//                warning→medium, note→low. Never critical from `level` alone:
+//                three levels cannot express critical, and inventing it would
+//                overclaim on every imported error.
+//   ruleId       namespaced as `sarif.<tool>.<originalRuleId>` so imports can
+//                never collide with the native registry, while the original
+//                id survives verbatim in `evidence.importedRuleId` — the
+//                mapping back that interop requires.
+//   fingerprint  the platform's own content-based fingerprint, so an imported
+//                finding dedupes and diffs exactly like a native one.
+//
+// Anything unreadable is skipped and COUNTED, never silently dropped: the
+// return says how many results the log claimed and how many survived.
+
+const IMPORT_SEVERITY_BY_LEVEL = { error: "high", warning: "medium", note: "low", none: "info" };
+const MAX_IMPORT_RESULTS = 2000;
+
+function importSeverity(result, rule) {
+  const props = (rule && rule.properties) || {};
+  const ss = parseFloat(props["security-severity"]);
+  if (Number.isFinite(ss)) {
+    if (ss >= 9) return "critical";
+    if (ss >= 7) return "high";
+    if (ss >= 4) return "medium";
+    if (ss > 0)  return "low";
+  }
+  return IMPORT_SEVERITY_BY_LEVEL[result.level]
+    || IMPORT_SEVERITY_BY_LEVEL[(rule && rule.defaultConfiguration && rule.defaultConfiguration.level)]
+    || "medium";
+}
+
+function extractCwes(rule) {
+  const tags = (rule && rule.properties && rule.properties.tags) || [];
+  return tags
+    .map((t) => /(?:external\/)?cwe(?:\/|-)?(\d+)/i.exec(String(t)))
+    .filter(Boolean)
+    .map((m) => `CWE-${m[1]}`);
+}
+
+/**
+ * Parse a SARIF 2.1 document into normalized findings.
+ *
+ * @returns {{ ok:true, findings, skipped, total, toolNames }
+ *         | { ok:false, error, message }}
+ */
+export function fromSarif(doc) {
+  if (typeof doc === "string") {
+    try { doc = JSON.parse(doc); }
+    catch { return { ok: false, error: "invalid_sarif", message: "the document is not valid JSON" }; }
+  }
+  if (!doc || !Array.isArray(doc.runs)) {
+    return { ok: false, error: "invalid_sarif", message: "a SARIF document has a top-level `runs` array" };
+  }
+
+  const findings = [];
+  const toolNames = [];
+  let skipped = 0, total = 0;
+  const occurrence = new Map();
+
+  for (const run of doc.runs) {
+    const driver = (run && run.tool && run.tool.driver) || {};
+    const toolName = String(driver.name || "unknown-tool");
+    toolNames.push(toolName);
+    const toolSlug = toolName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "tool";
+    const rulesById = new Map((driver.rules || []).map((r) => [r.id, r]));
+
+    for (const result of (run.results || [])) {
+      total++;
+      if (findings.length >= MAX_IMPORT_RESULTS) { skipped++; continue; }
+      if (!result || typeof result !== "object") { skipped++; continue; }
+      const originalRuleId = String(result.ruleId || (result.rule && result.rule.id) || "");
+      const loc = Array.isArray(result.locations) && result.locations[0] && result.locations[0].physicalLocation;
+      const path = loc && loc.artifactLocation && typeof loc.artifactLocation.uri === "string"
+        ? loc.artifactLocation.uri.replace(/^file:\/\/+/, "").replace(/^\.\//, "")
+        : null;
+      if (!originalRuleId || !path) { skipped++; continue; }
+
+      const rule = rulesById.get(originalRuleId);
+      const message = (result.message && (result.message.text || result.message.markdown)) || "";
+      const ruleId = `sarif.${toolSlug}.${originalRuleId}`;
+      const snippet = String(message).slice(0, 200);
+
+      const occKey = `${ruleId}|${path}|${snippet}`;
+      const occ = occurrence.get(occKey) || 0;
+      occurrence.set(occKey, occ + 1);
+
+      findings.push({
+        severity: importSeverity(result, rule),
+        // Imported severities are the FOREIGN tool's claim, relayed — not
+        // re-derived by us — so confidence is capped at medium: we can vouch
+        // for the mapping, not for the finding.
+        confidence: "medium",
+        type: "imported_finding",
+        ruleId,
+        title: (rule && rule.shortDescription && rule.shortDescription.text) || originalRuleId,
+        category: "imported",
+        cwe: extractCwes(rule),
+        owasp: [],
+        path,
+        line: (loc && loc.region && loc.region.startLine) || 1,
+        snippet,
+        recommendation: ((rule && rule.help && (rule.help.text || rule.help.markdown)) || "").slice(0, 500)
+          || `See ${toolName}'s documentation for ${originalRuleId}.`,
+        module: "sarif-import",
+        language: null,
+        evidence: { importedFrom: toolName, importedRuleId: originalRuleId },
+        fingerprint: fingerprintOf({ ruleId, path, snippet }, occ),
+      });
+    }
+  }
+
+  return { ok: true, findings, skipped, total, toolNames };
 }

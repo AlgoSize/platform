@@ -572,11 +572,12 @@
     var state = { severity: "all", category: "all", confidence: "all" };
     var listBox = el("div", { class: "sast-list" });
 
+    var fixCtx = { repoUrl: result.repoUrl || null };
     wrap.appendChild(buildSastFilters(findings, state, function () {
-      drawSastList(listBox, findings, state);
+      drawSastList(listBox, findings, state, fixCtx);
     }));
     wrap.appendChild(listBox);
-    drawSastList(listBox, findings, state);
+    drawSastList(listBox, findings, state, fixCtx);
   }
 
   function distinct(findings, key) {
@@ -622,7 +623,7 @@
     return bar;
   }
 
-  function drawSastList(box, findings, state) {
+  function drawSastList(box, findings, state, fixCtx) {
     box.textContent = "";
     var shown = findings.filter(function (f) {
       return (state.severity === "all"   || f.severity === state.severity) &&
@@ -651,13 +652,13 @@
         path + "  ·  " + byFile[path].length + " finding" +
         (byFile[path].length === 1 ? "" : "s")));
       byFile[path].forEach(function (f) {
-        fileBox.appendChild(sastCard(f));
+        fileBox.appendChild(sastCard(f, fixCtx));
       });
       box.appendChild(fileBox);
     });
   }
 
-  function sastCard(f) {
+  function sastCard(f, fixCtx) {
     var card = el("div", { class: "sast-card sast-card-" + f.severity });
 
     var head = el("div", { class: "sast-card-head" });
@@ -699,7 +700,99 @@
     });
     tags.appendChild(el("span", { class: "sast-tag sast-tag-module mono" }, f.module));
     card.appendChild(tags);
+
+    // The fix pipeline. Repo-mode only: the Worker refetches the one file the
+    // finding names and runs propose → validate; a pasted-content scan has no
+    // repository for it to refetch from (the API and CLI cover that path by
+    // sending the content directly). Imported findings have no registered
+    // rule to validate against, so they are read-only here too.
+    if (fixCtx && fixCtx.repoUrl && f.fingerprint && f.module !== "sarif-import") {
+      card.appendChild(sastFixZone(f, fixCtx.repoUrl));
+    }
     return card;
+  }
+
+  /**
+   * "Generate validated fix" and everything it reveals: explanation, the
+   * validation checklist, the diff, and the patch download. The checklist is
+   * the part that must never be skimmable into a lie — it always renders the
+   * checks that did NOT run, because "passed" here means passed the static
+   * tier, and the reader is the one who has to run the tests.
+   */
+  function sastFixZone(f, repoUrl) {
+    var zone = el("div", { class: "sast-fix" });
+    var btn = el("button", { class: "btn btn-ghost btn-sm", type: "button" }, "Generate validated fix");
+    zone.appendChild(btn);
+
+    btn.addEventListener("click", function () {
+      setBusy(btn, true, "Proposing + validating…");
+      callApi("/api/fix/propose", {
+        repoUrl: repoUrl,
+        finding: {
+          ruleId: f.ruleId, fingerprint: f.fingerprint, path: f.path, line: f.line,
+          severity: f.severity, confidence: f.confidence, category: f.category,
+          title: f.title, snippet: f.snippet, recommendation: f.recommendation,
+          cwe: f.cwe, owasp: f.owasp, evidence: f.evidence,
+        },
+      })
+        .then(function (res) { btn.remove(); zone.appendChild(sastFixResult(res, f)); })
+        .catch(function (err) {
+          setBusy(btn, false);
+          zone.appendChild(el("p", { class: "result-reason" },
+            err && err.code === "no_provider_configured"
+              ? "No AI provider is configured on this deployment."
+              : "Fix generation failed: " + ((err && err.message) || "unknown error")));
+        });
+    });
+    return zone;
+  }
+
+  function sastFixResult(res, f) {
+    var box = el("div", { class: "sast-fix-result" });
+    var v = res.validation;
+
+    var badge = el("div", { class: "sast-fix-verdict sast-fix-" + (res.applyable ? "ok" : "bad") });
+    badge.appendChild(el("strong", null, res.applyable ? "Passed static validation" : "Failed validation"));
+    badge.appendChild(el("span", { class: "mono" },
+      " · " + (res.proposal ? res.proposal.provider : "") +
+      (res.retried ? " · retried once" : "")));
+    box.appendChild(badge);
+
+    if (res.proposal && res.proposal.explanation) {
+      box.appendChild(el("p", { class: "result-reason" }, res.proposal.explanation));
+    }
+
+    var checks = el("ul", { class: "sast-fix-checks" });
+    (v.checks || []).forEach(function (c) {
+      checks.appendChild(el("li", { class: "mono " + (c.ok ? "sast-check-ok" : "sast-check-bad") },
+        (c.ok ? "✓ " : "✗ ") + c.check + " — " + c.detail));
+    });
+    box.appendChild(checks);
+
+    // The honesty line. Not a footnote: it is the difference between what
+    // this badge claims and what a green CI run claims.
+    box.appendChild(el("p", { class: "sast-fix-notrun" },
+      "Not checked here: " + (v.checksNotRun || []).map(function (c) { return c.check; }).join(", ") +
+      ". Run them where the code runs before merging."));
+
+    if (res.patch) {
+      box.appendChild(el("pre", { class: "result-snippet sast-fix-diff" }, res.patch));
+      var dl = el("button", { class: "btn btn-ghost btn-sm", type: "button" }, "Download .patch");
+      dl.addEventListener("click", function () {
+        var blob = new Blob([res.patch], { type: "text/x-patch" });
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = (f.ruleId || "fix").replace(/[^a-z0-9.-]+/gi, "-") + ".patch";
+        a.click();
+        URL.revokeObjectURL(a.href);
+      });
+      box.appendChild(dl);
+    }
+
+    if (res.proposal && res.proposal.riskNotes) {
+      box.appendChild(el("p", { class: "sast-fix-risk" }, "Reviewer notes: " + res.proposal.riskNotes));
+    }
+    return box;
   }
 
   function renderAlgo(result) {

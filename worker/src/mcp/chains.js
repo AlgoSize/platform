@@ -39,6 +39,7 @@ import {
   listRunsHandler, getRunHandler, getRunReportHandler, createRunShareHandler,
 } from "../handlers/runs.js";
 import { scorecardHandler } from "../handlers/scorecard.js";
+import { proposeFixHandler, validateFixHandler, explainRuleHandler } from "../handlers/fix.js";
 import {
   listMonitorsHandler, createMonitorHandler, deleteMonitorHandler, pauseMonitorHandler,
   setMonitorAnalyzersHandler, setMonitorScheduleHandler, runMonitorNowHandler,
@@ -105,6 +106,11 @@ export const CHAINS = Object.freeze({
   // Unmetered for the same reason as the HTTP route: one tree listing, no
   // file reads, and it answers "would a scan cover this?" before one runs.
   profile:       { method: "POST", path: "/api/analyze/profile",  chain: [analyzeProfileHandler],     metered: false },
+  // Fix pipeline. propose consumes AI but not the run allowance — a fix is
+  // follow-up work on a run already paid for. validate is pure computation.
+  fixPropose:    { method: "POST", path: "/api/fix/propose",       chain: [proposeFixHandler],         metered: false },
+  fixValidate:   { method: "POST", path: "/api/fix/validate",      chain: [validateFixHandler],        metered: false },
+  fixRule:       { method: "GET",  path: "/api/fix/rule",          chain: [explainRuleHandler],        metered: false },
   archSnapshots: { method: "GET", path: "/api/arch/snapshots",    chain: [listArchSnapshotsHandler],  metered: false },
   archSnapshot:  { method: "GET", path: "/api/arch/snapshots/:id", chain: [getArchSnapshotHandler],   metered: false },
   archDiff:      { method: "GET", path: "/api/arch/diff",         chain: [archDiffHandler],           metered: false },

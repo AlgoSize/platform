@@ -39,6 +39,11 @@ export const AUDIT_ACTIONS = Object.freeze({
   MONITOR_ANALYZERS_CHANGED: "monitor.analyzers_changed",
   MONITOR_SCHEDULE_CHANGED:  "monitor.schedule_changed",
   MONITOR_RUN_REQUESTED:     "monitor.run_requested",
+  // One row per agent fix execution (fix/orchestrate.js). The metadata is
+  // hashes and verdicts only — the AgentExecutionRecord is designed so this
+  // log can prove what happened without becoming a second copy of anyone's
+  // source code (see fix/schemas.js).
+  FIX_PROPOSED:      "fix.proposed",
   PLAN_CHANGED:      "billing.plan_changed",
   FLAG_UPDATED:      "flag.updated",
   // Distinct from FLAG_UPDATED: this changes ONE subject against the flag's
