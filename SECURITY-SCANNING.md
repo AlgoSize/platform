@@ -207,6 +207,36 @@ rather than to silence.
 
 ---
 
+## Scheduled scanning
+
+A monitor's nightly sweep runs the source scan on every pass, stores what it
+found (`migrations/0024`), and diffs it against the previous night.
+
+| | |
+| --- | --- |
+| **Scorecard** | Two columns, not one. **Dependencies** grades the advisory list; **Code** grades source findings by worst severity. |
+| **Alerts** | Only findings that are *new since the last sweep*. The first scan of a repository is a baseline and never mails. |
+| **Email contents** | Rule, file and line. Never the matched snippet — see below. |
+| **Unreadable source** | Recorded as a skip, rendered "not measured". Never an empty finding list. |
+
+Those two columns were one column called "Security" until it became possible
+for the grid to be confidently wrong: a repository with no vulnerable packages
+and a critical SQL injection in its own code graded **A · 0**. The scan had
+run. The finding existed. It was simply not wired to a cell, and the cell that
+did exist described only the half that looked good.
+
+**Why the email omits snippets.** Every other surface shows the matched line,
+because the reader asked to see it. An alert email is broadcast to every
+subscribed member and retained in their mailboxes indefinitely. The scanner
+masks credentials in snippets, but "masked" is a weaker guarantee than "never
+sent", and `path:line` is enough to act on.
+
+**Baseline truncation.** A baseline stores at most 500 fingerprints. If a scan
+exceeds that, the baseline is marked truncated and the *next* sweep
+re-baselines rather than diffing — because the fingerprints the cap dropped
+are absent from the stored set, and diffing against it would report them all
+as new findings tonight on a codebase where nothing changed.
+
 ## Roadmap
 
 1. **TypeScript AST coverage.** The largest single gap; needs a TS-aware
@@ -218,6 +248,5 @@ rather than to silence.
 4. **Suppression comments.** `// algosize-ignore-next-line <ruleId> — reason`,
    with the reason required and surfaced in the report, so suppressions stay
    auditable rather than invisible.
-5. **Source findings in the nightly sweep and CI gate.** Today the source scan
-   runs on the dashboard's repo path; wiring it into the monitor sweep would
-   let the scorecard grade code quality alongside dependency risk.
+5. **CI gate for source findings.** The nightly sweep now grades code (see
+   below); the PR gate still comments on dependencies and architecture only.

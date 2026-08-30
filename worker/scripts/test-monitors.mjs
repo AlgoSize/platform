@@ -825,8 +825,19 @@ const QUADRATIC = (n) => n * n * 0.0001;   // slope 2 → O(n^2)
   env.FETCH = makeMultiFetch({ vulns: [], throttleSecondary: true });
   const r4 = await runMonitorCheck(env, m.monitorId, {}, { now: NOW + 3 * DAY, sendTransactional: mailbox.send });
   expect(r4.status === "no_change", `a throttled night is no_change, not an alert (got ${r4.status})`);
-  expect(r4.skips.length === 3 && r4.skips.every((s) => s.reason === "github_throttled"),
+  // Scoped to the three SECONDARY analyzers. The source scanner also skips on
+  // a throttled night and records its own reason; asserting over the whole
+  // list would conflate "the secondaries all skipped" with "exactly three
+  // things skipped", and the second is not what this test is about.
+  const r4secondary = r4.skips.filter((s) => ["arch", "estimate", "algo"].includes(s.analyzer));
+  expect(r4secondary.length === 3 && r4secondary.every((s) => s.reason === "github_throttled"),
     `all three secondaries report the throttle (got ${JSON.stringify(r4.skips)})`);
+  // …and the source scan does not quietly go missing on that same night: a
+  // sweep that could not read the code must say so, or the Code column shows
+  // an empty finding list as a clean codebase.
+  const r4source = r4.skips.find((s) => s.analyzer === "source");
+  expect(r4source && r4source.reason === "source_unreadable",
+    `the source scan reports its own failure too (got ${JSON.stringify(r4source)})`);
   const after4 = await getMonitorById(env, m.monitorId);
   expect(after4.lastAlgo.byName.sum === "O(n²)" &&
          JSON.stringify(after4.lastEstimate.byProvider) === JSON.stringify(after3.lastEstimate.byProvider) &&
@@ -849,7 +860,8 @@ const QUADRATIC = (n) => n * n * 0.0001;   // slope 2 → O(n^2)
   const mailbox = makeMailbox();
   const res = await runMonitorCheck(env, m.monitorId, {}, { now: NOW, sendTransactional: mailbox.send });
   expect(res.status === "no_change", `a repo with no secondary files runs quietly (got ${res.status})`);
-  expect(res.skips.map((s) => s.reason).sort().join(",") === "no_compose,no_config,no_manifests",
+  expect(res.skips.filter((s) => ["arch", "estimate", "algo"].includes(s.analyzer))
+           .map((s) => s.reason).sort().join(",") === "no_compose,no_config,no_manifests",
     `each analyzer states why it had nothing to do (got ${JSON.stringify(res.skips)})`);
   const after = await getMonitorById(env, m.monitorId);
   expect(Array.isArray(after.lastArchKeys) && after.lastArchKeys.length === 0 &&
@@ -1267,6 +1279,152 @@ console.log("\ncloud spend can be watched, which it could not be before\n");
     "and the two read differently in the panel, because the fixes differ");
   expect(explainUnavailable("cur_missing") !== explainUnavailable("__unknown__"),
     "rather than falling through to the generic sentence");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\nthe sweep grades the code it already reads\n");
+// ---------------------------------------------------------------------------
+//
+// runLockfileAudit has performed a full SAST scan on every scheduled sweep
+// since the source scanner shipped, and returned it as `source`. The sweep
+// read `advisories` beside it and dropped the rest — a GitHub tree listing,
+// up to 120 file fetches and a full parse, paid for and discarded.
+//
+// The visible consequence was not a missing feature. It was the scorecard
+// grading a repository on its dependency list alone, so a repo with no CVEs
+// and a critical injection finding in its own code rendered "A · 0". These
+// tests pin the storage, the diff, and the two ways it must refuse to imply
+// clean code. Verified by reverting the `source:` argument out of
+// recordMonitorRun and watching the baseline assertions fail.
+{
+  // A repository whose only lockfile is clean and whose source is not.
+  const VULN_SRC = [
+    'const express = require("express");',
+    'const app = express();',
+    'app.get("/u/:id", (req, res) => {',
+    '  db.query("SELECT * FROM users WHERE id = " + req.params.id, cb);',
+    "});",
+  ].join("\n");
+  const LOCK = JSON.stringify({
+    name: "demo", lockfileVersion: 3,
+    packages: { "": { name: "demo" }, "node_modules/lodash": { version: "4.17.21" } },
+  });
+
+  const treeFetch = ({ files }) => async (url) => {
+    const u = String(url);
+    if (u.includes("api.github.com") && u.includes("/git/trees/")) {
+      return new Response(JSON.stringify({
+        tree: Object.keys(files).map((path) => ({ path, type: "blob", size: files[path].length })),
+        truncated: false,
+      }), { status: 200 });
+    }
+    if (u.includes("raw.githubusercontent.com")) {
+      const path = decodeURIComponent(u.split("/").slice(6).join("/"));
+      if (path in files) return new Response(files[path], { status: 200 });
+      return new Response("not found", { status: 404 });
+    }
+    if (u.includes("api.osv.dev")) {
+      return new Response(JSON.stringify({ results: [{}] }), { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  };
+
+  const env = makeEnv();
+  const orgId = await seedOrg(env, { userId: "usr_src", email: "src@example.com" });
+  const m = await createMonitor(env, {
+    orgId, repoUrl: "https://github.com/o/srcscan", analyzers: ["vuln"],
+  });
+  env.FETCH = treeFetch({ files: { "package-lock.json": LOCK, "src/app.js": VULN_SRC } });
+
+  const mailbox = makeMailbox();
+  const r1 = await runMonitorCheck(env, m.monitorId, {}, { now: NOW, sendTransactional: mailbox.send });
+
+  const after1 = await getMonitorById(env, m.monitorId);
+  expect(after1.lastSource && after1.lastSource.total > 0,
+    `the sweep stores what the source scan found (got ${JSON.stringify(after1.lastSource)})`);
+  expect(after1.lastSource && Array.isArray(after1.lastSource.keys) && after1.lastSource.keys.length > 0,
+    "…including fingerprints, which is what makes tomorrow's diff possible");
+  expect(after1.lastSource && (after1.lastSource.counts.critical > 0 || after1.lastSource.counts.high > 0),
+    `…and the severity mix, so the Code column can grade the worst one (got ${JSON.stringify(after1.lastSource && after1.lastSource.counts)})`);
+  expect(after1.lastSource.at === NOW, "…dated, so a stale grade can say how old it is");
+
+  // A first sweep must not mail the whole codebase. Every finding in a repo
+  // is "new" the first time it is read, and calling that tonight's regression
+  // is false — there was no previous night.
+  expect(r1.sourceNewCount === 0 || !mailbox.sent.some((e) => /new code finding/.test(e.subject)),
+    `the baseline sweep does not alert on pre-existing code findings (subjects: ${mailbox.sent.map((e) => e.subject).join(" | ")})`);
+
+  // Second sweep, unchanged code: silent.
+  const r2 = await runMonitorCheck(env, m.monitorId, {}, { now: NOW + DAY, sendTransactional: mailbox.send });
+  expect(r2.status === "no_change", `unchanged source is no_change (got ${r2.status})`);
+
+  // Third sweep: a new vulnerable line appears. THIS is the alert.
+  const WORSE = VULN_SRC + "\napp.get(\"/x\", (req, res) => res.redirect(req.query.next));\n";
+  env.FETCH = treeFetch({ files: { "package-lock.json": LOCK, "src/app.js": WORSE } });
+  const before = mailbox.sent.length;
+  const r3 = await runMonitorCheck(env, m.monitorId, {}, { now: NOW + 2 * DAY, sendTransactional: mailbox.send });
+  expect(r3.sourceNewCount >= 1,
+    `a newly-introduced finding is reported as new (got ${r3.sourceNewCount})`);
+  expect(mailbox.sent.length > before && /code finding/.test(mailbox.sent[mailbox.sent.length - 1].subject),
+    `…and the subject names it (got "${mailbox.sent.length > before ? mailbox.sent[mailbox.sent.length - 1].subject : "no email"}")`);
+
+  // The email is the one surface that must not carry the matched line.
+  const body = mailbox.sent[mailbox.sent.length - 1];
+  expect(/src\/app\.js:/.test(body.text),
+    "the email names file and line, which is enough to act on");
+  expect(!/req\.query\.next/.test(body.text) && !/req\.query\.next/.test(body.html),
+    "…and never the source line itself — an alert is broadcast and retained, and a snippet is the customer's code");
+}
+
+{
+  // An unreadable repository must never grade as clean code. This is the
+  // whole reason `source.status` exists rather than an empty findings list.
+  const env = makeEnv();
+  const orgId = await seedOrg(env, { userId: "usr_dark", email: "dark@example.com" });
+  const m = await createMonitor(env, {
+    orgId, repoUrl: "https://github.com/o/dark", analyzers: ["vuln"],
+  });
+  env.FETCH = makeMultiFetch({ vulns: [], repoFiles: {} });
+  const res = await runMonitorCheck(env, m.monitorId, {}, { now: NOW, sendTransactional: makeMailbox().send });
+
+  const skip = res.skips.find((s) => s.analyzer === "source");
+  expect(skip && skip.reason === "source_unreadable",
+    `an unreadable source records a skip (got ${JSON.stringify(skip)})`);
+  const after = await getMonitorById(env, m.monitorId);
+  expect(after.lastSource === null,
+    "…and stores NO baseline, so the cell reads 'not measured' rather than zero findings");
+}
+
+{
+  // A truncated baseline cannot be diffed. If last night stored 500 of 700
+  // fingerprints, the 200 it dropped are absent from the set and would all be
+  // reported tonight as brand-new criticals — an alert storm produced
+  // entirely by our own cap, on a codebase where nothing changed.
+  const { diffSourceFindings, MAX_SOURCE_BASELINE_KEYS } = await import("../src/monitors/analyzers.js");
+  const findings = Array.from({ length: MAX_SOURCE_BASELINE_KEYS + 50 }, (_, i) => ({
+    fingerprint: `fp${i}`, severity: "high",
+  }));
+
+  const first = diffSourceFindings(findings, null);
+  expect(first.isBaseline && first.shouldAlert === false,
+    "a first scan is a baseline and never alerts");
+  expect(first.truncated === true && first.currentKeys.length === MAX_SOURCE_BASELINE_KEYS,
+    `an oversized scan stores the cap and records that it was capped (got ${first.currentKeys.length})`);
+
+  const second = diffSourceFindings(findings, {
+    keys: first.currentKeys, truncated: true, total: findings.length, counts: {},
+  });
+  expect(second.isBaseline === true && second.shouldAlert === false,
+    "a TRUNCATED baseline re-baselines instead of reporting the overflow as new");
+
+  // The ordinary case still diffs.
+  const small = findings.slice(0, 3);
+  const base = diffSourceFindings(small, null);
+  const grew = diffSourceFindings(
+    small.concat([{ fingerprint: "brand-new", severity: "critical" }]),
+    { keys: base.currentKeys, truncated: false, total: 3, counts: {} });
+  expect(grew.newFindings.length === 1 && grew.newFindings[0].fingerprint === "brand-new",
+    `an untruncated baseline reports exactly what is new (got ${grew.newFindings.length})`);
 }
 
 console.log("");

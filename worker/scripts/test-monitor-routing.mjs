@@ -491,15 +491,35 @@ console.log("\nevery analyzer you can schedule has a column, and every empty cel
 // The column list is checked against MONITOR_ANALYZERS rather than a literal,
 // so the sixth analyzer added to the sweep fails here until it is visible.
 {
-  const columnAnalyzers = SCORECARD_COLUMNS.map((c) => c.analyzer).sort();
-  expect(columnAnalyzers.join(",") === [...MONITOR_ANALYZERS].sort().join(","),
-    `every schedulable analyzer has exactly one column (columns: ${columnAnalyzers.join(",")}; ` +
-    `analyzers: ${[...MONITOR_ANALYZERS].sort().join(",")})`);
+  // COVERAGE, not bijection. The original form of this test asserted a
+  // one-to-one map, which was true when it was written and became wrong the
+  // moment the vuln analyzer produced two separately-actionable answers:
+  // third-party advisories and findings in the repository's own code. What
+  // has to hold is that no schedulable analyzer is INVISIBLE, and that no
+  // column grades an analyzer that does not exist — both directions of
+  // "nothing silently disappears", without forbidding a second column on an
+  // analyzer that genuinely earns one.
+  const columnAnalyzers = new Set(SCORECARD_COLUMNS.map((c) => c.analyzer));
+  const missing = [...MONITOR_ANALYZERS].filter((a) => !columnAnalyzers.has(a));
+  expect(missing.length === 0,
+    `every schedulable analyzer has at least one column${
+      missing.length ? " — invisible: " + missing.join(", ") : ` (${[...columnAnalyzers].sort().join(", ")})`}`);
+  const orphans = [...columnAnalyzers].filter((a) => !MONITOR_ANALYZERS.includes(a));
+  expect(orphans.length === 0,
+    `no column grades an analyzer that does not exist${orphans.length ? " — orphaned: " + orphans.join(", ") : ""}`);
+
   const labels = SCORECARD_COLUMNS.map((c) => c.label);
   expect(new Set(labels).size === labels.length,
     `no two columns share a label (${labels.join(" | ")})`);
+  expect(new Set(SCORECARD_COLUMNS.map((c) => c.id)).size === SCORECARD_COLUMNS.length,
+    "…and no two share an id, which is what the row cells are keyed on");
   expect(!labels.includes("Cost"),
     "and neither money column is called just \"Cost\" — one is a quote, the other is the bill");
+  // The same trap, one release later: "Security" over a column that scores
+  // only third-party packages let a clean dependency tree read as a secure
+  // repository.
+  expect(!labels.includes("Security"),
+    "and no column is called just \"Security\" — dependencies and your own code are graded apart");
 }
 
 {
@@ -669,6 +689,121 @@ console.log("\nswitching cloud spend off drops the figure with it\n");
   expect(after.lastCost === null, "switching cloud spend off clears the stored figure");
   expect(after.lastArchScope === null,
     "…and switching the X-ray off clears its scope, the same as its keys");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\na clean dependency tree is not a secure repository\n");
+// ---------------------------------------------------------------------------
+//
+// The scorecard graded one half of the vuln analyzer's output. `Security`
+// scored the advisory list, so a repository with no vulnerable packages and a
+// critical SQL injection in its own code rendered "A · 0" — a top grade on a
+// codebase the scanner had actually READ and found exploitable. That is worse
+// than the unmeasured-as-clean bug 0022 fixed: nothing was missing, the
+// answer was in hand and withheld from the cell it would have made look bad.
+{
+  const env = makeEnv();
+  await seedOrg(env, "org_code", [{ userId: "u_code", email: "code@acme.test", role: "owner" }]);
+
+  const risky = await createMonitor(env, {
+    orgId: "org_code", repoUrl: "https://github.com/acme/risky", branch: "main",
+    createdBy: "u_code", analyzers: ["vuln"],
+  });
+  await recordMonitorRun(env, risky.monitorId, {
+    ranAt: NOW, resultHash: "h", advisoryIds: [],
+    // No advisories at all: a perfect dependency tree.
+    severities: { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 },
+    source: {
+      total: 3,
+      counts: { critical: 1, high: 2, medium: 0, low: 0, info: 0 },
+      keys: ["a", "b", "c"], truncated: false, at: NOW,
+    },
+  });
+
+  const body = await (await scorecardHandler(authed("u_code"), env)).json();
+  expect(body.columns.some((c) => c.id === "code"),
+    `the payload carries the code column (${body.columns.map((c) => c.id).join(",")})`);
+  expect(body.columns.find((c) => c.id === "security").label === "Dependencies",
+    "…and the advisory column says what it actually grades");
+
+  const row = body.rows.find((r) => /risky/.test(r.repo));
+  expect(row.cells.security.kind === "grade" && /^A/.test(row.cells.security.value),
+    `the dependency grade is still an A — it is accurate about packages (got ${row.cells.security.value})`);
+  expect(row.cells.code.kind === "grade" && row.cells.code.value === "C · 3",
+    `…and the code cell reports the critical beside it (got ${row.cells.code.value})`);
+  expect(/critical/.test(row.cells.code.note),
+    `…naming the worst severity, which is how a finding list is triaged (got "${row.cells.code.note}")`);
+
+  // Ranked on SEVERITY first. A repository with forty low findings must not
+  // outrank one with a single critical, or the board sorts by noise.
+  const noisy = await createMonitor(env, {
+    orgId: "org_code", repoUrl: "https://github.com/acme/noisy", branch: "main",
+    createdBy: "u_code", analyzers: ["vuln"],
+  });
+  await recordMonitorRun(env, noisy.monitorId, {
+    ranAt: NOW, resultHash: "h", advisoryIds: [],
+    severities: { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 },
+    source: { total: 40, counts: { critical: 0, high: 0, medium: 0, low: 40, info: 0 },
+              keys: ["x"], truncated: false, at: NOW },
+  });
+  const rows2 = (await (await scorecardHandler(authed("u_code"), env)).json()).rows;
+  const riskyRank = rows2.find((r) => /risky/.test(r.repo)).cells.code.rank;
+  const noisyRank = rows2.find((r) => /noisy/.test(r.repo)).cells.code.rank;
+  expect(riskyRank > noisyRank,
+    `one critical outranks forty lows (${riskyRank} vs ${noisyRank})`);
+}
+
+{
+  const env = makeEnv();
+  await seedOrg(env, "org_c2", [{ userId: "u_c2", email: "c2@acme.test", role: "owner" }]);
+
+  // Measured and genuinely clean: a real zero, and it must GRADE, not read as
+  // pending — the scan ran, read files, and found nothing.
+  const clean = await createMonitor(env, {
+    orgId: "org_c2", repoUrl: "https://github.com/acme/clean", branch: "main",
+    createdBy: "u_c2", analyzers: ["vuln"],
+  });
+  await recordMonitorRun(env, clean.monitorId, {
+    ranAt: NOW, resultHash: "h", advisoryIds: [],
+    severities: { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 },
+    source: { total: 0, counts: {}, keys: [], truncated: false, at: NOW },
+  });
+
+  // Unreadable: the sweep could not fetch the source. This must NOT render as
+  // a zero — it is the same distinction the whole grid is built on.
+  const dark = await createMonitor(env, {
+    orgId: "org_c2", repoUrl: "https://github.com/acme/dark", branch: "main",
+    createdBy: "u_c2", analyzers: ["vuln"],
+  });
+  await recordMonitorRun(env, dark.monitorId, {
+    ranAt: NOW, resultHash: "h", advisoryIds: [],
+    severities: { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 },
+    skips: [{ analyzer: "source", reason: "source_unreadable" }],
+  });
+
+  // Swept before migration 0024: unknown, not clean.
+  const legacy = await createMonitor(env, {
+    orgId: "org_c2", repoUrl: "https://github.com/acme/legacy", branch: "main",
+    createdBy: "u_c2", analyzers: ["vuln"],
+  });
+  await recordMonitorRun(env, legacy.monitorId, {
+    ranAt: NOW, resultHash: "h", advisoryIds: [],
+    severities: { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 },
+  });
+
+  const rows = (await (await scorecardHandler(authed("u_c2"), env)).json()).rows;
+  const cleanCell  = rows.find((r) => /clean/.test(r.repo)).cells.code;
+  const darkCell   = rows.find((r) => /dark/.test(r.repo)).cells.code;
+  const legacyCell = rows.find((r) => /legacy/.test(r.repo)).cells.code;
+
+  expect(cleanCell.kind === "grade" && cleanCell.value === "0",
+    `a scan that read the code and found nothing is a real zero (got ${cleanCell.kind}/${cleanCell.value})`);
+  expect(darkCell.kind === "unmeasured" && darkCell.value === null,
+    `an unreadable repository is NOT a zero (got ${darkCell.kind}/${darkCell.value})`);
+  expect(/could not be read/.test(darkCell.note || ""),
+    `…and says why (got "${darkCell.note}")`);
+  expect(legacyCell.kind === "pending" && legacyCell.value === null,
+    `a pre-0024 sweep is pending, never clean (got ${legacyCell.kind}/${legacyCell.value})`);
 }
 
 console.log("");

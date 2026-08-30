@@ -115,6 +115,11 @@ function publicMonitor(m) {
     lastAlgo: m.lastAlgo
       ? { functions: Object.keys(m.lastAlgo.byName).length, at: m.lastAlgo.at }
       : null,
+    // Code findings from the source scan (migrations/0024). Null means no
+    // sweep has recorded one — never an implied zero.
+    lastSource: m.lastSource
+      ? { total: m.lastSource.total, counts: m.lastSource.counts, at: m.lastSource.at }
+      : null,
     // Cloud spend (migrations/0023). The cost chip was the one analyzer chip
     // on this row that rendered with no summary at all, for the same reason
     // the scorecard had no column for it: there was nothing stored to show.
@@ -674,6 +679,12 @@ export function explainUnavailable(reason) {
     sandbox_not_configured:
       "The measurement sandbox is not configured on this deployment, so no function can be " +
       "graded. This is a deployment setting, not a problem with your optimizer.config.json.",
+    // Source scanner (migrations/0024). `no_source_files` is a fact about the
+    // repository, not a failure; the other two are ours, and say so.
+    no_source_files:    "No files in a language the code scanner reads were found in this repository.",
+    source_unreadable:  "The repository's source could not be read (private repository, or GitHub rate-limited the request). The dependency audit is unaffected.",
+    source_failed:      "The code scanner errored on this repository's source. The dependency audit is unaffected.",
+    source_unsupported: "This sweep predates source scanning, so no code was read. The next sweep scans it.",
     bad_repo_url:       "This monitor's repository URL could not be parsed.",
     analyzer_failed:    "The analyzer could not process this repository's files.",
   };
@@ -715,6 +726,10 @@ export function fixUnavailable(reason) {
       "Fix the JSON in optimizer.config.json — the sweep cannot parse it as written.",
     no_entries_ran:
       "Open the Algorithm optimizer for this repository; every entry's own reason is listed there.",
+    no_source_files:
+      "Nothing to change unless you expected code here — the scanner reads JavaScript, TypeScript, Python, shell, and config files.",
+    source_unreadable:
+      "If the repository is private, the scanner cannot read it; public repositories clear on their own once GitHub's rate limit resets.",
     bad_repo_url:
       "Re-create this monitor with a https://github.com/owner/name URL.",
     sandbox_not_configured:

@@ -288,6 +288,12 @@ const MIGRATIONS = Object.freeze([
     // architecture zero goes back to being unfalsifiable.
     checks: [{ table: "monitors", column: "last_cost_json" },
              { table: "monitors", column: "last_arch_scope_json" }] },
+  { id: "0024", name: "monitor_source_findings",
+    // Silent in the worst direction again: without it the sweep scans the
+    // source, finds nothing to store it in, and the scorecard keeps grading
+    // the advisory list alone — a repo with twelve injection findings reads
+    // as clean.
+    checks: [{ table: "monitors", column: "last_source_json" }] },
 ]);
 
 /** Plain SQLite identifier — the only shape we will interpolate into a PRAGMA. */

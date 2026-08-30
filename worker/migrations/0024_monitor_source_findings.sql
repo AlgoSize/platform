@@ -1,0 +1,35 @@
+-- Migration 0024: what the source scanner found, per monitor.
+--
+-- The SAST scan already runs on every scheduled sweep. runLockfileAudit
+-- performs it and returns it as `source`, the sweep reads `result.advisories`
+-- beside it, and the source block is dropped on the floor — fetched at the
+-- cost of a GitHub tree listing plus a full parse, then discarded.
+--
+-- Two things went wrong because of that, and the second one is the reason
+-- this migration is not optional:
+--
+--   1. No diff. "3 new critical findings since last night" could not be
+--      computed, so nobody was ever told their code got worse. Unlike a cloud
+--      bill — which differs every day and is deliberately not diffed — a new
+--      SQL injection appearing between two sweeps is exactly an alert.
+--
+--   2. THE SCORECARD GRADED CODE IT HAD READ AS IF IT HAD NOT. The Security
+--      column scores the advisory list alone, so a repository with zero CVEs
+--      and twelve critical injection findings graded "A - 0". That is the
+--      failure this table has been fighting since 0022, arriving from a new
+--      direction: not an unmeasured cell rendered as clean, but a MEASURED
+--      result withheld from the cell that would have made it look dirty.
+--
+-- Stored shape: {"counts":{"critical":n,...},"total":n,"keys":[fingerprint],
+--                "at":sec}
+--
+-- `keys` are the normalizer's fingerprints, which are deliberately not keyed
+-- on line number — so inserting a comment at the top of a file does not
+-- re-report every finding below it as new. The list is capped when written;
+-- the cap is recorded in the sweep so a truncated baseline can never silently
+-- turn the overflow into "new findings" next sweep.
+--
+-- NULL means no sweep has recorded a source scan yet. As everywhere else in
+-- this table, that is "unknown", never "measured and clean".
+
+ALTER TABLE monitors ADD COLUMN last_source_json TEXT;

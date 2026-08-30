@@ -99,6 +99,30 @@ export const RUN_SOURCES = Object.freeze(["ci", "monitor", "manual"]);
 const ALGO_RANK = ["O(1)", "O(log n)", "O(n)", "O(n log n)", "O(n^2)", "O(n^3)", "O(2^n)"];
 
 /**
+ * The source scan's contribution to a vuln headline, or "" when there is none.
+ *
+ * A repo-scanned run carries BOTH halves, and the headline used to name only
+ * the advisories — so a sweep that found twelve critical injection findings
+ * and no vulnerable packages summarised itself as "0 advisories · 0 crit,
+ * 0 high" in the runs feed. Appended rather than merged into the counts,
+ * because a reader has to be able to tell which half a number came from:
+ * `npm audit fix` clears one and does nothing for the other.
+ *
+ * Silent by construction on every other shape — an inline `{code}` scan, or a
+ * stored run from before source scanning existed — so no existing headline
+ * changes.
+ */
+function codeSuffix(result) {
+  const src = result && result.source;
+  if (!src || src.status !== "ok") return "";
+  const total = (src.summary && src.summary.total) || 0;
+  if (!total) return " · code clean";
+  const bySev = (src.summary && src.summary.bySeverity) || {};
+  const crit = bySev.critical || 0;
+  return ` · ${total} code finding${total === 1 ? "" : "s"}${crit ? ` (${crit} critical)` : ""}`;
+}
+
+/**
  * One-line headline metric for the dashboard list. Kept analyzer-specific
  * because the three analyzers don't have a common shape — but each one has
  * an obvious "what's the verdict?" number.
@@ -116,14 +140,15 @@ export function summarize(analyzer, result) {
     if (result.summary && typeof result.summary.totalIssues === "number") {
       const s = result.summary;
       return `${s.totalIssues} issue${s.totalIssues === 1 ? "" : "s"} · grade ${s.grade} · ` +
-             `${s.counts.critical} crit, ${s.counts.high} high`;
+             `${s.counts.critical} crit, ${s.counts.high} high` + codeSuffix(result);
     }
     const c = result.counts || {};
     // `unknown` must be in the total. Leaving it out reported "0 advisories"
     // for a repo whose advisories were all unrated — which, before the CVSS
     // fix, was most of them.
     const total = (c.critical || 0) + (c.high || 0) + (c.medium || 0) + (c.low || 0) + (c.unknown || 0);
-    return `${total} advisor${total === 1 ? "y" : "ies"} · ${c.critical || 0} crit, ${c.high || 0} high`;
+    return `${total} advisor${total === 1 ? "y" : "ies"} · ${c.critical || 0} crit, ${c.high || 0} high` +
+           codeSuffix(result);
   }
   if (analyzer === "arch") {
     const s = result.summary || {};
