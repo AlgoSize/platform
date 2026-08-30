@@ -150,6 +150,16 @@ recognition instead judges the *value*: a delimited `test`/`dummy`/`sample`
 token inside it (`sk-ant-test`) marks it fake, while `latest` or
 `attestation` — which merely contain the letters — do not.
 
+### A mention of a shape is not the shape
+
+Code-shape matches that **start inside** a string or regex literal are
+dropped: a recommendation string mentioning `exec()`, a rule regex spelling
+an XSS sink, a test feeding vulnerable code as data are mentions, not code.
+A match that starts in code and extends into quotes (`createHash("md5")`)
+still fires, and the format rules — PEM banners, credentialed URIs — are
+exempt because string data is exactly where those leak. The scanner's own
+source was the proof: five of its rule definitions reported themselves.
+
 ---
 
 ## Architecture

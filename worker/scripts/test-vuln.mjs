@@ -1086,7 +1086,11 @@ console.log("\nTest code — capped, labelled, never dropped\n");
   expect(prod.length === test.length,
     "capping changes severity, never the count — nothing is dropped");
 
-  const PEM = "const k = `-----BEGIN RSA PRIVATE KEY-----\nMIIEow…\n-----END RSA PRIVATE KEY-----`;";
+  // Assembled at runtime so this file never carries a PEM banner at rest —
+  // a scanner's own test suite must not be a source of secret-shaped bytes,
+  // including to the scanner itself (secrets are never capped, even here).
+  const BANNER = (kind) => "-----" + kind + " RSA PRIVATE KEY-----";
+  const PEM = "const k = `" + BANNER("BEGIN") + "\nMIIEow…\n" + BANNER("END") + "`;";
   const pemTest = analyzeVuln({ files: [{ path: "tests/e2e/setup.spec.js", content: PEM }] }).findings
     .find((f) => f.type === "private_key_material");
   expect(pemTest && pemTest.severity === "critical",
@@ -1111,10 +1115,45 @@ console.log("\nCredential values that announce their own fakeness\n");
     "…including mid-value tokens");
   expect(cred('const PASSWORD = "dummy-password-123";').length === 0,
     "…and dummy-");
-  expect(cred('const API_KEY = "sk-ant-a3b8f2c9d4e6178a3b8f2c9d";').length === 1,
+  // Realistic values are split at rest for the same reason as the PEM above.
+  const KEYLINE = (v) => 'const API_' + 'KEY = "' + v + '";';
+  expect(cred(KEYLINE("sk-ant-a3b8f2c9d4e6178a3b8f2c9d")).length === 1,
     "a value without any placeholder token still fires");
-  expect(cred('const API_KEY = "latest-attestation-key-9f8e7d6c5b4a";').length === 1,
+  expect(cred(KEYLINE("latest-attestation-key-9f8e7d6c5b4a")).length === 1,
     "\"latest\" and \"attestation\" contain the letters and are NOT placeholders");
+}
+
+console.log("\nA mention of a shape is not the shape\n");
+
+// The scanner reported five of its own rule definitions as vulnerabilities:
+// a recommendation string mentioning exec(), rule regexes spelling
+// /dangerouslySetInnerHTML/ and /@csrf_exempt/. The discriminator is where
+// the match STARTS — inside a string or regex literal is a mention; outside,
+// extending into one, is code.
+{
+  const scan = (content) => analyzeVuln({ files: [{ path: "src/a.js", content }] }).findings;
+
+  expect(scan('const r = "Avoid exec() on dynamic input";').length === 0,
+    "exec() inside a prose string is a mention, not a call");
+  expect(scan("const p = /dangerouslySetInnerHTML/;").length === 0,
+    "a rule regex naming an XSS sink is not an XSS sink");
+  expect(scan("const q = /@csrf_exempt\\b|LIBXML_NOENT/i;").length === 0,
+    "a rule regex naming config tokens is not disabled middleware");
+
+  expect(scan("exec(userCmd);").some((f) => f.type === "use_of_exec"),
+    "a real exec() call still fires");
+  expect(scan('const h = crypto.createHash("md5");').some((f) => f.type === "weak_hash_algorithm"),
+    "a match that STARTS in code and extends into quotes still fires (md5)");
+
+  // The two format rules are exempt: string data is where they leak.
+  const pem = scan("const key = `" + "-----" + "BEGIN RSA PRIVATE KEY-----" + "`;");
+  expect(pem.some((f) => f.type === "private_key_material" && f.severity === "critical"),
+    "a PEM banner inside a template literal is still a critical leak");
+  // Split in THIS file so the scanner's own suite carries no URI at rest;
+  // joined before scanning so the scanned line carries a real one.
+  const uri = scan('const db = "postgres' + '://admin:hunter24aa@db.internal:5432/prod";');
+  expect(uri.some((f) => f.type === "hardcoded_db_connection_string"),
+    "a credentialed URI inside a string is still a leak");
 }
 
 console.log();

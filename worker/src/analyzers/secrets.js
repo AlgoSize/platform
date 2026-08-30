@@ -145,6 +145,7 @@ export function scanLine(text) {
     out.push({
       type: "hardcoded_generic_secret",
       severity: null,          // caller decides: comment context downgrades it
+      index: generic.index,    // where in the line — callers use it to tell code from data
       value: generic[1],
       recommendation: GENERIC_SECRET_RECOMMENDATION,
     });
