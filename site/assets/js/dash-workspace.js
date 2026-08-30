@@ -295,14 +295,14 @@
         line.appendChild(el("span", { class: "chip chip-warn" }, "stale"));
       }
       wrap.appendChild(line);
-      wrap.appendChild(el("span", { class: "scorecard-note mono" },
-        cell.kind === "stale" ? staleNote(r) : (cell.note || "")));
+      wrap.appendChild(note(cell.kind === "stale" ? staleNote(r) : (cell.note || "")));
       return wrap;
     }
 
     if (cell.kind === "pending") {
       wrap.appendChild(el("span", { class: "scorecard-pending mono" }, "first run pending"));
-      wrap.appendChild(el("span", { class: "scorecard-note mono" }, cell.note || ""));
+      wrap.appendChild(note(cell.note || ""));
+      appendFix(wrap, cell);
       return wrap;
     }
 
@@ -314,7 +314,8 @@
     // for a repository nothing ever read.
     if (cell.kind === "unmeasured") {
       wrap.appendChild(el("span", { class: "scorecard-unmeasured mono" }, "not measured"));
-      wrap.appendChild(el("span", { class: "scorecard-note mono" }, cell.note || ""));
+      wrap.appendChild(note(cell.note || ""));
+      appendFix(wrap, cell);
       return wrap;
     }
 
@@ -325,6 +326,35 @@
     var link = el("a", { class: "scorecard-enable mono", href: "#/monitors" }, "enable →");
     wrap.appendChild(link);
     return wrap;
+  }
+
+  /**
+   * The one change that would turn this empty cell into a number.
+   *
+   * Rendered only when the API sends one. Some reasons — a GitHub throttle, a
+   * sandbox that is briefly unreachable — clear on their own, and those cells
+   * deliberately carry no fix: inventing an instruction for a condition the
+   * reader cannot act on is how a grid teaches people to ignore it.
+   */
+  /**
+   * A cell note, which is one line wide and usually longer than one line.
+   *
+   * The title is not decoration: the column is 128px and the sentence is a
+   * paragraph, so without it "No compose file was found in this reposi…" is
+   * the whole of what a reader can ever learn from this cell.
+   */
+  function note(text) {
+    // el() setAttribute()s whatever it is handed, so an empty title would
+    // become title="" — or worse, title="null" — on every cell that has no
+    // note. Only pass the attribute when there is something to reveal.
+    var attrs = { class: "scorecard-note mono" };
+    if (text) attrs.title = text;
+    return el("span", attrs, text);
+  }
+
+  function appendFix(wrap, cell) {
+    if (!cell.fix) return;
+    wrap.appendChild(el("span", { class: "scorecard-fix mono", title: cell.fix }, cell.fix));
   }
 
   function staleNote(r) {

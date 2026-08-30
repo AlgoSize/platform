@@ -22,8 +22,9 @@ import { postToSlack } from "../src/slack.js";
 import {
   createMonitor, getMonitorById, recordMonitorRun, recordMonitorAttempt,
   setMonitorSchedule, normalizeHour, isDue, cronSweepsHourly, DEFAULT_SWEEP_HOUR,
+  MONITOR_ANALYZERS, setMonitorAnalyzers,
 } from "../src/monitors/_store.js";
-import { scorecardHandler } from "../src/handlers/scorecard.js";
+import { scorecardHandler, SCORECARD_COLUMNS } from "../src/handlers/scorecard.js";
 import { runMonitorNowHandler, setMonitorScheduleHandler } from "../src/handlers/monitors.js";
 import { writeNotificationPrefs } from "../src/notifications.js";
 import { makeD1 } from "./_d1-stub.mjs";
@@ -472,6 +473,202 @@ console.log("\na skipped analyzer is never graded as a zero\n");
   expect(legacyRow.cells.architecture.kind === "grade" &&
          legacyRow.cells.architecture.value === "1",
     "a pre-0022 sweep with real findings still grades normally");
+}
+
+
+// ---------------------------------------------------------------------------
+console.log("\nevery analyzer you can schedule has a column, and every empty cell has a fix\n");
+// ---------------------------------------------------------------------------
+//
+// The cloud-spend analyzer shipped complete — a nightly pass, a CI gate, a
+// dashboard card, runs in the feed — and the scorecard had no column for it,
+// because the grid grades from stored results and the sweep deliberately
+// stored none. So the grid silently described a four-analyzer product while
+// the monitors screen offered five, and the column labelled "Cost" was the
+// compose-file ESTIMATOR: a projection from list prices, sitting under the
+// word a reader takes to mean their bill.
+//
+// The column list is checked against MONITOR_ANALYZERS rather than a literal,
+// so the sixth analyzer added to the sweep fails here until it is visible.
+{
+  const columnAnalyzers = SCORECARD_COLUMNS.map((c) => c.analyzer).sort();
+  expect(columnAnalyzers.join(",") === [...MONITOR_ANALYZERS].sort().join(","),
+    `every schedulable analyzer has exactly one column (columns: ${columnAnalyzers.join(",")}; ` +
+    `analyzers: ${[...MONITOR_ANALYZERS].sort().join(",")})`);
+  const labels = SCORECARD_COLUMNS.map((c) => c.label);
+  expect(new Set(labels).size === labels.length,
+    `no two columns share a label (${labels.join(" | ")})`);
+  expect(!labels.includes("Cost"),
+    "and neither money column is called just \"Cost\" — one is a quote, the other is the bill");
+}
+
+{
+  const env = makeEnv();
+  await seedOrg(env, "org_sp", [{ userId: "u_sp", email: "sp@acme.test", role: "owner" }]);
+
+  // A repo whose committed cost export was read: a real figure to grade.
+  const spender = await createMonitor(env, {
+    orgId: "org_sp", repoUrl: "https://github.com/acme/spender", branch: "main",
+    createdBy: "u_sp", analyzers: ["vuln", "cost"],
+  });
+  await recordMonitorRun(env, spender.monitorId, {
+    ranAt: NOW, resultHash: "h", advisoryIds: [],
+    severities: { critical: 0, high: 0, medium: 0, low: 0 },
+    cost: { currentSpend: 12_400, totalSavingsPct: 25, suggestions: 3, at: NOW },
+  });
+
+  // A repo watching spend that has produced no figure and recorded no skip.
+  const waiting = await createMonitor(env, {
+    orgId: "org_sp", repoUrl: "https://github.com/acme/waiting", branch: "main",
+    createdBy: "u_sp", analyzers: ["vuln", "cost"],
+  });
+  await recordMonitorRun(env, waiting.monitorId, {
+    ranAt: NOW, resultHash: "h", advisoryIds: [],
+    severities: { critical: 0, high: 0, medium: 0, low: 0 },
+    skips: [{ analyzer: "cost", reason: "no_cur" }],
+  });
+
+  const body = await (await scorecardHandler(authed("u_sp"), env)).json();
+  expect(body.columns.some((c) => c.id === "spend"),
+    `the payload carries the spend column (${body.columns.map((c) => c.id).join(",")})`);
+
+  const spendRow = body.rows.find((r) => /spender/.test(r.repo));
+  expect(spendRow.cells.spend.kind === "grade" && /12,400/.test(spendRow.cells.spend.value),
+    `a read export grades as the monthly total (got ${spendRow.cells.spend.value})`);
+  // Ranked on WASTE, not on size: the most expensive repo you own is not a
+  // problem if none of that spend is avoidable.
+  expect(spendRow.cells.spend.rank === 3100,
+    `…ranked by the recoverable dollars, not the bill (got ${spendRow.cells.spend.rank})`);
+  expect(/3 suggestion/.test(spendRow.cells.spend.note),
+    `…and says how many suggestions produced that figure (got "${spendRow.cells.spend.note}")`);
+
+  // The estimator column must not have been quietly renamed into this one.
+  expect(spendRow.cells.cost.kind === "off",
+    "the Infra cost column stays its own analyzer — a monitor watching spend is not estimating");
+
+  const waitRow = body.rows.find((r) => /waiting/.test(r.repo));
+  expect(waitRow.cells.spend.kind === "unmeasured",
+    `an unnamed CUR reads as not measured (got ${waitRow.cells.spend.kind})`);
+  expect(/algosize\.budget\.json/.test(waitRow.cells.spend.fix || ""),
+    `…and names the file to change (got "${waitRow.cells.spend.fix}")`);
+  expect(waitRow.cells.spend.value === null,
+    "…and never a zero, which would read as a repository that costs nothing to run");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\nan empty cell says whose move it is\n");
+// ---------------------------------------------------------------------------
+//
+// Every blank on this grid was already true and still a dead end. "No compose
+// file was found in this repository" leaves a reader with no idea whether the
+// next step is theirs or ours — and for the sandbox, the previous wording
+// actively sent them to check a config file in which nothing was wrong.
+{
+  const env = makeEnv();
+  await seedOrg(env, "org_fx", [{ userId: "u_fx", email: "fx@acme.test", role: "owner" }]);
+  const m = await createMonitor(env, {
+    orgId: "org_fx", repoUrl: "https://github.com/acme/blank", branch: "main",
+    createdBy: "u_fx", analyzers: ["vuln", "arch", "estimate", "algo"],
+  });
+  await recordMonitorRun(env, m.monitorId, {
+    ranAt: NOW, resultHash: "h", advisoryIds: [],
+    severities: { critical: 0, high: 0, medium: 0, low: 0 },
+    archKeys: [],
+    skips: [
+      { analyzer: "estimate", reason: "no_compose" },
+      { analyzer: "algo",     reason: "sandbox_not_configured" },
+      { analyzer: "arch",     reason: "github_throttled" },
+    ],
+  });
+
+  const row = (await (await scorecardHandler(authed("u_fx"), env)).json())
+    .rows.find((r) => /blank/.test(r.repo));
+
+  expect(/docker-compose/.test(row.cells.cost.fix || ""),
+    `the estimator's blank names the file to commit (got "${row.cells.cost.fix}")`);
+  expect(/ours/.test(row.cells.complexity.fix || "") &&
+         !/optimizer\.config\.json/.test(row.cells.complexity.fix || ""),
+    `an unconfigured sandbox says the work is OURS (got "${row.cells.complexity.fix}")`);
+  // A throttle clears on its own. Inventing an instruction for a condition the
+  // reader cannot act on is how a grid teaches people to ignore its advice.
+  expect(row.cells.architecture.fix === null,
+    `a self-clearing skip carries no fix at all (got "${row.cells.architecture.fix}")`);
+  expect(/rate-limited/i.test(row.cells.architecture.note || ""),
+    "…while still saying what happened");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\nan architecture zero carries the evidence behind it\n");
+// ---------------------------------------------------------------------------
+//
+// "0 · No findings in the last sweep" was the same sentence for a sweep that
+// mapped forty services and cleared them and one that parsed a single file.
+// A number a reader cannot check is a number they eventually stop reading.
+{
+  const env = makeEnv();
+  await seedOrg(env, "org_ev", [{ userId: "u_ev", email: "ev@acme.test", role: "owner" }]);
+
+  const scoped = await createMonitor(env, {
+    orgId: "org_ev", repoUrl: "https://github.com/acme/scoped", branch: "main",
+    createdBy: "u_ev", analyzers: ["vuln", "arch"],
+  });
+  await recordMonitorRun(env, scoped.monitorId, {
+    ranAt: NOW, resultHash: "h", advisoryIds: [],
+    severities: { critical: 0, high: 0, medium: 0, low: 0 },
+    archKeys: [], skips: [],
+    archScope: { services: 37, files: 42, complete: true, at: NOW },
+  });
+
+  // A row swept before migration 0023 has no scope. It must keep its old
+  // wording rather than assert a scope of zero services.
+  const legacy = await createMonitor(env, {
+    orgId: "org_ev", repoUrl: "https://github.com/acme/oldscope", branch: "main",
+    createdBy: "u_ev", analyzers: ["vuln", "arch"],
+  });
+  await recordMonitorRun(env, legacy.monitorId, {
+    ranAt: NOW, resultHash: "h", advisoryIds: [],
+    severities: { critical: 0, high: 0, medium: 0, low: 0 },
+    archKeys: [], skips: [],
+  });
+
+  const rows = (await (await scorecardHandler(authed("u_ev"), env)).json()).rows;
+  const s = rows.find((r) => /scoped/.test(r.repo));
+  const l = rows.find((r) => /oldscope/.test(r.repo));
+
+  expect(s.cells.architecture.kind === "grade" && s.cells.architecture.value === "0",
+    "a measured zero is still a grade — the scope adds evidence, it never removes the number");
+  expect(/37 services/.test(s.cells.architecture.note),
+    `…and the note says what was read (got "${s.cells.architecture.note}")`);
+  expect(!/services/.test(l.cells.architecture.note),
+    `a pre-0023 row falls back to the old wording (got "${l.cells.architecture.note}")`);
+}
+
+// ---------------------------------------------------------------------------
+console.log("\nswitching cloud spend off drops the figure with it\n");
+// ---------------------------------------------------------------------------
+//
+// Spend keeps no diff baseline, so it was tempting to leave the column alone
+// on toggle-off. But a figure from whenever the analyzer was last enabled is
+// worse than none: it sits on the grid as this month's bill forever.
+{
+  const env = makeEnv();
+  await seedOrg(env, "org_cl", [{ userId: "u_cl", email: "cl@acme.test", role: "owner" }]);
+  const m = await createMonitor(env, {
+    orgId: "org_cl", repoUrl: "https://github.com/acme/toggler", branch: "main",
+    createdBy: "u_cl", analyzers: ["vuln", "cost", "arch"],
+  });
+  await recordMonitorRun(env, m.monitorId, {
+    ranAt: NOW, resultHash: "h", advisoryIds: [],
+    cost: { currentSpend: 900, totalSavingsPct: 10, suggestions: 1, at: NOW },
+    archKeys: [], archScope: { services: 4, files: 4, complete: true, at: NOW },
+  });
+  expect((await getMonitorById(env, m.monitorId)).lastCost !== null, "the figure is stored");
+
+  await setMonitorAnalyzers(env, "org_cl", m.monitorId, ["vuln"]);
+  const after = await getMonitorById(env, m.monitorId);
+  expect(after.lastCost === null, "switching cloud spend off clears the stored figure");
+  expect(after.lastArchScope === null,
+    "…and switching the X-ray off clears its scope, the same as its keys");
 }
 
 console.log("");

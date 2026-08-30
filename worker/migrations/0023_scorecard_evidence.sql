@@ -1,0 +1,32 @@
+-- Migration 0023: the two things the scorecard could not say.
+--
+-- 1. last_cost_json — the cloud-spend analyzer's standing result.
+--
+--    The nightly sweep gained a `cost` pass (monitors/run.js) that reads a
+--    committed Cost & Usage Report, files a run, and then kept nothing. That
+--    was deliberate: a bill differs every day, so DIFFING one sweep against
+--    the last would report Tuesday differing from Monday as a finding.
+--
+--    But "keeps no baseline for diffing" and "keeps no latest result" are two
+--    different decisions, and only the first one was ever argued for. The
+--    scorecard grades exclusively from stored results, so with nothing stored
+--    the cloud-spend analyzer was the only one of the five with no column at
+--    all — a tool you can schedule, that files runs, and that the grid cannot
+--    see. This column stores the LATEST figures, never a comparison:
+--    {"currentSpend":n,"totalSavingsPct":n,"suggestions":n,"at":sec}.
+--
+-- 2. last_arch_scope_json — what the X-ray actually read.
+--
+--    "0 · No findings in the last sweep" is unfalsifiable. It is the same
+--    sentence whether the analyzer mapped forty services and cleared them or
+--    mapped one file and had nothing to say, and the reader has no way to
+--    tell those apart — which is the exact failure 0022 fixed for skipped
+--    analyzers and left standing for successful ones. Storing the scope lets
+--    the zero carry its own evidence: {"services":n,"files":n,
+--    "complete":bool,"at":sec}.
+--
+-- NULL means no sweep has recorded either yet. As everywhere else in this
+-- table, that is "unknown", never "measured and empty".
+
+ALTER TABLE monitors ADD COLUMN last_cost_json TEXT;
+ALTER TABLE monitors ADD COLUMN last_arch_scope_json TEXT;

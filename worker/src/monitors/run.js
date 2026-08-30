@@ -251,12 +251,24 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
   const fetchImpl = (env && env.FETCH) || globalThis.fetch;
   const skips = [];
 
-  let archDiff = null, archBaseline;
+  let archDiff = null, archBaseline, archScope;
   if (analyzers.includes("arch")) {
     const arch = await runArchForMonitor(monitor, env, fetchImpl);
     if (arch.status === "ok") {
       archDiff = diffArchFindings(arch.findings, arch.keys, monitor.lastArchKeys);
       archBaseline = archDiff.currentKeys;
+      // What the X-ray read, stored beside what it found (migrations/0023).
+      // A finding count without a scope is unfalsifiable: zero findings over
+      // forty services and zero findings over one file are the same number
+      // and completely different news.
+      const summary = (arch.result && arch.result.summary) || {};
+      const limits  = (arch.result && arch.result.limits) || {};
+      archScope = {
+        services: typeof summary.nodes === "number" ? summary.nodes : 0,
+        files:    typeof limits.filesAnalyzed === "number" ? limits.filesAnalyzed : null,
+        complete: summary.complete === true,
+        at:       nowSec,
+      };
       if (arch.result) filings.push({ analyzer: "arch", result: arch.result });
 
       // The nightly snapshot (migrations/0018). This is the one that makes the
@@ -309,10 +321,22 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
   // no baseline and raises no alert — a bill differs every day, so a diff
   // would report Tuesday differing from Monday as a finding. See
   // runCostForMonitor for the whole argument.
+  let costSummary;
   if (analyzers.includes("cost")) {
     const cost = await runCostForMonitor(monitor, env, ctx, fetchImpl);
     if (cost.status === "ok") {
       filings.push({ analyzer: "cost", result: cost.result });
+      // Stored as the LATEST figure, never compared against the last one
+      // (migrations/0023). Keeping no baseline was the right call for
+      // alerting and the wrong one for the scorecard, which grades from
+      // stored results and so could not see this analyzer at all.
+      const r = cost.result || {};
+      costSummary = {
+        currentSpend:    typeof r.currentSpend === "number" ? r.currentSpend : 0,
+        totalSavingsPct: typeof r.totalSavingsPct === "number" ? r.totalSavingsPct : 0,
+        suggestions:     Array.isArray(r.suggestions) ? r.suggestions.length : 0,
+        at:              nowSec,
+      };
     } else if (cost.status === "no_cur") {
       skips.push({ analyzer: "cost", reason: "no_cur" });
     } else {
@@ -368,8 +392,10 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
     // skipped analyzer's empty baseline as a measured zero.
     skips,
     archKeys:    archBaseline,
+    archScope,
     estimate:    estBaseline,
     algo:        algoBaseline,
+    cost:        costSummary,
     // Persist what this run found new (migrations/0009). It has to be written
     // here, in the same statement that advances the baseline, because the
     // moment advisoryIds lands the previous set is gone and this number can

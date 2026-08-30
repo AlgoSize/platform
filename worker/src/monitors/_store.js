@@ -83,6 +83,15 @@ function rowToMonitor(row) {
     lastSkips:       parseSkips(row.last_skips_json),
     lastEstimate:    parseEstimateBaseline(row.last_estimate_json),
     lastAlgo:        parseAlgoBaseline(row.last_algo_json),
+    // The cloud-spend analyzer's LATEST figures (migrations/0023). Not a
+    // baseline: nothing diffs against it, because a bill differs every day
+    // and "Tuesday is not Monday" is not a finding. It exists so the
+    // scorecard has something to grade — without it the only analyzer you
+    // can schedule and never see was this one.
+    lastCost:        parseCostSummary(row.last_cost_json),
+    // What the X-ray READ last sweep (migrations/0023), so a zero can carry
+    // its own evidence instead of asking to be believed.
+    lastArchScope:   parseArchScope(row.last_arch_scope_json),
     // Per-severity tally of the last completed run's advisories
     // (migrations/0017). null = never recorded; the scorecard renders that as
     // "not graded" rather than inventing an A.
@@ -110,6 +119,55 @@ function parseAnalyzers(raw) {
     return normalized || ["vuln"];
   } catch {
     return ["vuln"];
+  }
+}
+
+/**
+ * {"currentSpend":n,"totalSavingsPct":n,"suggestions":n,"at":sec} or null.
+ *
+ * Corrupt reads as null — "we have no figure" — never as a zero spend. A zero
+ * in this column would render on the scorecard as a repository that costs
+ * nothing to run, which is the most flattering possible reading of a parse
+ * failure and the one this table refuses everywhere else.
+ */
+function parseCostSummary(raw) {
+  if (typeof raw !== "string" || !raw) return null;
+  try {
+    const d = JSON.parse(raw);
+    if (!d || typeof d.currentSpend !== "number" || !Number.isFinite(d.currentSpend)) return null;
+    return {
+      currentSpend:    d.currentSpend,
+      totalSavingsPct: typeof d.totalSavingsPct === "number" && Number.isFinite(d.totalSavingsPct)
+        ? d.totalSavingsPct : 0,
+      suggestions:     typeof d.suggestions === "number" && Number.isFinite(d.suggestions)
+        ? d.suggestions : 0,
+      at:              typeof d.at === "number" ? d.at : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * {"services":n,"files":n,"complete":bool,"at":sec} or null.
+ *
+ * Corrupt reads as null, and a null scope makes the architecture cell fall
+ * back to its old wording. The scope only ever ADDS evidence to a number that
+ * was already there; it must never be able to remove the number.
+ */
+function parseArchScope(raw) {
+  if (typeof raw !== "string" || !raw) return null;
+  try {
+    const d = JSON.parse(raw);
+    if (!d || typeof d.services !== "number" || !Number.isFinite(d.services)) return null;
+    return {
+      services: d.services,
+      files:    typeof d.files === "number" && Number.isFinite(d.files) ? d.files : null,
+      complete: d.complete === true,
+      at:       typeof d.at === "number" ? d.at : null,
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -285,6 +343,11 @@ export async function setMonitorAnalyzers(env, orgId, monitorId, analyzers) {
   if (!set.includes("arch"))     clears.push("last_arch_keys = NULL");
   if (!set.includes("estimate")) clears.push("last_estimate_json = NULL");
   if (!set.includes("algo"))     clears.push("last_algo_json = NULL");
+  // Cloud spend keeps no diff baseline, but it does keep a standing figure,
+  // and a figure from whenever the analyzer was last on is worse than none:
+  // it would sit on the scorecard as this month's bill forever.
+  if (!set.includes("cost"))     clears.push("last_cost_json = NULL");
+  if (!set.includes("arch"))     clears.push("last_arch_scope_json = NULL");
   const res = await env.DB.prepare(
     `UPDATE monitors SET analyzers = ?${clears.length ? ", " + clears.join(", ") : ""}
       WHERE monitor_id = ? AND org_id = ?`,
@@ -329,6 +392,9 @@ export async function recordMonitorRun(env, monitorId, {
   // analyzer that could not run this sweep keeps its old baseline and diffs
   // correctly next time, instead of having its history wiped by an outage.
   archKeys = undefined, estimate = undefined, algo = undefined,
+  // The cloud-spend summary and the X-ray's scope (migrations/0023). Same
+  // `undefined` contract as the baselines above.
+  cost = undefined, archScope = undefined,
   // Per-analyzer skips for this sweep (migrations/0022). Same `undefined`
   // contract: a caller that did not compute them leaves the column alone.
   skips = undefined,
@@ -356,6 +422,14 @@ export async function recordMonitorRun(env, monitorId, {
   if (algo !== undefined) {
     sets.push("last_algo_json = ?");
     binds.push(algo === null ? null : JSON.stringify(algo));
+  }
+  if (cost !== undefined) {
+    sets.push("last_cost_json = ?");
+    binds.push(cost === null ? null : JSON.stringify(cost));
+  }
+  if (archScope !== undefined) {
+    sets.push("last_arch_scope_json = ?");
+    binds.push(archScope === null ? null : JSON.stringify(archScope));
   }
   if (skips !== undefined) {
     sets.push("last_skips_json = ?");
