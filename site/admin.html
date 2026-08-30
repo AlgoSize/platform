@@ -194,6 +194,7 @@ sitemap: false
         <button type="button" class="adm-btn" id="adm-aiusage-refresh">Refresh</button>
       </div>
       <div class="adm-kpis" id="adm-aiusage-summary"></div>
+      <div id="adm-aiusage-coverage"></div>
       <div class="adm-aiusage-grid">
         <div class="adm-region">
           <div class="adm-region-head">
@@ -201,11 +202,12 @@ sitemap: false
             <span class="adm-region-meta">USD · stacked</span>
           </div>
           <div class="adm-chart-wrap"><canvas id="adm-aiusage-chart" aria-label="Daily AI cost and margin trend" role="img"></canvas></div>
+          <div class="adm-note" id="adm-aiusage-chart-note"></div>
         </div>
         <div class="adm-region">
           <div class="adm-region-head">
             <span class="adm-region-title">Top expensive requests</span>
-            <span class="adm-region-meta">raw cost</span>
+            <span class="adm-region-meta">customer revenue</span>
           </div>
           <div id="adm-aiusage-top"></div>
         </div>

@@ -247,7 +247,7 @@ this lands — the index only turns on the "similar prior fixes" context.
 
 ## What stays with the operator (not Replit, not the worker)
 
-Three decisions are human calls, listed here so nothing falls between the seams:
+Four decisions are human calls, listed here so nothing falls between the seams:
 
 1. **Pre-billing price sign-off.** Prompt 1 reports drift; a human applies the
    new versioned pricing row and confirms the Neuron rate before the next
@@ -257,7 +257,13 @@ Three decisions are human calls, listed here so nothing falls between the seams:
    Changing it is a DB operation — close the active row (`effective_to = now`),
    insert a new one — never an edit, so history keeps its billed rate. Internal
    orgs get `organisations.is_internal = 1` to bill at raw cost.
-3. **Free-allocation policy.** Cloudflare's daily free Neuron allocation is
+3. **The AI spend budget limit.** `AI_BUDGET_USD` on the Worker is the only
+   knob behind the admin AI-spend panel's budget pills, and it is optional:
+   unset means spend is tracked but never capped, and the panel says exactly
+   that rather than showing a reassuring green pill. Setting it is a Worker
+   var, not a Cloudflare provisioning step — see
+   [ADMIN-AI-SPEND.md](./ADMIN-AI-SPEND.md).
+4. **Free-allocation policy.** Cloudflare's daily free Neuron allocation is
    per-account; how AlgoSize sub-allocates it across orgs (and whether the
    margin applies once an org crosses into paid Neurons) is a product decision
    the meter records but does not decide.

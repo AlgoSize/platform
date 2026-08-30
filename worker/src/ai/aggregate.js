@@ -45,6 +45,13 @@ export function aggregateBy(rows, dimension) {
       return {
         [dimension]: key,
         requests: group.length,
+        // How many of this group's requests actually carry a measured cost.
+        // sumMeasured has always computed this; surfacing it is what lets a
+        // reader see "12 of 40 priced" instead of inferring coverage from a
+        // boolean. `measured` is the tri-state that boolean flattened:
+        // full (every request priced), partial (some), none (nothing).
+        measuredRequests: cost.measured,
+        measured: cost.measured === 0 ? "none" : cost.partial ? "partial" : "full",
         neurons: neurons.sum,
         // RAW Cloudflare cost — the platform's cost of goods for this group.
         totalCostUsd: cost.sum,
@@ -60,6 +67,71 @@ export function aggregateBy(rows, dimension) {
       };
     })
     .sort((a, b) => (b.totalCostUsd || 0) - (a.totalCostUsd || 0));
+}
+
+/**
+ * How much of a row set could be priced at all.
+ *
+ * The money figures above are sums over the measured rows only, so on their own
+ * they read as confident totals. This is the denominator that keeps them
+ * honest: how many requests were priced, how many were not, and what share of
+ * the whole that is. `state` is "empty" for no rows at all — which is a
+ * different fact from "rows exist and none of them could be priced" ("none"),
+ * and both are different from $0.
+ */
+export function coverage(rows, key = "total_cost") {
+  const { measured, total } = sumMeasured(rows, key);
+  return {
+    requests: total,
+    measuredRequests: measured,
+    unmeasuredRequests: total - measured,
+    // A percentage over zero rows is not 100% — it is undefined.
+    measuredPct: total === 0 ? null : (measured / total) * 100,
+    state: total === 0 ? "empty" : measured === 0 ? "none" : measured < total ? "partial" : "full",
+  };
+}
+
+/** The sortable columns of a rollup, and which scale each one lives on. */
+export const GROUP_SORTS = Object.freeze({
+  name: "label",
+  requests: "requests",
+  neurons: "neurons",
+  cost: "totalCostUsd",
+  margin: "platformMarginUsd",
+  revenue: "algosizePriceUsd",
+});
+
+/**
+ * Sort rollup groups, parking unmeasured groups below measured ones.
+ *
+ * On a money or neuron scale "unknown" has no rank: sorting it as 0 would put
+ * every unpriced group at the bottom ascending and — worse — at the *top*
+ * descending, where it reads as "cheapest" and "biggest spender" respectively.
+ * Neither is true. So groups with nothing measured are removed from the
+ * comparison entirely and appended after it, in both directions, ordered among
+ * themselves by request count so the block still has a stable, meaningful
+ * order. On `name` and `requests` — scales every group is on — nothing is
+ * parked, because there is no missing value to hide.
+ */
+export function sortGroups(groups, sortKey = "cost", dir = "desc") {
+  const field = GROUP_SORTS[sortKey] || GROUP_SORTS.cost;
+  const mul = dir === "asc" ? 1 : -1;
+  const onValueScale = field !== "label" && field !== "requests";
+
+  const cmp = (a, b) => {
+    if (field === "label") {
+      const av = String(a.label ?? a.key ?? ""), bv = String(b.label ?? b.key ?? "");
+      return mul * av.localeCompare(bv);
+    }
+    return mul * ((a[field] || 0) - (b[field] || 0));
+  };
+
+  const ranked = [], unranked = [];
+  for (const g of groups) {
+    if (onValueScale && (g[field] === null || g[field] === undefined)) unranked.push(g);
+    else ranked.push(g);
+  }
+  return ranked.sort(cmp).concat(unranked.sort((a, b) => b.requests - a.requests));
 }
 
 /** A YYYY-MM-DD (daily) or YYYY-MM (monthly) bucket from an epoch-ms row. */
@@ -84,6 +156,7 @@ export function costTrend(rows, granularity = "day") {
       platformMarginUsd: g.platformMarginUsd,
       algosizePriceUsd: g.algosizePriceUsd,
       requests: g.requests,
+      measuredRequests: g.measuredRequests,
       partial: g.partial,
     }));
 }

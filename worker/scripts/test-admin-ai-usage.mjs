@@ -41,16 +41,18 @@ await q(`INSERT INTO users (user_id, email, active_org_id, created_at, updated_a
          VALUES (?, ?, ?, ?, ?)`,
         "usr_admin", ADMIN, "org_a", Math.floor(now / 1000), Math.floor(now / 1000));
 
-async function usage({ org, model, feature, raw, margin, revenue }) {
+async function usage({ org, model, feature, raw, margin, revenue, inTok = null, outTok = null }) {
   await q(`INSERT INTO ai_usage
-            (org_id, feature_name, provider, model, neurons_consumed, total_cost,
+            (org_id, feature_name, provider, model, input_tokens, output_tokens,
+             neurons_consumed, total_cost,
              platform_margin_cost, algosize_price, status, created_at)
-           VALUES (?, ?, 'workers-ai', ?, ?, ?, ?, ?, 'ok', ?)`,
-          org, feature, model, raw === null ? null : raw * 1000,
+           VALUES (?, ?, 'workers-ai', ?, ?, ?, ?, ?, ?, ?, 'ok', ?)`,
+          org, feature, model, inTok, outTok, raw === null ? null : raw * 1000,
           raw, margin, revenue, now - 1000);
 }
 await usage({ org: "org_a", model: "priced", feature: "fix", raw: 0.1, margin: 0.025, revenue: 0.125 });
-await usage({ org: "org_b", model: "priced", feature: "fix", raw: 0.2, margin: 0.05, revenue: 0.25 });
+await usage({ org: "org_b", model: "priced", feature: "fix", raw: 0.2, margin: 0.05, revenue: 0.25,
+              inTok: 120000, outTok: 21000 });
 await usage({ org: "org_b", model: "unpriced", feature: "verify", raw: null, margin: null, revenue: null });
 // No organisations row: this tenant is outside the admin's enumerated scope and
 // must not enter any total, even though a malformed database contains the row.
@@ -100,6 +102,91 @@ expect(bad.status === 400, "unknown grouping is rejected rather than guessed");
 const anon = await worker.fetch(
   new Request("https://algosize.com/api/admin/ai-usage"), env, { waitUntil() {} });
 expect(anon.status === 401, "the route uses the same admin authentication chain");
+
+// ---------------------------------------------------------------------------
+// Coverage: the denominator under every money figure on the page.
+// ---------------------------------------------------------------------------
+const cov = modelReport.body.coverage;
+expect(cov.requests === 3 && cov.measuredRequests === 2 && cov.unmeasuredRequests === 1,
+  "coverage names how many calls could be priced and how many could not");
+expect(Math.abs(cov.measuredPct - (200 / 3)) < 1e-9 && cov.state === "partial",
+  "…as a share, so a total summed over measured rows only can be read as the lower bound it is");
+expect(approx(modelReport.body.summary.marginPct, 20),
+  "margin is reported as a share of customer revenue (a 25% markup is 20% of revenue)");
+expect(priced.measured === "full" && unpriced.measured === "none" &&
+       priced.measuredRequests === 2 && unpriced.measuredRequests === 0,
+  "each group carries the tri-state coverage that `partial` flattens");
+
+// ---------------------------------------------------------------------------
+// Sorting: unmeasured has no rank on a money scale, in EITHER direction.
+// ---------------------------------------------------------------------------
+const asc = await call("/api/admin/ai-usage?window=30d&groupBy=model&sort=cost&dir=asc");
+expect(asc.body.groups.map((g) => g.key).join(",") === "priced,unpriced",
+  "sorting cost ascending does not float the unpriced group to the top as if it were the cheapest");
+const desc = await call("/api/admin/ai-usage?window=30d&groupBy=model&sort=cost&dir=desc");
+expect(desc.body.groups.map((g) => g.key).join(",") === "priced,unpriced",
+  "…and sorting descending does not float it there as if it were the biggest spender either");
+const byName = await call("/api/admin/ai-usage?window=30d&groupBy=model&sort=name&dir=asc");
+expect(byName.body.groups.map((g) => g.key).join(",") === "priced,unpriced",
+  "on a scale every group is on (name) nothing is parked — there is no missing value to hide");
+const byReq = await call("/api/admin/ai-usage?window=30d&groupBy=model&sort=requests&dir=asc");
+expect(byReq.body.groups.map((g) => g.key).join(",") === "unpriced,priced",
+  "…and request count ranks the unpriced group normally, because its request count is measured");
+expect((await call("/api/admin/ai-usage?sort=vibes")).status === 400 &&
+       (await call("/api/admin/ai-usage?dir=sideways")).status === 400,
+  "an unknown sort column or direction is rejected rather than silently ignored");
+
+// ---------------------------------------------------------------------------
+// Top expensive: a row is explainable, not just a number.
+// ---------------------------------------------------------------------------
+const top = modelReport.body.topExpensive[0];
+expect(top.inputTokens === 120000 && top.outputTokens === 21000 && top.totalTokens === 141000,
+  "the most expensive request carries the token counts that explain the cost");
+const noTokens = modelReport.body.topExpensive.find((r) => r.orgId === "org_a");
+expect(noTokens.totalTokens === null,
+  "a request whose provider returned no usage block reports null tokens, never 0");
+
+// ---------------------------------------------------------------------------
+// Empty is not $0 — and an empty table is not an empty window.
+// ---------------------------------------------------------------------------
+async function callWith(otherEnv, path) {
+  const t = await issueJWT(otherEnv, "usr_admin", ADMIN, "active");
+  const res = await worker.fetch(new Request(`https://algosize.com${path}`, {
+    headers: { Cookie: `algosize_session=${t}` },
+  }), otherEnv, { waitUntil() {} });
+  return { status: res.status, body: await res.json() };
+}
+
+function freshEnv() {
+  const e = { ...env, DB: makeD1(), SESSIONS: kv(), USERS: kv() };
+  return e;
+}
+
+const bare = freshEnv();
+const bq = (sql, ...args) => bare.DB.prepare(sql).bind(...args).run();
+await bq(`INSERT INTO organisations (org_id, name, created_at, updated_at) VALUES (?, ?, ?, ?)`,
+         "org_a", "Aster", Math.floor(now / 1000), Math.floor(now / 1000));
+await bq(`INSERT INTO users (user_id, email, active_org_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+         "usr_admin", ADMIN, "org_a", Math.floor(now / 1000), Math.floor(now / 1000));
+
+const never = await callWith(bare, "/api/admin/ai-usage?window=7d");
+expect(never.body.summary.requests === 0 && never.body.summary.totalCostUsd === null,
+  "a window with no rows reports null cost, not $0 of spend");
+expect(never.body.emptyState.reason === "no_rows_ever" && never.body.lastRowAt === null,
+  "…and says nothing has EVER been recorded, which is a plumbing failure, not a quiet week");
+expect(never.body.coverage.state === "empty",
+  "coverage over zero rows is 'empty', not 100% measured");
+
+// Same database, one row well outside the 7-day window.
+const oldAt = now - 400 * 24 * 60 * 60 * 1000;
+await bq(`INSERT INTO ai_usage
+           (org_id, feature_name, provider, model, neurons_consumed, total_cost,
+            platform_margin_cost, algosize_price, status, created_at)
+          VALUES (?, 'fix', 'workers-ai', 'priced', ?, ?, ?, ?, 'ok', ?)`,
+         "org_a", 100, 0.1, 0.025, 0.125, oldAt);
+const quiet = await callWith(bare, "/api/admin/ai-usage?window=7d");
+expect(quiet.body.emptyState.reason === "no_rows_in_window" && quiet.body.lastRowAt === oldAt,
+  "rows outside the window read as a quiet period, with the last recorded call named");
 
 console.log("");
 if (failures) {

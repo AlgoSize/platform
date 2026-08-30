@@ -196,11 +196,13 @@ group("safety and accessibility");
   // Every value that reaches the DOM does so as text, never as markup: the
   // panel renders email addresses, org names and error strings that came from
   // customers, and one innerHTML with a template literal is all it takes.
-  const innerHtmlUses = [...js.matchAll(/innerHTML/g)].length;
-  expect(innerHtmlUses <= 1,
-    `innerHTML appears at most once, in el()'s own attribute handler (found ${innerHtmlUses})`);
-  expect(!/html:\s*[^"']/.test(js.replace(/else if \(k === "html"\) n\.innerHTML = v;/, "")),
-    "and nothing actually passes html: to el(), so every rendered value goes through textContent");
+  // Comments discuss the rule; only executable code can break it.
+  const code = js.replace(/^\s*\/\/.*$/gm, "");
+  const innerHtmlUses = [...code.matchAll(/innerHTML/g)].length;
+  expect(innerHtmlUses === 0,
+    `the panel has no raw-markup sink at all — el() dropped its html: branch (found ${innerHtmlUses})`);
+  expect(!/html:\s*[^"']/.test(code),
+    "and nothing passes html: to el(), so every rendered value goes through textContent");
 
   expect(/role: "dialog"/.test(js) && /"aria-modal": "true"/.test(js),
     "the drawer and palette are dialogs");
