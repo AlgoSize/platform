@@ -57,9 +57,46 @@ export async function handoffFindingsHandler(request, env, ctx) {
 
   const findings = ((run.result && run.result.source && run.result.source.findings) || [])
     .filter((f) => f && typeof f.fingerprint === "string");
-  const selected = fingerprint ? findings.filter((f) => f.fingerprint === fingerprint) : findings.slice(0, 50);
+
+  // WHICH findings does an agent get? Only the ones actually waiting for it.
+  //
+  // When the pipeline has run over this scan (POST /api/pipeline/run attaches
+  // its result), the findings parked as `waiting_for_agent` are the handoff:
+  // they survived triage and deep validation, so they are real, and the fix
+  // stage was routed away rather than run. Handing over the raw scan instead
+  // would send the agent everything triage already threw away — the exact
+  // false-positive noise the first three stages exist to remove — and bill the
+  // customer's own tokens for it.
+  //
+  // With no pipeline result the raw findings are still returned, because a
+  // scan that has never been through the funnel has no parked set and refusing
+  // would be worse than a wider list. Either way `selection` says which
+  // happened, so a caller is never guessing what it received.
+  const pipeline = (run.result && run.result.pipeline) || null;
+  const parkedPrints = pipeline && Array.isArray(pipeline.results)
+    ? new Set(pipeline.results
+        .filter((r) => r && r.outcome === "waiting_for_agent")
+        .map((r) => r.finding && r.finding.fingerprint)
+        .filter(Boolean))
+    : null;
+
+  let pool = findings, selection = "all_findings";
+  if (parkedPrints) {
+    pool = findings.filter((f) => parkedPrints.has(f.fingerprint));
+    selection = "parked";
+  }
+
+  const selected = fingerprint ? pool.filter((f) => f.fingerprint === fingerprint) : pool.slice(0, 50);
   if (fingerprint && selected.length === 0) {
-    return json({ error: "not_found", message: "no finding with that fingerprint in this run" }, 404);
+    // Distinguish "not in this run" from "in this run but not parked" — the
+    // second is a pipeline state a caller can act on, the first is a typo.
+    const existsUnparked = parkedPrints && findings.some((f) => f.fingerprint === fingerprint);
+    return json({
+      error: existsUnparked ? "not_parked" : "not_found",
+      message: existsUnparked
+        ? "that finding is in this run but is not waiting for an agent — the pipeline resolved it another way"
+        : "no finding with that fingerprint in this run",
+    }, 404);
   }
 
   // Best-effort prior-fix context for the first finding (retrieval degrades to
@@ -77,9 +114,13 @@ export async function handoffFindingsHandler(request, env, ctx) {
 
   const prompt = buildAgentPrompt(selected, { agent, chunks, runId });
   return json({
-    schema: "algosize.handoff/1",
+    schema: "algosize.handoff/2",
     runId,
     agent: AGENTS[agent] ? agent : "mcp",
+    // "parked" = the pipeline ran and these are the findings it handed over;
+    // "all_findings" = no pipeline result on this run, so this is the raw scan.
+    selection,
+    parked: selection === "parked" ? pool.length : null,
     findings: selected.map(slimFinding),
     retrieval: { available: wantRetrieval && chunks.length > 0, chunks },
     prompt,
@@ -160,17 +201,50 @@ export async function applyPatchHandler(request, env, ctx) {
 // Prompt assembly (pure)
 // ---------------------------------------------------------------------------
 
+// How each agent is told to connect to the Algosize MCP server.
+//
+// THE KEY IS NEVER IN HERE. Each snippet references the ASK_LIVE_KEY
+// environment variable by NAME and reads it from the agent's own environment,
+// so this document — which is rendered in a browser, copied to a clipboard,
+// and pasted into a chat log — carries a variable name and never a credential.
+// The server could not include a real key even if asked: it does not hold the
+// plaintext of one.
+const CONNECT = Object.freeze({
+  claude_code: 'claude mcp add algosize --url https://algosize.com/api/mcp \\\n  --header "Authorization: Bearer $ASK_LIVE_KEY"',
+  kimi: "kimi mcp connect algosize \\\n  --endpoint https://algosize.com/api/mcp \\\n  --token-env ASK_LIVE_KEY",
+  mcp: '{\n  "mcpServers": {\n    "algosize": {\n      "url": "https://algosize.com/api/mcp",\n      "headers": { "Authorization": "Bearer ${ASK_LIVE_KEY}" }\n    }\n  }\n}',
+});
+
 /** A ready-to-paste instruction document for the agent. Carries no secret. */
 export function buildAgentPrompt(findings, { agent = "mcp", chunks = [], runId = null } = {}) {
   const who = AGENTS[agent] || AGENTS.mcp;
+  const key = AGENTS[agent] ? agent : "mcp";
   const lines = [];
   lines.push(`# Fix ${findings.length} Algosize finding${findings.length === 1 ? "" : "s"} — for ${who}`);
   lines.push("");
-  lines.push("You are fixing security findings from an Algosize scan. For each finding below:");
+  lines.push("You are completing stages 4 and 5 of an Algosize audit: these findings have");
+  lines.push("already passed triage and deep validation, so they are real. Write the patches.");
+  lines.push("");
+  lines.push("## 1. Connect to the Algosize MCP server");
+  lines.push("");
+  lines.push("```" + (key === "mcp" ? "json" : "bash"));
+  lines.push(CONNECT[key]);
+  lines.push("```");
+  lines.push("");
+  lines.push("`ASK_LIVE_KEY` is an Algosize API key from your own environment. Never print its");
+  lines.push("value, echo it, or paste it into a file — read it from the environment only.");
+  lines.push("");
+  lines.push("## 2. For each finding");
+  lines.push("");
   lines.push("1. Open the named file at the named line and read the surrounding code.");
   lines.push("2. Make the MINIMAL change that removes the issue; preserve behaviour, names and formatting.");
   lines.push("3. Validate your fix with the `algosize_validate_fix` MCP tool (original + fixed file).");
+  lines.push("   Algosize computes the verdict, not you — a patch you believe is correct still");
+  lines.push("   has to pass static validation.");
   lines.push("4. When it passes, report it back with `algosize_record_patch` (runId + the finding's fingerprint + a one-line summary).");
+  lines.push("5. Stop and report if any finding comes back needing human review rather than working around it.");
+  lines.push("");
+  lines.push("## Findings");
   lines.push("");
   findings.forEach((f, i) => {
     const rule = ruleById(f.ruleId);

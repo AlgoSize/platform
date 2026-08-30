@@ -457,6 +457,44 @@ export async function getRun(env, scope, id) {
 }
 
 /**
+ * Attach a fix-pipeline result to the scan run it was computed from.
+ *
+ * The pipeline is ABOUT a scan: it reads that run's findings and decides, per
+ * finding, whether one is a false positive, needs a person, got a patch, or is
+ * parked for an external agent. Storing it anywhere else would leave the
+ * handoff endpoint joining two tables to answer "which findings on this run
+ * are waiting for an agent" — so it lives on the run, under `result.pipeline`,
+ * where getRun already returns it.
+ *
+ * The UPDATE is scoped by the same owner predicate as getRun, so a caller can
+ * only ever write to a run their own credential can already read. Returns true
+ * when a row was actually updated.
+ */
+export async function attachPipelineResult(env, scope, id, pipeline) {
+  const { userId = null, orgId = null } = typeof scope === "string" ? { userId: scope } : (scope || {});
+  if (!env || !env.DB || !id || (!userId && !orgId)) return false;
+  const run = await getRun(env, scope, id);
+  if (!run) return false;
+
+  const result = Object.assign({}, run.result || {}, { pipeline });
+  const serialized = JSON.stringify(result);
+  // A pipeline result that would blow the history row is dropped rather than
+  // truncated — half a result read as a whole one is worse than none.
+  if (serialized.length > MAX_INPUT_BYTES) return false;
+
+  const scopeSql  = orgId && userId ? "(org_id = ? OR user_id = ?)" : orgId ? "org_id = ?" : "user_id = ?";
+  const scopeArgs = orgId && userId ? [orgId, userId] : orgId ? [orgId] : [userId];
+  try {
+    await env.DB.prepare(
+      `UPDATE runs SET result_json = ? WHERE id = ? AND ${scopeSql}`
+    ).bind(serialized, id, ...scopeArgs).run();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Resolve the run scope for a request under either credential.
  *
  * A cookie session has a user (and, through them, an org); an API key has only

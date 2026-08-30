@@ -9,7 +9,7 @@
 // this handler never names a model. All three are read-only and carry no
 // secret; auth is the router's job (requireAuth).
 
-import { stageOptions, estimatePipelineCost, validateStageConfig, STAGE_IDS } from "../ai/stages.js";
+import { stageOptions, estimatePipelineCost, validateStageConfig, expandRouting, STAGE_IDS, FUNNEL_SHARE } from "../ai/stages.js";
 import { graphData, GRAPH_KINDS } from "../ai/models.js";
 
 const json = (body, status = 200) =>
@@ -19,7 +19,7 @@ const json = (body, status = 200) =>
 export async function stageModelsHandler(request, env) {
   const url = new URL(request.url);
   const graphKind = url.searchParams.get("graph");
-  const out = { schema: "algosize.stage-models/1", stages: stageOptions() };
+  const out = { schema: "algosize.stage-models/1", stages: stageOptions(), funnel: FUNNEL_SHARE };
   if (graphKind) {
     if (!GRAPH_KINDS.includes(graphKind)) {
       return json({ error: "invalid_graph", message: `graph must be one of ${GRAPH_KINDS.join(", ")}` }, 400);
@@ -35,10 +35,13 @@ export async function estimateStageCostHandler(request, env) {
   try { body = await request.json(); }
   catch { return json({ error: "invalid_json", message: "request body must be valid JSON" }, 400); }
   const config = pickConfig(body && body.config);
-  const routeToMcp = Array.isArray(body && body.routeToMcp)
-    ? body.routeToMcp.filter((s) => STAGE_IDS.includes(s)) : [];
+  // expandRouting applies the S4→S5 coupling once, here, rather than trusting
+  // the client to have sent both.
+  const routeToMcp = expandRouting(
+    Array.isArray(body && body.routeToMcp)
+      ? body.routeToMcp.filter((s) => STAGE_IDS.includes(s)) : []);
   const estimate = estimatePipelineCost(config, { routeToMcp });
-  return json({ schema: "algosize.stage-estimate/1", ...estimate, routeToMcp }, 200);
+  return json({ schema: "algosize.stage-estimate/2", ...estimate }, 200);
 }
 
 /** POST /api/ai/stage-config/validate — server-side Stage 5 ≠ Stage 4 + role check. */
@@ -47,7 +50,11 @@ export async function validateStageConfigHandler(request, env) {
   try { body = await request.json(); }
   catch { return json({ error: "invalid_json", message: "request body must be valid JSON" }, 400); }
   const config = pickConfig(body && body.config);
-  const result = validateStageConfig(config);
+  // The verdict depends on which stages the platform will actually run, so the
+  // routing selection is part of the question, not a client-side detail.
+  const routeToMcp = Array.isArray(body && body.routeToMcp)
+    ? body.routeToMcp.filter((s) => STAGE_IDS.includes(s)) : [];
+  const result = validateStageConfig(config, { routeToMcp });
   // A rejected config is a 422 so the client cannot mistake it for a network
   // success — the enforcement is the point of the endpoint.
   return json({ schema: "algosize.stage-config-validation/1", ...result }, result.ok ? 200 : 422);
