@@ -38,7 +38,11 @@
         if (v === null || v === undefined || v === false) return;
         if (k === "class") n.className = v;
         else if (k === "text") n.textContent = v;
-        else if (k === "html") n.innerHTML = v;
+        // No `html:` branch on purpose. This panel renders operator-facing
+        // strings that originate in customer data — org names, emails, error
+        // messages, model ids — so a raw-markup sink here would be one
+        // careless caller away from executing them. Every value goes through
+        // textContent or setAttribute; markup is built as nodes.
         else if (k.slice(0, 2) === "on") n.addEventListener(k.slice(2).toLowerCase(), v);
         else n.setAttribute(k, v === true ? "" : v);
       });
