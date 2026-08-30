@@ -535,6 +535,32 @@ console.log("\nthe gate does not scan the repository's own test corpus\n");
 }
 
 // ---------------------------------------------------------------------------
+console.log("\n…and neither does the workflow that collects the files\n");
+// ---------------------------------------------------------------------------
+//
+// The server-side filter protects every workflow already installed in a
+// repository, which is why it is the primary fix. But it only takes effect
+// once the Worker deploys, and the runner uploads the bytes either way. The
+// collector drops test corpora before the payload is built — cheaper, and it
+// fixes the architecture map too: a fake Express app under fixtures/ was
+// being counted as a service that does not exist.
+//
+// Asserted on the GENERATED YAML, not the generator source. Task #59's lesson:
+// this file builds Python and jq inside a JS template literal, where escapes
+// collapse, and source that reads correctly can generate text that does not.
+{
+  const { buildWorkflow } = await import("../src/handlers/ci.js");
+  const yaml = buildWorkflow({ origin: "https://algosize.com" });
+
+  expect(/TEST_CORPUS = \{"fixtures", "fixture", "__fixtures__", "testdata"\}/.test(yaml),
+    "the generated collector declares the test-corpus directories");
+  expect(/not is_env\(p\) and not is_test_corpus\(p\)/.test(yaml),
+    "…and actually filters the candidate list with it — declaring it is not applying it");
+  expect(/any\(part in TEST_CORPUS for part in p\.split\("\/"\)\)/.test(yaml),
+    "…matching whole path components, so a file named fixtures.js is still scanned");
+}
+
+// ---------------------------------------------------------------------------
 console.log("\nthe generated workflow's jq survives the template literal\n");
 // ---------------------------------------------------------------------------
 //

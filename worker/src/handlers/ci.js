@@ -749,6 +749,23 @@ jobs:
                       or b.startswith("Dockerfile")
                       or p.endswith(CONFIG_SUFFIX))
 
+          # Test corpora are excluded from the payload entirely, and both
+          # analyzers are better for it. A scanner's fixture directory is a
+          # deliberate collection of bad examples: reading it as a security
+          # scan reports the corpus as vulnerabilities — true, and useless —
+          # and this repository's own gate did exactly that, 535 findings and
+          # 23 criticals from files that exist to be found. The architecture
+          # map has the same problem from the other side: a fake Express app
+          # under fixtures/ becomes a service that does not exist.
+          #
+          # The server applies the same exclusions on ingest, so a workflow
+          # generated before this change is still protected. This is the
+          # cheaper half — the bytes never leave the runner.
+          TEST_CORPUS = {"fixtures", "fixture", "__fixtures__", "testdata"}
+
+          def is_test_corpus(p):
+              return any(part in TEST_CORPUS for part in p.split("/"))
+
           locks = []
           for p in tracked:
               if os.path.basename(p) in LOCK_NAMES:
@@ -756,7 +773,7 @@ jobs:
                   if c is not None:
                       locks.append({"path": p, "content": c})
 
-          candidates = [p for p in tracked if not is_env(p)]
+          candidates = [p for p in tracked if not is_env(p) and not is_test_corpus(p)]
           # Configs first: they carry the topology. If a budget runs out it
           # should cost import edges, never whole services.
           ordered = ([p for p in candidates if is_config(p)]
