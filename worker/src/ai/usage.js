@@ -11,6 +11,28 @@
 
 import { costOf } from "./pricing.js";
 
+// The ai_usage columns, in bind order. The single source of truth for the
+// INSERT below AND for the order buildUsageRecord emits — a test asserts all
+// three agree, so a column added in one place without the others fails loudly.
+export const AI_USAGE_COLUMNS = Object.freeze([
+  "org_id", "user_id", "repository_id", "feature_name", "provider", "model", "request_type",
+  "input_tokens", "output_tokens", "cached_input_tokens", "units",
+  "neurons_consumed", "neurons_source", "unit_cost", "total_cost", "currency", "price_verified",
+  "latency_ms", "status", "error_code", "fallback_provider", "fallback_model",
+  "scan_id", "fix_task_id", "request_metadata", "created_at",
+]);
+
+// A fully literal prepared statement — no interpolation, no concatenation with
+// a variable. Values are bound in AI_USAGE_COLUMNS order.
+const AI_USAGE_INSERT_SQL =
+  "INSERT INTO ai_usage " +
+  "(org_id, user_id, repository_id, feature_name, provider, model, request_type, " +
+  "input_tokens, output_tokens, cached_input_tokens, units, " +
+  "neurons_consumed, neurons_source, unit_cost, total_cost, currency, price_verified, " +
+  "latency_ms, status, error_code, fallback_provider, fallback_model, " +
+  "scan_id, fix_task_id, request_metadata, created_at) " +
+  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
 /**
  * Build a priced ai_usage row from a call.
  *
@@ -75,11 +97,13 @@ export async function recordAiUsage(env, result, ctx = {}) {
   try {
     if (!env || !env.DB || !ctx.orgId) return { recorded: false, reason: "no_db_or_org" };
     const r = buildUsageRecord(result, ctx);
-    const cols = Object.keys(r);
-    const placeholders = cols.map(() => "?").join(", ");
-    await env.DB.prepare(
-      `INSERT INTO ai_usage (${cols.join(", ")}) VALUES (${placeholders})`
-    ).bind(...cols.map((c) => r[c])).run();
+    // Static INSERT, not built by interpolation. The values are bound; the
+    // column list is a fixed literal. AI_USAGE_COLUMNS is the single source of
+    // bind order, and a test asserts it matches both this statement and the
+    // keys buildUsageRecord emits, so the two can never drift.
+    await env.DB.prepare(AI_USAGE_INSERT_SQL)
+      .bind(...AI_USAGE_COLUMNS.map((c) => r[c]))
+      .run();
     return { recorded: true };
   } catch (err) {
     // Deliberately swallowed. A metering failure is not the caller's problem.

@@ -10,7 +10,7 @@ import {
   aggregateBy, costTrend, topExpensive, budgetStatus, BUDGET_STATE, withDateBucket,
 } from "../src/ai/aggregate.js";
 import { recommend, graphData, GRAPH_KINDS, MODELS, TASK_FAMILIES } from "../src/ai/models.js";
-import { buildUsageRecord } from "../src/ai/usage.js";
+import { buildUsageRecord, AI_USAGE_COLUMNS } from "../src/ai/usage.js";
 
 let failures = 0;
 const expect = (cond, label) => {
@@ -165,6 +165,15 @@ console.log("\nusage record: priced row, content never stored\n");
 
   const unpriced = buildUsageRecord({ ok: true, provider: "workers-ai", model: "@cf/unknown/x", usage: {} }, { orgId: "o1", feature: "x" });
   expect(unpriced.total_cost === null, "an unpriced call records null cost, never 0");
+}
+
+console.log("\nusage record: columns, SQL, and record keys never drift\n");
+{
+  const rec = buildUsageRecord({ ok: true, provider: "workers-ai", model: "@cf/zai-org/glm-4.7-flash", usage: {} }, { orgId: "o", feature: "x" });
+  const keys = Object.keys(rec);
+  expect(keys.length === AI_USAGE_COLUMNS.length, `record has ${AI_USAGE_COLUMNS.length} columns`);
+  expect(keys.every((k, i) => k === AI_USAGE_COLUMNS[i]),
+    "buildUsageRecord keys match AI_USAGE_COLUMNS in order — the INSERT binds correctly");
 }
 
 console.log("");
