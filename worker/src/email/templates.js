@@ -281,6 +281,10 @@ export function monitorNewFindings({
   // is null unless that analyzer alerted, so a vuln-only monitor produces
   // byte-identical email to what it always has.
   archSection = null, estimateSection = null, algoSection = null,
+  // Source-scanner findings (migrations/0024). Carries rule, file and line
+  // only — never the matched snippet. See the caller in monitors/run.js for
+  // why an email is the one surface that does not show the line.
+  sourceSection = null,
 }) {
   const total = newAdvisories.length;
   const worst = ["critical", "high", "medium", "low"].find((s) => counts[s] > 0) || "unknown";
@@ -290,6 +294,11 @@ export function monitorNewFindings({
   // subject is the triage line: "2 new advisories · cost changed" tells the
   // reader whether tonight's email is security's problem or finance's.
   const subjectParts = [];
+  if (sourceSection && sourceSection.newFindings.length) {
+    const n = sourceSection.newFindings.length;
+    const crit = sourceSection.newFindings.filter((f) => f.severity === "critical").length;
+    subjectParts.push(`${n} new code finding${n === 1 ? "" : "s"}${crit ? ` (${crit} critical)` : ""}`);
+  }
   if (total > 0) {
     subjectParts.push(isBaseline
       ? `baseline: ${total} advisor${total === 1 ? "y" : "ies"}`
@@ -328,6 +337,18 @@ export function monitorNewFindings({
     textLines.push("");
   }
   if (fixCommand) textLines.push(`Fix: ${fixCommand}`, "");
+
+  if (sourceSection && sourceSection.newFindings.length) {
+    textLines.push(`CODE SCANNER — new findings (${sourceSection.newFindings.length})`);
+    for (const f of sourceSection.newFindings.slice(0, 10)) {
+      textLines.push(`  [${String(f.severity || "").toUpperCase()}] ${f.path}:${f.line} — ${f.title}`);
+      textLines.push(`    ${f.ruleId}${f.confidence ? ` (confidence: ${f.confidence})` : ""}`);
+    }
+    if (sourceSection.newFindings.length > 10) {
+      textLines.push(`  …and ${sourceSection.newFindings.length - 10} more in the dashboard`);
+    }
+    textLines.push("");
+  }
 
   if (archSection && archSection.newFindings.length) {
     textLines.push(archSection.isBaseline
@@ -390,6 +411,7 @@ export function monitorNewFindings({
       ${fixCommand ? `
       <p style="margin:18px 0 6px;font-size:13px;color:#8b949e">Start here:</p>
       <p style="margin:0 0 20px;padding:10px 12px;background:#0d1117;border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;color:#7ee0c0">${escapeHtml(fixCommand)}</p>` : ""}
+      ${sourceSectionHtml(sourceSection)}
       ${archSectionHtml(archSection)}
       ${estimateSectionHtml(estimateSection)}
       ${algoSectionHtml(algoSection)}
@@ -545,6 +567,22 @@ function microUsdText(micro) {
 }
 
 const SECTION_LABEL_STYLE = "margin:22px 0 6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#7ee0c0";
+
+function sourceSectionHtml(sourceSection) {
+  if (!sourceSection || !sourceSection.newFindings.length) return "";
+  const shown = sourceSection.newFindings.slice(0, 10);
+  const items = shown.map((f) => `
+      <div style="margin:0 0 10px;padding:10px 12px;background:#0d1117;border-left:3px solid #f87171;border-radius:0 4px 4px 0">
+        <p style="margin:0 0 3px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#f0f6fc">[${escapeHtml(String(f.severity || "").toUpperCase())}] ${escapeHtml(String(f.path || ""))}:${escapeHtml(String(f.line || ""))}</p>
+        <p style="margin:0 0 3px;font-size:13px;color:#c9d1d9">${escapeHtml(String(f.title || ""))}</p>
+        <p style="margin:0;font-size:12px;color:#8b949e">${escapeHtml(String(f.ruleId || ""))}${f.confidence ? ` · confidence: ${escapeHtml(String(f.confidence))}` : ""}</p>
+      </div>`).join("");
+  const more = sourceSection.newFindings.length > shown.length
+    ? `<p style="margin:0 0 10px;font-size:12px;color:#8b949e">…and ${sourceSection.newFindings.length - shown.length} more in the dashboard.</p>` : "";
+  return `
+      <p style="${SECTION_LABEL_STYLE}">Code scanner — new findings (${sourceSection.newFindings.length})</p>
+      ${items}${more}`;
+}
 
 function archSectionHtml(archSection) {
   if (!archSection || !archSection.newFindings.length) return "";

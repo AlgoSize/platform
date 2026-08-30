@@ -14,7 +14,7 @@ Where I am inferring rather than asserting, it says so.
 
 ---
 
-## Task 0 — Apply migration `0023_scorecard_evidence.sql` to production D1
+## Task 0 — Apply migrations `0023` and `0024` to production D1
 
 **Why this matters:** without it the Service scorecard's new **Cloud spend**
 column reads "first run pending" forever, however many nightly sweeps succeed,
@@ -31,14 +31,26 @@ The migration is additive and non-destructive. Two nullable columns on an
 existing table; no data rewritten, no column dropped, no downtime window:
 
 ```sql
+-- 0023
 ALTER TABLE monitors ADD COLUMN last_cost_json TEXT;
 ALTER TABLE monitors ADD COLUMN last_arch_scope_json TEXT;
+-- 0024
+ALTER TABLE monitors ADD COLUMN last_source_json TEXT;
 ```
+
+**0024 is the one that matters most.** Without it the nightly sweep scans your
+source, has nowhere to store the result, and the scorecard keeps grading the
+dependency list alone — so a repository with no vulnerable packages and a
+critical SQL injection in its own code renders a top grade. The scan runs, the
+finding exists, and the column that would show it stays empty. Nothing errors.
 
 ```bash
 cd worker
 ./node_modules/.bin/wrangler d1 execute algosize \
   --file=migrations/0023_scorecard_evidence.sql \
+  --remote --env production --config wrangler.toml
+./node_modules/.bin/wrangler d1 execute algosize \
+  --file=migrations/0024_monitor_source_findings.sql \
   --remote --env production --config wrangler.toml
 ```
 
@@ -48,8 +60,9 @@ production incident on 2026-08-20.
 
 **Then verify from outside, not from the command's exit code.** Open
 `https://algosize.com/api/admin/schema-check` signed in as an admin and expect
-migration `0023` present and applied (its checks are `monitors.last_cost_json`
-and `monitors.last_arch_scope_json`), `ok:true`, and 23 migrations total.
+`0023` applied (checks: `monitors.last_cost_json`, `monitors.last_arch_scope_json`)
+and `0024` applied (check: `monitors.last_source_json`), `ok:true`, and 24
+migrations total.
 
 If it reports NOT applied, say so and stop — do not re-run more than once. A
 repeated `ALTER TABLE` on a column that already exists is an error, not an
@@ -57,6 +70,10 @@ idempotent no-op, and the second failure would look exactly like the first
 never landing.
 
 **What to expect afterwards, so nothing reads as a bug.** Nothing backfills.
+The scorecard's **Code** column reads "first run pending" on every existing
+monitor until its next nightly sweep — that is correct, not a defect: a
+repository whose code was never stored is not a repository whose code is clean.
+
 Both columns stay NULL until each monitor's next sweep, and NULL renders as
 "first run pending" / the old architecture wording — never as a zero. Cloud
 spend additionally needs a `cur` path in that repository's

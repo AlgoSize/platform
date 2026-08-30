@@ -39,6 +39,7 @@ import {
   runEstimateForMonitor,
   runCostForMonitor, diffEstimate,
   runAlgoForMonitor, diffAlgoGrades,
+  diffSourceFindings, sourceBaselineFrom,
 } from "./analyzers.js";
 import { recordEmailSend } from "../oplog.js";
 import { recordSnapshot } from "../arch/snapshots.js";
@@ -136,6 +137,20 @@ export async function sweepDueMonitors(env, ctx, { now, cron = null } = {}) {
  * strictly less than re-delivering the message and re-sending every email
  * that already went out.
  */
+/**
+ * `source.status` from the audit response, as a monitor skip reason.
+ *
+ * Mapped rather than passed through so the operator-visible vocabulary in
+ * handlers/monitors.js stays a closed set — a new status added upstream shows
+ * up as the generic `source_failed` with a sentence, instead of reaching the
+ * scorecard as an unexplained code nobody has written a fix line for.
+ */
+const SOURCE_SKIP_REASON = Object.freeze({
+  unavailable:     "source_unreadable",
+  no_source_files: "no_source_files",
+  failed:          "source_failed",
+});
+
 async function persistSweepRuns(env, ctx, monitor, filings, nowSec) {
   const ids = {};
   for (const f of filings) {
@@ -250,6 +265,41 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
   const analyzers = monitor.analyzers || ["vuln"];
   const fetchImpl = (env && env.FETCH) || globalThis.fetch;
   const skips = [];
+
+  // ---- source scan (migrations/0024) --------------------------------------
+  //
+  // runLockfileAudit has ALWAYS performed this scan and returned it as
+  // `source`; the sweep read `advisories` beside it and dropped the rest.
+  // The scan was paid for — a GitHub tree listing, up to 120 file fetches, a
+  // full parse — and thrown away, and the consequence was not merely a missing
+  // feature: the scorecard graded the advisory list alone, so a repository
+  // with no CVEs and twelve critical injection findings rendered as "A · 0".
+  //
+  // `source.status` is the field that keeps this honest. Only "ok" means the
+  // code was read; every other value is recorded as a skip so the cell says
+  // "not measured" rather than showing an empty finding list as a clean bill.
+  const source = result && result.source;
+  let sourceDiff = null, sourceBaseline;
+  if (source && source.status === "ok") {
+    const findings = Array.isArray(source.findings) ? source.findings : [];
+    sourceDiff = diffSourceFindings(findings, monitor.lastSource);
+    sourceBaseline = sourceBaselineFrom(source, sourceDiff, nowSec);
+  } else if (source && source.status) {
+    // no_source_files is a permanent, honest answer ("this repository has
+    // nothing this scanner reads") and gets an empty baseline so a repo that
+    // later gains JavaScript baselines from nothing. unavailable/failed are
+    // outages: the previous baseline is deliberately left untouched, exactly
+    // as the secondary analyzers do, so one bad night cannot report the whole
+    // codebase as new tomorrow.
+    if (source.status === "no_source_files") {
+      sourceBaseline = { total: 0, counts: {}, keys: [], truncated: false, at: nowSec };
+    }
+    skips.push({ analyzer: "source", reason: SOURCE_SKIP_REASON[source.status] || "source_failed" });
+  } else {
+    // No block at all. Only reachable against a stored response from before
+    // the source scan existed — recorded rather than assumed clean.
+    skips.push({ analyzer: "source", reason: "source_unsupported" });
+  }
 
   let archDiff = null, archBaseline, archScope;
   if (analyzers.includes("arch")) {
@@ -393,6 +443,7 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
     skips,
     archKeys:    archBaseline,
     archScope,
+    source:      sourceBaseline,
     estimate:    estBaseline,
     algo:        algoBaseline,
     cost:        costSummary,
@@ -420,7 +471,8 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
   const anySecondaryAlert =
     (archDiff && archDiff.shouldAlert) ||
     (estDiff && estDiff.shouldAlert) ||
-    (algoDiff && algoDiff.shouldAlert);
+    (algoDiff && algoDiff.shouldAlert) ||
+    (sourceDiff && sourceDiff.shouldAlert);
 
   if (!diff.shouldAlert && !anySecondaryAlert) {
     return {
@@ -482,6 +534,20 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
         improvements: algoDiff.improvements,
         skipped:      algoSkippedEntries,
       } : null,
+      // Rule, file and line — deliberately NOT the snippet. Every other
+      // surface shows the matched line because the reader asked to see it;
+      // an alert email is broadcast to every subscribed member and retained
+      // in their mailboxes indefinitely, and a snippet is a verbatim slice of
+      // the customer's source. The scanner masks credentials in snippets, but
+      // "masked" is a weaker guarantee than "never sent", and a file:line is
+      // enough to act on.
+      sourceSection: sourceDiff && sourceDiff.shouldAlert ? {
+        newFindings: sourceDiff.newFindings.map((f) => ({
+          ruleId: f.ruleId, title: f.title, severity: f.severity,
+          path: f.path, line: f.line, confidence: f.confidence,
+        })),
+        isBaseline: sourceDiff.isBaseline,
+      } : null,
     }),
   };
 
@@ -514,7 +580,7 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
         newCount:   diff.newAdvisories.length,
         counts:     countBySeverityOrdered(diff.newAdvisories),
         isBaseline: diff.isBaseline,
-        sections:   slackSections({ archDiff, estDiff, algoDiff }),
+        sections:   slackSections({ archDiff, estDiff, algoDiff, sourceDiff }),
         dashboardUrl: `${origin}/dashboard/`,
       }),
     }, fetchImpl);
@@ -533,6 +599,7 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
     slackReason:   slackResult && !slackResult.sent ? slackResult.reason : null,
     analyzersRun:  analyzers,
     archNewCount:      archDiff ? archDiff.newFindings.length : 0,
+    sourceNewCount:    sourceDiff ? sourceDiff.newFindings.length : 0,
     estimateChanged:   !!(estDiff && estDiff.shouldAlert),
     algoRegressions:   algoDiff ? algoDiff.regressions.length : 0,
     skips,
@@ -634,8 +701,15 @@ export async function handleMonitorDlq(batch, env, ctx) {
  * Kept beside the caller rather than in routing.js because it reads the diff
  * shapes that only this module knows about.
  */
-function slackSections({ archDiff, estDiff, algoDiff }) {
+function slackSections({ archDiff, estDiff, algoDiff, sourceDiff }) {
   const out = [];
+  // Code first: it is the only section that can name a critical severity, and
+  // Slack truncates.
+  if (sourceDiff && sourceDiff.shouldAlert && sourceDiff.newFindings.length) {
+    const n = sourceDiff.newFindings.length;
+    const crit = sourceDiff.newFindings.filter((f) => f.severity === "critical").length;
+    out.push(`${n} new code finding${n === 1 ? "" : "s"}${crit ? ` (${crit} critical)` : ""}`);
+  }
   if (archDiff && archDiff.shouldAlert && archDiff.newFindings.length) {
     out.push(`${archDiff.newFindings.length} new architecture finding${archDiff.newFindings.length === 1 ? "" : "s"}`);
   }

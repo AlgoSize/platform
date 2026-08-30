@@ -1,5 +1,10 @@
 // GET /api/scorecard — one row per monitored repository, one column per
-// analyzer.
+// gradable result.
+//
+// Not one column per ANALYZER: the vuln analyzer produces two answers that a
+// reader acts on separately — third-party advisories and findings in the
+// repository's own code — and blending them into one grade means a clean
+// dependency tree can hide an exploitable codebase.
 //
 // This endpoint invents nothing. Every cell is read out of a monitor's stored
 // baseline, and a baseline that does not exist produces an explicitly
@@ -32,7 +37,19 @@ import { formatMicroUsd, bigORank } from "../monitors/analyzers.js";
 
 /** Columns, in display order. Ids are stable — the UI keys off them. */
 export const SCORECARD_COLUMNS = Object.freeze([
-  { id: "security",     label: "Security",     analyzer: "vuln" },
+  // "Security" was one word over two very different claims, in exactly the
+  // way "Cost" was. This column scores the ADVISORY LIST — third-party
+  // packages with published CVEs — and nothing else. A repository with no
+  // vulnerable dependencies and twelve critical injection findings in its own
+  // code graded "A · 0" under the old label, which is the most flattering
+  // possible reading of half a scan.
+  { id: "security",     label: "Dependencies", analyzer: "vuln" },
+  // The other half, from the same analyzer and the same sweep. Deliberately
+  // its own column rather than folded into the grade above: the two have
+  // different owners and opposite fixes — one is `npm audit fix`, the other is
+  // a code change — and a single letter blending them could be traced back to
+  // neither report.
+  { id: "code",         label: "Code",         analyzer: "vuln" },
   // Two money columns, and the labels have to keep them apart. "Cost" alone
   // sat above the compose-file ESTIMATOR — a projection from list prices for
   // infrastructure that may not exist yet — while the analyzer that reads
@@ -90,6 +107,7 @@ function scorecardRow(m) {
     error:     m.lastError,
     cells: {
       security:     securityCell(m, on, stale),
+      code:         codeCell(m, on, stale),
       cost:         costCell(m, on, stale),
       spend:        spendCell(m, on, stale),
       complexity:   complexityCell(m, on, stale),
@@ -173,6 +191,52 @@ function securityCell(m, on, stale) {
     stale,
   );
 }
+
+// ---------------------------------------------------------------------------
+// Code — what the source scanner found in the repository's own files.
+// ---------------------------------------------------------------------------
+//
+// Graded on the WORST severity present, not on the count, because that is how
+// the finding list is actually triaged: one critical injection outranks forty
+// low-confidence style findings, and a column that sorted by volume would put
+// the noisy repository above the exploitable one.
+//
+// The sweep has performed this scan since the SAST engine shipped and stored
+// nothing (migrations/0024 fixed that). Rows swept before it read `pending`,
+// never zero — a repository whose code was never stored is not a repository
+// whose code is clean.
+function codeCell(m, on, stale) {
+  if (!on.includes("vuln")) return off();          // not reachable: vuln is mandatory
+  const skipped = skipFor(m, "source");
+  if (skipped) return unmeasured(skipped.note, skipped.fix);
+
+  const src = m.lastSource;
+  if (!src) return pending("No source scan recorded yet.");
+
+  const counts = src.counts || {};
+  const worst = ["critical", "high", "medium", "low", "info"].find((k) => (counts[k] || 0) > 0);
+  if (!worst) {
+    // Measured and clean. This IS a real zero — the scan ran, read files, and
+    // found nothing — which is why it grades rather than reading as pending.
+    return graded("0", "No findings in the last scan.", 0, stale);
+  }
+  return graded(
+    `${SEVERITY_INITIAL[worst]} · ${src.total}`,
+    `Worst is ${worst}; ${src.total} finding${src.total === 1 ? "" : "s"} total.`,
+    // Same direction as every other column: higher sorts first. Severity
+    // dominates, count only breaks ties within a severity band.
+    SEVERITY_WEIGHT[worst] + Math.min(src.total, 99) / 100,
+    stale,
+  );
+}
+
+/** Severity as one letter, so the cell reads at a glance beside a count. */
+const SEVERITY_INITIAL = Object.freeze({
+  critical: "C", high: "H", medium: "M", low: "L", info: "I",
+});
+const SEVERITY_WEIGHT = Object.freeze({
+  critical: 400, high: 300, medium: 200, low: 100, info: 50,
+});
 
 // ---------------------------------------------------------------------------
 // Cost — the cheapest provider's monthly total from the last estimate.

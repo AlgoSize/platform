@@ -268,6 +268,82 @@ export async function runArchForMonitor(monitor, env, fetchImpl) {
   return { status: "ok", findings, keys, result };
 }
 
+// ---------------------------------------------------------------------------
+// Source scanner (SAST)
+// ---------------------------------------------------------------------------
+
+/**
+ * How many fingerprints one baseline stores.
+ *
+ * The scan reads at most 120 files, so a normal repository lands far under
+ * this. The cap exists for the pathological one, and when it bites the
+ * baseline says so — see diffSourceFindings for why a truncated baseline must
+ * never be diffed.
+ */
+export const MAX_SOURCE_BASELINE_KEYS = 500;
+
+/**
+ * Diff source findings against the stored baseline.
+ *
+ * Same contract as diffArchFindings, with one addition it needs and the
+ * others do not: a TRUNCATED previous baseline cannot be diffed. If the last
+ * sweep stored 500 of 700 fingerprints, the 200 it dropped are absent from
+ * the set and every one of them would be reported tonight as a brand-new
+ * critical finding — an alert storm generated entirely by our own cap, on a
+ * codebase where nothing changed. So a truncated baseline re-baselines
+ * instead: no alert, and the fresh list is stored.
+ */
+export function diffSourceFindings(findings, previous) {
+  const keys = [...new Set(findings.map((f) => f && f.fingerprint).filter(Boolean))];
+  const truncated = keys.length > MAX_SOURCE_BASELINE_KEYS;
+  const storedKeys = truncated ? keys.slice(0, MAX_SOURCE_BASELINE_KEYS) : keys;
+
+  const noUsableBaseline =
+    !previous || !Array.isArray(previous.keys) || previous.truncated === true;
+
+  if (noUsableBaseline) {
+    return {
+      newFindings: findings.slice(),
+      currentKeys: storedKeys,
+      truncated,
+      isBaseline: true,
+      // A baseline never alerts on its own. The FIRST sweep of a repository
+      // "discovers" every finding in it, and mailing that as "47 new critical
+      // issues tonight" is false — there was no previous night. The scorecard
+      // still grades it; the inbox is not the place to learn a repo's history.
+      shouldAlert: false,
+    };
+  }
+
+  const prev = new Set(previous.keys);
+  const newFindings = findings.filter((f) => f && f.fingerprint && !prev.has(f.fingerprint));
+  return {
+    newFindings,
+    currentKeys: storedKeys,
+    truncated,
+    isBaseline: false,
+    shouldAlert: newFindings.length > 0,
+  };
+}
+
+/**
+ * The stored shape for migrations/0024 — counts, total, capped keys, stamp.
+ *
+ * Counts come from the scan's own summary rather than being recounted here,
+ * so the number on the scorecard and the number in the report cannot disagree.
+ */
+export function sourceBaselineFrom(source, diff, nowSec) {
+  const bySeverity = (source && source.summary && source.summary.bySeverity) || {};
+  return {
+    total:     typeof (source && source.summary && source.summary.total) === "number"
+      ? source.summary.total : diff.currentKeys.length,
+    counts:    bySeverity,
+    keys:      diff.currentKeys,
+    truncated: diff.truncated,
+    at:        nowSec,
+  };
+}
+
 /** Diff arch findings against the stored baseline. Same contract as diffAdvisories. */
 export function diffArchFindings(findings, keys, previousKeys) {
   const isBaseline = previousKeys === null || previousKeys === undefined;

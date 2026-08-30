@@ -92,6 +92,11 @@ function rowToMonitor(row) {
     // What the X-ray READ last sweep (migrations/0023), so a zero can carry
     // its own evidence instead of asking to be believed.
     lastArchScope:   parseArchScope(row.last_arch_scope_json),
+    // What the SOURCE scanner found last sweep (migrations/0024). The sweep
+    // has always performed this scan and always thrown the answer away, which
+    // let a repository with zero CVEs and twelve injection findings grade as
+    // clean. Carries fingerprints so the next sweep can diff.
+    lastSource:      parseSourceBaseline(row.last_source_json),
     // Per-severity tally of the last completed run's advisories
     // (migrations/0017). null = never recorded; the scorecard renders that as
     // "not graded" rather than inventing an A.
@@ -119,6 +124,34 @@ function parseAnalyzers(raw) {
     return normalized || ["vuln"];
   } catch {
     return ["vuln"];
+  }
+}
+
+/**
+ * {"counts":{...},"total":n,"keys":[...],"truncated":bool,"at":sec} or null.
+ *
+ * Corrupt reads as null — "we have no source result" — never as an empty
+ * finding list. An empty list here would render on the scorecard as code that
+ * was read and found clean, which is the single most dangerous thing this
+ * table can assert about a parse failure.
+ */
+function parseSourceBaseline(raw) {
+  if (typeof raw !== "string" || !raw) return null;
+  try {
+    const d = JSON.parse(raw);
+    if (!d || typeof d.total !== "number" || d.total < 0) return null;
+    return {
+      total:     d.total,
+      counts:    (d.counts && typeof d.counts === "object") ? d.counts : {},
+      // A non-array reads as null rather than [] for the usual reason: an
+      // empty key list means "nothing was found", and the next sweep would
+      // diff against it and report the entire codebase as new.
+      keys:      Array.isArray(d.keys) ? d.keys.filter((k) => typeof k === "string") : null,
+      truncated: d.truncated === true,
+      at:        typeof d.at === "number" ? d.at : null,
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -395,6 +428,10 @@ export async function recordMonitorRun(env, monitorId, {
   // The cloud-spend summary and the X-ray's scope (migrations/0023). Same
   // `undefined` contract as the baselines above.
   cost = undefined, archScope = undefined,
+  // The source scanner's result for this sweep (migrations/0024). Same
+  // `undefined` contract: a sweep that could not read the source leaves the
+  // previous result alone rather than erasing it.
+  source = undefined,
   // Per-analyzer skips for this sweep (migrations/0022). Same `undefined`
   // contract: a caller that did not compute them leaves the column alone.
   skips = undefined,
@@ -430,6 +467,10 @@ export async function recordMonitorRun(env, monitorId, {
   if (archScope !== undefined) {
     sets.push("last_arch_scope_json = ?");
     binds.push(archScope === null ? null : JSON.stringify(archScope));
+  }
+  if (source !== undefined) {
+    sets.push("last_source_json = ?");
+    binds.push(source === null ? null : JSON.stringify(source));
   }
   if (skips !== undefined) {
     sets.push("last_skips_json = ?");
