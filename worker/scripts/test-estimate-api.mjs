@@ -16,6 +16,7 @@ import { estimateHandler, estimateProvidersHandler, sanitizedFailure, INPUT_TYPE
 import { adaptCompose, parseComposeMemoryToMilliGiB } from "../src/estimator/adapters/compose.js";
 import { adaptManual } from "../src/estimator/adapters/manual.js";
 import { validateSpec } from "../src/estimator/spec.js";
+import { fakeAwsKeyId } from "./_fake-secrets.mjs";
 
 let failures = 0;
 const ok = (m) => console.log(`  \x1b[32m✓\x1b[0m ${m}`);
@@ -221,7 +222,7 @@ console.log("\nPOST /api/estimate — rejections are bounded\n");
 console.log("\nsecret rejection — reported without the value\n");
 // ---------------------------------------------------------------------------
 {
-  const SECRET = "AKIAIOSFODNN7EXAMPLE";
+  const SECRET = fakeAwsKeyId();
   const withSecret = `
 apiVersion: v1
 kind: Pod
@@ -272,7 +273,7 @@ console.log("\nleak sweep — uploaded content never reaches any console channel
 {
   // Markers chosen to look like the things that actually leak: an internal
   // hostname, a service name, a region, and a credential.
-  const MARKERS = ["payments-db-prod-internal", "acme-secret-topology", "AKIAIOSFODNN7EXAMPLE"];
+  const MARKERS = ["payments-db-prod-internal", "acme-secret-topology", fakeAwsKeyId()];
   const hostile = `
 apiVersion: apps/v1
 kind: Deployment

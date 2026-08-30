@@ -27,6 +27,7 @@ import {
 } from "../src/email/google.js";
 import { sendTransactional } from "../src/email/transactional.js";
 import { welcomeFreeSignup } from "../src/email/templates.js";
+import { fakePemBanner } from "./_fake-secrets.mjs";
 
 let failures = 0;
 const ok   = (msg) => console.log(`  \x1b[32m✓\x1b[0m ${msg}`);
@@ -85,7 +86,7 @@ async function generateServiceAccountJson() {
   const b64   = Buffer.from(new Uint8Array(pkcs8)).toString("base64");
   // Wrap to 64 chars/line — matches Google's actual format.
   const wrapped = b64.match(/.{1,64}/g).join("\n");
-  const pem     = `-----BEGIN PRIVATE KEY-----\n${wrapped}\n-----END PRIVATE KEY-----\n`;
+  const pem     = `${fakePemBanner("BEGIN", "")}\n${wrapped}\n${fakePemBanner("END", "")}\n`;
   return {
     json: JSON.stringify({
       type: "service_account",
@@ -114,7 +115,7 @@ console.log("\nemail/google — parseServiceAccount\n");
   const good = parseServiceAccount(JSON.stringify({
     type: "service_account",
     client_email: "a@b.iam.gserviceaccount.com",
-    private_key: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n",
+    private_key: `${fakePemBanner("BEGIN", "")}\nabc\n${fakePemBanner("END", "")}\n`,
   }));
   expect(good && good.clientEmail === "a@b.iam.gserviceaccount.com", "extracts clientEmail");
   expect(good && good.tokenUri === "https://oauth2.googleapis.com/token", "defaults tokenUri");

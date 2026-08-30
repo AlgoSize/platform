@@ -22,6 +22,7 @@ import { summarize } from "../src/handlers/runs.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { fakeStripeLiveKey } from "./_fake-secrets.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO = join(__dirname, "..", "..");
@@ -305,7 +306,7 @@ console.log("\nevidence discipline\n");
     [{ path: "docker-compose.yml", content: EXPOSED_DB }],
     [{ path: "docker-compose.yml", content: ALL_THREE_LEGS }],
     [{ path: "Dockerfile", content: "FROM node\nRUN npm ci\n" }],
-    [{ path: ".env", content: "API_KEY=sk_live_9f3a8b2c7d1e4f5a6b0c\n" }],
+    [{ path: ".env", content: `API_KEY=${fakeStripeLiveKey()}\n` }],
   ];
 
   let checked = 0, bad = 0;
