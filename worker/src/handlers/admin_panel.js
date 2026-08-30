@@ -1127,6 +1127,8 @@ export async function adminSettingsHandler(request, env) {
   // Stripe key MODE from the prefix, which is a fact about the string we
   // already hold and requires no call. The value itself never leaves here.
   const key  = (env && env.STRIPE_SECRET_KEY) || "";
+  const errorReportingOptOut =
+    String((env && env.ERROR_REPORTING) || "").trim().toLowerCase() === "console";
   const mode = key.startsWith("sk_live_") ? "live" : key.startsWith("sk_test_") ? "test" : key ? "unknown" : null;
 
   const connections = [
@@ -1161,11 +1163,40 @@ export async function adminSettingsHandler(request, env) {
       ].filter(Boolean),
     },
     {
+      // Three states, not two. An absent DSN can mean "nobody has got to it
+      // yet" or "we thought about it and chose console logging" — and a panel
+      // that renders both as NOT CONFIGURED reports a decision as an
+      // oversight, which is the same class of error as reporting an unmeasured
+      // thing as clean. ERROR_REPORTING=console is how the decision gets said
+      // out loud; anything else leaves the row genuinely unconfigured.
       name: "Error reporting",
-      configured: Boolean(env.SENTRY_DSN),
-      detail: env.SENTRY_DSN ? "events are being sent" : "exceptions are logged to the console only",
+      configured: Boolean(env.SENTRY_DSN) || errorReportingOptOut,
+      detail: env.SENTRY_DSN
+        ? "events are being sent"
+        : errorReportingOptOut
+          ? "console only — set deliberately via ERROR_REPORTING=console"
+          : "exceptions are logged to the console only",
       testEndpoint: null,
-      missing: [!env.SENTRY_DSN && "SENTRY_DSN"].filter(Boolean),
+      // Nothing is missing when the absence is the decision.
+      missing: (!env.SENTRY_DSN && !errorReportingOptOut) ? ["SENTRY_DSN"] : [],
+      ...(errorReportingOptOut && !env.SENTRY_DSN
+        ? { note: "Workers logs are not durable, so a production exception is " +
+                  "unobserved once it scrolls away. Unset ERROR_REPORTING to go back " +
+                  "to being reminded." }
+        : {}),
+    },
+    {
+      // Presence is not reachability. bindingState() below reports whether
+      // env.SANDBOX exists; only a round trip distinguishes "bound and
+      // working" from "bound to something that is failing", and those have
+      // different remedies.
+      name: "Measurement sandbox",
+      configured: Boolean(env.SANDBOX && typeof env.SANDBOX.fetch === "function"),
+      detail: env.SANDBOX
+        ? "bound — press Test to run a probe function through it"
+        : "not bound; the optimizer cannot grade any function",
+      testEndpoint: "/api/admin/sandbox-check",
+      missing: [!env.SANDBOX && "SANDBOX service binding"].filter(Boolean),
     },
   ];
 

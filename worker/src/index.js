@@ -109,6 +109,7 @@ import {
   adminUsersCsvHandler,
   adminSchemaCheckHandler,
   adminStripeCheckHandler,
+  adminSandboxCheckHandler,
   requireAdmin,
 } from "./handlers/admin.js";
 import {
@@ -283,6 +284,7 @@ router.get( "/api/admin/schema-check", requireAdmin, adminSchemaCheckHandler);
 // repo — the portal default and the webhook endpoint both live in the Stripe
 // dashboard, and both fail only once a real customer hits them.
 router.get( "/api/admin/stripe-check", requireAdmin, adminStripeCheckHandler);
+router.get( "/api/admin/sandbox-check", requireAdmin, adminSandboxCheckHandler);
 
 // The control panel's own read surface. Everything below is behind the same
 // requireAdmin allowlist; there is no second, weaker gate anywhere on it.

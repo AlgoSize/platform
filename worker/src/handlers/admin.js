@@ -601,3 +601,98 @@ export async function adminStripeCheckHandler(request, env) {
           "STRIPE_SECRET_KEY belongs to.",
   }, 200);
 }
+
+
+// ---------------------------------------------------------------------------
+// GET /api/admin/sandbox-check
+// ---------------------------------------------------------------------------
+//
+// The counterpart to stripe-check, for the one binding whose absence is
+// invisible until a nightly sweep reports nonsense.
+//
+// `bindingState` in the settings endpoint already answers "is env.SANDBOX
+// present". That is necessary and not sufficient: a binding can be present and
+// point at a service that is failing, and the difference matters because the
+// remedies differ (deploy the sandbox vs. read the sandbox's own logs).
+//
+// Until now the only way to tell those apart was to trigger a full monitor
+// sweep and read the optimizer panel — a minutes-long round trip through
+// unrelated machinery, for a question that is one request wide. So this asks
+// directly: it sends a trivial function through the real binding and reports
+// which of four states the deployment is in.
+//
+// The probe is deliberately the most boring program that still proves the
+// whole path: it compiles, runs, and returns a value we can compare against.
+// If `1 + 1` comes back as 2 through the service binding, the sandbox is live.
+const SANDBOX_PROBE = "function run(input) { return input.a + input.b; }";
+
+export async function adminSandboxCheckHandler(request, env) {
+  const bound = Boolean(env && env.SANDBOX && typeof env.SANDBOX.fetch === "function");
+  if (!bound) {
+    return jsonResponse({
+      ok: false,
+      state: "not_bound",
+      message: "env.SANDBOX is not a service binding on this deployment.",
+      // The consequence, named — an operator reading this should not have to
+      // know what the binding is for.
+      impact: "The optimizer cannot grade any function. Monitors stay on FIRST RUN " +
+              "PENDING, no baseline is recorded, and no regression alert can fire.",
+      fix: "Deploy the algosize-sandbox Worker, then redeploy this Worker so the " +
+           "binding resolves. See [[env.production.services]] in worker/wrangler.toml.",
+    }, 200);
+  }
+
+  const startedAt = Date.now();
+  let res;
+  try {
+    res = await env.SANDBOX.fetch("https://sandbox.internal/run", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: SANDBOX_PROBE, input: { a: 1, b: 1 } }),
+    });
+  } catch (err) {
+    return jsonResponse({
+      ok: false,
+      state: "unreachable",
+      message: `The binding exists but the sandbox service did not answer: ${String(err && err.message || err)}`,
+      impact: "Grading fails for every entry until the sandbox service recovers.",
+      fix: "Check the algosize-sandbox Worker's own logs and deployment status.",
+      elapsedMs: Date.now() - startedAt,
+    }, 200);
+  }
+
+  let body = null;
+  try { body = await res.json(); } catch { /* handled as bad_response below */ }
+  const elapsedMs = Date.now() - startedAt;
+
+  if (!body || typeof body !== "object") {
+    return jsonResponse({
+      ok: false, state: "bad_response", elapsedMs,
+      message: `The sandbox answered ${res.status} with a body that is not JSON.`,
+      impact: "Grading fails for every entry.",
+      fix: "The bound service is answering but is not the sandbox, or is a version " +
+           "that predates the /run contract. Redeploy algosize-sandbox.",
+    }, 200);
+  }
+
+  // The probe's own result is the proof. A sandbox that answers but cannot
+  // execute — the exact production failure this endpoint exists for — comes
+  // back ok:false here, and reporting it as "working" because HTTP said 200
+  // would reproduce the original bug at a new layer.
+  const ran = body.ok !== false && body.sampleResult === 2;
+  if (!ran) {
+    return jsonResponse({
+      ok: false, state: "bad_response", elapsedMs,
+      message: body.ok === false
+        ? `The sandbox refused the probe: ${body.error || "unknown"} — ${body.message || ""}`.trim()
+        : `The sandbox ran the probe but returned ${JSON.stringify(body.sampleResult)} instead of 2.`,
+      impact: "Grading fails or produces wrong numbers.",
+      fix: "Check the algosize-sandbox Worker's logs; redeploy it if it is out of date.",
+    }, 200);
+  }
+
+  return jsonResponse({
+    ok: true, state: "bound_and_working", elapsedMs,
+    message: `The sandbox executed a probe function and returned the expected value in ${elapsedMs}ms.`,
+  }, 200);
+}
