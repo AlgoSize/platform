@@ -173,11 +173,16 @@
           }
           var msg = (json && (json.message || json.error)) || ("HTTP " + res.status);
           var err = new Error(msg);
+          err.status = res.status;
           if (json && json.helpUrl) err.helpUrl = json.helpUrl;
           if (json && json.error)   err.code    = json.error;
-          // Keep structured server feedback available to feature modules.
-          // Validation endpoints use an errors[] array so callers can place
-          // each message beside the control that needs attention.
+          // Some endpoints (e.g. POST /api/ai/stage-config/validate) reply
+          // with a structured `errors` array instead of a single `error`
+          // string — the per-item shape a caller needs to render inline
+          // (one message per field/stage), which json.error/err.code cannot
+          // carry. Attach it as-is when present so a caller can read
+          // err.errors without every endpoint's error shape being forced
+          // through the single-string convention.
           if (json && Array.isArray(json.errors)) err.errors = json.errors;
           if (json && json.schema) err.schema = json.schema;
           throw err;
@@ -210,8 +215,17 @@
           }
           var msg = (json && (json.message || json.error)) || ("HTTP " + res.status);
           var err = new Error(msg);
+          err.status = res.status;
           if (json && json.helpUrl) err.helpUrl = json.helpUrl;
           if (json && json.error)   err.code    = json.error;
+          // Some endpoints (e.g. POST /api/ai/stage-config/validate) reply
+          // with a structured `errors` array instead of a single `error`
+          // string — the per-item shape a caller needs to render inline
+          // (one message per field/stage), which json.error/err.code cannot
+          // carry. Attach it as-is when present so a caller can read
+          // err.errors without every endpoint's error shape being forced
+          // through the single-string convention.
+          if (json && Array.isArray(json.errors)) err.errors = json.errors;
           throw err;
         }
         return json;
