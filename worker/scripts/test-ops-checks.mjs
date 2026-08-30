@@ -185,6 +185,24 @@ console.log("\nERROR_REPORTING is documented where a reviewer will see it\n");
     "…and says why it is a var rather than a secret");
 }
 
+console.log("\nthe optimizer CLI does not build a shell string from --base\n");
+{
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("./optimizer-ci.mjs", import.meta.url), "utf8");
+
+  // A git branch name may legally contain ; $ & | and backticks, so `--base`
+  // interpolated into a shell string was a command-injection primitive. No
+  // workflow passes --base today, which is the only reason it was not
+  // reachable; the usage line advertises it and wiring it to a CI ref is the
+  // obvious next step.
+  expect(!/execSync\s*\(/.test(src),
+    "no execSync anywhere — a shell string is the whole hazard");
+  expect(/execFileSync\("git", \["diff", "--name-only"/.test(src),
+    "git is invoked with an argument array, so there is no shell to inject into");
+  expect(!/`git [^`]*\$\{/.test(src),
+    "no template literal builds a git command line from a variable");
+}
+
 console.log("");
 if (failures === 0) {
   console.log("\x1b[32m  all ops-check tests passed\x1b[0m\n");
