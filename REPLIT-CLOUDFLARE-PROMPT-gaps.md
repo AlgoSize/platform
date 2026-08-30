@@ -42,7 +42,19 @@ ALTER TABLE monitors ADD COLUMN last_source_json TEXT;
 source, has nowhere to store the result, and the scorecard keeps grading the
 dependency list alone — so a repository with no vulnerable packages and a
 critical SQL injection in its own code renders a top grade. The scan runs, the
-finding exists, and the column that would show it stays empty. Nothing errors.
+finding exists, and the column that would show it stays empty.
+
+> **Correction to an earlier version of this file.** It said "nothing errors".
+> That was wrong, and it was wrong in the dangerous direction. Until the fix in
+> `_store.js`, a missing column made D1 raise `no such column`, which threw out
+> of `recordMonitorRun` and killed the whole sweep — so the organisation lost
+> its **dependency** alert as well, the baseline froze, and the queue retried
+> the same failure nightly.
+>
+> The sweep now degrades instead: it drops whatever columns the database does
+> not have, writes everything else, and reports the dropped names to Sentry as
+> `missing_columns`. So an unapplied migration costs you the new feature and
+> nothing else. Apply it anyway — a degraded sweep is not a working one.
 
 ```bash
 cd worker

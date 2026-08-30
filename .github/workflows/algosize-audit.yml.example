@@ -185,6 +185,24 @@ jobs:
           if [ "$(jq -r 'has("summary") and (.runId != null)' response.json)" = "true" ]; then
             jq -r '"| Severity | Count |\n|---|---|\n| Critical | \(.summary.critical) |\n| High | \(.summary.high) |\n| Medium | \(.summary.medium) |\n| Low | \(.summary.low) |"' response.json >> table.md
           fi
+          # The security half of the same files. Before this, the comment was a
+          # severity table that spoke only for third-party packages — a clean
+          # table on a pull request that introduced a SQL injection.
+          if [ "$(jq -r '.source.status // empty' response.json)" = "ok" ]; then
+            {
+              echo ""
+              jq -r '"**Code scan** · \(.source.findings) finding(s) (\(.source.summary.critical) critical, \(.source.summary.high) high) in the files submitted"' response.json
+              if [ "$(jq -r '.source.findings' response.json)" != "0" ]; then
+                echo ""
+                jq -r '.source.top[] | "- \(.severity | ascii_upcase) \(.path):\(.line) — \(.title)"' response.json
+              fi
+            } >> table.md
+          elif [ "$(jq -r 'has("source")' response.json)" = "true" ]; then
+            {
+              echo ""
+              jq -r '"**Code scan** · did not run — \(.source.message // \"no reason given\")"' response.json
+            } >> table.md
+          fi
           if [ "$(jq -r 'has("architecture")' response.json)" = "true" ]; then
             {
               echo ""

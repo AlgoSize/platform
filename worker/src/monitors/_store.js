@@ -480,10 +480,72 @@ export async function recordMonitorRun(env, monitorId, {
     sets.push("last_severity_json = ?");
     binds.push(severities === null ? null : JSON.stringify(severities));
   }
-  binds.push(monitorId);
-  await env.DB.prepare(
-    `UPDATE monitors SET ${sets.join(", ")} WHERE monitor_id = ?`,
-  ).bind(...binds).run();
+  // Every optional column above is written by code that ships BEFORE its
+  // migration is applied — migrations here are run by hand, deliberately, so
+  // there is always a window where the deployed Worker knows about a column
+  // the database does not.
+  //
+  // Unguarded, that window is not a degraded feature: D1 raises
+  // "no such column", this UPDATE throws, and the sweep dies before it records
+  // ANYTHING — so the org loses its dependency alert, its baseline stays
+  // frozen, and the queue retries the same failure every night. A diagnostic
+  // column taking the whole audit down with it is the wrong trade in every
+  // direction.
+  return updateDroppingMissingColumns(env, sets, binds, monitorId);
+}
+
+/** How many columns we will drop before giving up and letting the error out. */
+const MAX_MISSING_COLUMN_RETRIES = 10;
+
+/**
+ * Run the UPDATE, dropping any column the database does not have, and report
+ * which ones were dropped.
+ *
+ * Progressive rather than a hardcoded "these columns are new" list, because
+ * this module cannot know which migration production is on — and a list would
+ * itself need updating with every migration, which is the maintenance burden
+ * that produced this bug. Dropping exactly the column SQLite names handles a
+ * database at any point in the migration history, including one behind by
+ * several.
+ *
+ * `sets[i]` and `binds[i]` are 1:1 by construction throughout recordMonitorRun,
+ * which is what makes removing a pair by index safe.
+ *
+ * Returns `{ droppedColumns }` — never silently. The caller reports it, so an
+ * unapplied migration surfaces as an operator-visible event rather than as a
+ * column that is quietly never written.
+ */
+async function updateDroppingMissingColumns(env, sets, binds, monitorId) {
+  const localSets = [...sets], localBinds = [...binds];
+  const droppedColumns = [];
+
+  for (let attempt = 0; attempt <= MAX_MISSING_COLUMN_RETRIES; attempt++) {
+    if (!localSets.length) return { droppedColumns };
+    try {
+      await env.DB.prepare(
+        `UPDATE monitors SET ${localSets.join(", ")} WHERE monitor_id = ?`,
+      ).bind(...localBinds, monitorId).run();
+      return { droppedColumns };
+    } catch (err) {
+      const missing = missingColumnFrom(err);
+      // Anything else — a locked database, a constraint, a bad bind — is a
+      // real failure and must propagate. Swallowing every error here would
+      // turn this safety net into the silent-failure it exists to prevent.
+      if (!missing) throw err;
+      const i = localSets.findIndex((set) => set.startsWith(missing + " ="));
+      if (i === -1) throw err;
+      localSets.splice(i, 1);
+      localBinds.splice(i, 1);
+      droppedColumns.push(missing);
+    }
+  }
+  return { droppedColumns };
+}
+
+/** The column name out of SQLite's "no such column: x", or null. */
+function missingColumnFrom(err) {
+  const m = /no such column:?\s*([A-Za-z0-9_]+)/i.exec(String((err && err.message) || err));
+  return m ? m[1] : null;
 }
 
 /**

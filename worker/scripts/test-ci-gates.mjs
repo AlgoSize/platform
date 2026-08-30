@@ -390,6 +390,100 @@ group("every generated gate is valid bash, and its jq actually interpolates");
   }
 }
 
+// ---------------------------------------------------------------------------
+console.log("\nthe PR comment speaks for your code, not only your packages\n");
+// ---------------------------------------------------------------------------
+//
+// The gate submitted source files all along: the architecture step globs
+// .js/.ts/.py/.go and posts them as `files` so the X-ray can find import
+// edges. The security half of those same bytes was thrown away, so the comment
+// was a severity table that spoke only for third-party packages — a clean
+// table on a pull request that introduced a SQL injection. This repository's
+// own PRs were an example of it.
+{
+  const { ciRunHandler } = await import("../src/handlers/ci.js");
+
+  const VULN_SRC = [
+    "const express = require('express');",
+    "app.get('/u/:id', (req, res) => {",
+    "  db.query('SELECT * FROM users WHERE id = ' + req.params.id, cb);",
+    "});",
+  ].join("\n");
+
+  const req = new Request("https://algosize.test/api/ci/runs", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      repo: "acme/demo", ref: "refs/pull/7/head", commit_sha: "abc123",
+      // No lockfiles at all — only the files the architecture step collects.
+      files: [
+        { path: "docker-compose.yml", content: "services:\n  web:\n    image: nginx\n" },
+        { path: "src/app.js", content: VULN_SRC },
+      ],
+    }),
+  });
+  req.authMethod = "api_key";
+  req.org = { orgId: "org_ci" };
+
+  // A real D1, so persistRun works and the run is filed exactly as it would
+  // be in production. SITE_ORIGIN is what the report link is built from.
+  const { makeD1 } = await import("./_d1-stub.mjs");
+  const env = { SITE_ORIGIN: ORIGIN, DB: makeD1() };
+  await env.DB.prepare(
+    `INSERT INTO organisations (org_id, name, stripe_customer_id, plan, sub_status, seats_purchased, created_at, updated_at)
+     VALUES ('org_ci','org_ci','cus_ci','paid','active',5,1,1)`).run();
+  const res = await ciRunHandler(req, env, null);
+  const body = await res.json();
+
+  expect(res.status === 200, `the gate answers 200 (got ${res.status})`);
+  expect(body.source && body.source.status === "ok",
+    `a source scan ran on the files already submitted (got ${JSON.stringify(body.source && body.source.status)})`);
+  expect(body.source.findings > 0,
+    `…and found the planted injection (${body.source.findings} finding(s))`);
+  expect(body.source.summary && body.source.summary.critical >= 1,
+    `…at critical severity (got ${JSON.stringify(body.source.summary)})`);
+  expect(Array.isArray(body.source.top) && body.source.top[0].path === "src/app.js" &&
+         typeof body.source.top[0].line === "number",
+    `…naming a concrete file and line for the comment (got ${JSON.stringify(body.source.top && body.source.top[0])})`);
+
+  // The security half must never be folded into the dependency verdict, and
+  // must never gate the build on its own. A brand-new analyzer that starts
+  // failing builds on its first run gets deleted from the workflow before
+  // anyone reads a finding.
+  expect(body.failed === false,
+    `source findings annotate and do not fail the build (failed=${body.failed})`);
+  expect(!body.summary || body.summary.critical === 0,
+    "…and are not counted into the dependency severity table");
+
+  // No snippet in the response: a PR comment is public on an open-source repo.
+  const asText = JSON.stringify(body);
+  expect(!/SELECT \* FROM users/.test(asText),
+    "the response carries rule, path and line — never the matched source line");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\nthe generated workflow's jq survives the template literal\n");
+// ---------------------------------------------------------------------------
+//
+// The regression from task #59, and it recurred writing this section. The
+// generator builds YAML inside a JS template literal, where `\(` is an escape
+// that collapses to `(` — so a jq interpolation written `\(.source.findings)`
+// reaches the workflow as the literal text `(.source.findings)` and the
+// comment posts that verbatim. It looks right in the source and is wrong in
+// the file, which is why this asserts on the OUTPUT.
+{
+  const { buildWorkflow } = await import("../src/handlers/ci.js");
+  const yaml = buildWorkflow({ origin: "https://algosize.com" });
+
+  const codeLines = (yaml.match(/.*Code scan.*/g) || []);
+  expect(codeLines.length >= 2,
+    `the workflow has a code-scan comment section (${codeLines.length} lines)`);
+  expect(codeLines.every((l) => !/[^\\]\((\.source|\.severity|\.path)/.test(l)),
+    `every jq interpolation kept its backslash${codeLines.length ? " — got: " + codeLines.map((l) => l.trim()).join(" | ") : ""}`);
+  expect(/\\\(\.source\.findings\)/.test(yaml),
+    "…specifically \\(.source.findings), the shape jq needs to interpolate");
+}
+
 console.log("");
 if (failures) {
   console.log(`\x1b[31m  ${failures} ci-gate test(s) failed\x1b[0m`);

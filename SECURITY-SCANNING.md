@@ -348,6 +348,34 @@ on languages it never said it could not read.
   rather than certainty, and a low-confidence detection should be read as
   "this is worth checking", not as a fact.
 
+## In continuous integration
+
+The PR gate reports source findings beside the dependency table, with **no
+workflow change**: the architecture step already globs `.js`/`.ts`/`.py`/`.go`
+and posts them as `files` so the X-ray can find import edges. Those same bytes
+are what the SAST engine wants, and the gate previously read them for
+architecture and discarded the security half.
+
+So the comment stopped being a severity table that speaks only for third-party
+packages — which is what it was on every repository, including this one's own
+pull requests.
+
+```
+**Code scan** · 3 finding(s) (1 critical, 2 high) in the files submitted
+
+- CRITICAL src/api/users.js:42 — SQL injection via string concatenation
+- HIGH src/ui/render.js:8 — Untrusted value assigned to innerHTML
+```
+
+**Source findings annotate; they do not fail the build.** The same posture
+`monthlyCeilingUsd: null` takes in `algosize.budget.json`: a brand-new analyzer
+that starts failing builds on its first run gets deleted from the workflow
+before anyone reads a finding, and then it protects nobody. Gating is roadmap
+item 5.
+
+The comment carries rule, path and line — never the matched source line. A pull
+request comment is public on an open-source repository.
+
 ## Scheduled scanning
 
 A monitor's nightly sweep runs the source scan on every pass, stores what it
@@ -390,5 +418,5 @@ as new findings tonight on a codebase where nothing changed.
 4. **Suppression comments.** `// algosize-ignore-next-line <ruleId> — reason`,
    with the reason required and surfaced in the report, so suppressions stay
    auditable rather than invisible.
-5. **CI gate for source findings.** The nightly sweep now grades code (see
-   below); the PR gate still comments on dependencies and architecture only.
+5. **Gating on source findings.** The PR gate now reports them (see below);
+   it deliberately does not fail a build on them yet.

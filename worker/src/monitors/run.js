@@ -430,7 +430,7 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
   // tonight rather than re-reporting tonight's list on top of tomorrow's.
   // Losing one email to a mail outage is a better failure than turning the
   // next email into the duplicate-heavy one this feature exists to prevent.
-  await recordMonitorRun(env, monitorId, {
+  const recorded = await recordMonitorRun(env, monitorId, {
     ranAt:       nowSec,
     resultHash:  hashKeySet(diff.currentKeys),
     advisoryIds: diff.currentKeys,
@@ -462,6 +462,18 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
       at:     nowSec,
     },
   });
+
+  // An unapplied migration is now survivable (see updateDroppingMissingColumns)
+  // — but survivable is not the same as fine, and it must never be quiet. A
+  // dropped column means a feature the deployed code believes it has is not
+  // being stored, and the only person who can fix that is an operator running
+  // `wrangler d1 execute`. So it is captured with the column names in it.
+  if (recorded && recorded.droppedColumns && recorded.droppedColumns.length) {
+    await captureException(env, ctx,
+      new Error(`monitor ${monitorId}: database is missing ${recorded.droppedColumns.join(", ")} — a migration has not been applied`),
+      { tags: { source: "monitors", phase: "record_run", reason: "missing_columns" },
+        extra: { monitorId, droppedColumns: recorded.droppedColumns } });
+  }
 
   // After the baseline, before the alert. After, because a run row must never
   // be able to cost the sweep its baseline; before, because the alert email
