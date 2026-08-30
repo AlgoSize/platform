@@ -17,6 +17,8 @@
 import { validateCostInput, analyzeCost } from "../analyzers/cost.js";
 import { analyzeCur, _CUR_HELP_URL } from "../analyzers/cur.js";
 import { validateVulnInput, analyzeVuln } from "../analyzers/vuln.js";
+import { ALL_KNOWN_EXTENSIONS, FETCHABLE_FILENAMES, GENERATED_LOCKFILES } from "../analyzers/sast/languages.js";
+import { profileRepository } from "../analyzers/sast/profile.js";
 import { validateAlgoInput, analyzeAlgo } from "../analyzers/algo.js";
 import { validateArchitectureInput, analyzeArchitecture } from "../analyzers/architecture.js";
 import { recordSnapshot } from "../arch/snapshots.js";
@@ -392,8 +394,54 @@ async function discoverLockfiles({ owner, repo }, fetchImpl, env) {
 // budget and a CPU limit, and because a scan that times out is worth less than
 // a smaller scan that finishes and says what it skipped.
 
-const SOURCE_EXT_RE = /\.(?:js|mjs|cjs|jsx|ts|tsx|py|rb|go|php|java|sh|bash)$/i;
-const SOURCE_NAME_RE = /(?:^|\/)(?:Dockerfile(?:\.[\w.-]+)?|\.env(?:\.[\w.-]+)?|docker-compose\.ya?ml|\.github\/workflows\/[\w.-]+\.ya?ml)$/i;
+// What counts as a source file is DERIVED from the language registry
+// (analyzers/sast/languages.js), not written out here.
+//
+// It used to be a literal thirteen-extension regex, and that regex was the
+// scanner's real coverage boundary: a Rust, C#, Swift, Kotlin, Solidity or
+// Terraform repository matched nothing, was fetched as zero files, and was
+// reported `no_source_files` — "No files in a language this scanner reads were
+// found". A reader takes that to mean the repository has nothing worth
+// scanning. It meant we never looked.
+//
+// Eleven rules in the SAST registry are tagged `languages: ["*"]` and fire on
+// any text. They could have run on every one of those repositories. Deriving
+// the filter from the registry is what connects them: adding a language there
+// now makes its files fetched, scanned and profiled, with no edit here.
+const SOURCE_NAME_RE = /(?:^|\/)(?:\.github\/workflows\/[\w.-]+\.ya?ml)$/i;
+
+/** Extensions the registry knows, as one anchored alternation. */
+const SOURCE_EXT_RE = new RegExp(
+  `\\.(?:${ALL_KNOWN_EXTENSIONS.map((e) => e.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})$`, "i");
+
+/** Exact basenames worth fetching: hand-authored manifests plus extensionless
+ *  languages. Generated lockfiles are excluded — see FETCHABLE_FILENAMES. */
+const SOURCE_BASENAMES = new Set(FETCHABLE_FILENAMES);
+
+/**
+ * True when the tree entry is something the scanner can use.
+ *
+ * Three ways in, and the second is the one the old regex could not express: a
+ * manifest like `requirements.txt` or `go.mod` carries no language extension
+ * and is exactly what the dependency audit reads.
+ */
+const GENERATED_LOCKFILE_SET = new Set(GENERATED_LOCKFILES);
+
+function isScannablePath(path) {
+  const base = String(path).replace(/\\/g, "/").split("/").pop().toLowerCase();
+  // Checked FIRST, because a generated lockfile also matches by extension:
+  // `package-lock.json` is `.json`, which the registry knows. It is hundreds
+  // of kilobytes of machine-written content that the dependency audit already
+  // fetches through its own path, and no source rule can say anything useful
+  // about it — so letting it in spends two of the scan's scarcest budgets
+  // (120 files, 3 MB) to learn nothing.
+  if (GENERATED_LOCKFILE_SET.has(base)) return false;
+  if (SOURCE_BASENAMES.has(base)) return true;
+  if (base === "dockerfile" || base.startsWith("dockerfile.")) return true;
+  if (base === ".env" || base.startsWith(".env.")) return true;
+  if (base.endsWith(".csproj") || base.endsWith(".fsproj")) return true;
+  return SOURCE_EXT_RE.test(base) || SOURCE_NAME_RE.test(path);
+}
 // Directories whose contents are somebody else's code, generated, or a
 // deliberate collection of bad examples. Scanning our own test fixtures would
 // report the scanner's own corpus as vulnerabilities — which is true and
@@ -429,14 +477,22 @@ async function discoverSourceFiles({ owner, repo }, fetchImpl, env) {
     try { body = await res.json(); } catch { continue; }
     const entries = Array.isArray(body && body.tree) ? body.tree : [];
 
-    const eligible = entries
-      .filter((e) => e && e.type === "blob" && typeof e.path === "string")
-      .filter((e) => SOURCE_EXT_RE.test(e.path) || SOURCE_NAME_RE.test(e.path))
+    const blobs = entries.filter((e) => e && e.type === "blob" && typeof e.path === "string");
+
+    // Profile the WHOLE tree, not the eligible subset. The profiler's job is
+    // to describe the repository — including the parts this scan will not
+    // read — so handing it the post-filter list would produce a coverage
+    // report that never mentions a gap, which is the one thing a coverage
+    // report exists to do.
+    const profile = profileRepository({ entries: blobs.map((e) => ({ path: e.path, size: e.size })) });
+
+    const eligible = blobs
+      .filter((e) => isScannablePath(e.path))
       .filter((e) => !SOURCE_SKIP_RE.test(e.path))
       .filter((e) => !/\.(?:min|bundle)\.js$/i.test(e.path))
       .filter((e) => !(typeof e.size === "number" && e.size > MAX_SOURCE_FILE_BYTES));
 
-    if (!eligible.length) return { files: [], truncated: false, totalInRepo: 0 };
+    if (!eligible.length) return { files: [], truncated: false, totalInRepo: 0, profile };
 
     // Shallowest first. When the cap bites, application code near the root
     // beats a deeply nested script — and the response says it was capped.
@@ -462,10 +518,21 @@ async function discoverSourceFiles({ owner, repo }, fetchImpl, env) {
 
     const files = results.filter(Boolean);
     if (files.length > 0 || eligible.length === 0) {
+      // Re-profile with the manifests we now hold. Dependency names are the
+      // strongest framework signal there is, and they exist only in file
+      // CONTENT — the first pass, from paths alone, can see that a
+      // package.json is present but not that it depends on `next`.
+      const contents = {};
+      for (const f of files) contents[f.path] = f.content;
+      const enriched = profileRepository({
+        entries: blobs.map((e) => ({ path: e.path, size: e.size })),
+        contents,
+      });
       return {
         files,
         truncated: eligible.length > files.length,
         totalInRepo: eligible.length,
+        profile: enriched,
       };
     }
   }
@@ -704,10 +771,20 @@ async function runSourceScan(repo, fetchImpl, env, ctx, request, userId) {
     };
   }
   if (!discovered.files.length) {
+    const profile = (discovered.profile && discovered.profile.repositoryProfile) || null;
     return {
       status: "no_source_files",
-      message: "No files in a language this scanner reads were found in the repository.",
+      // The profile is what turns this from a dead end into an answer. This
+      // branch used to say only "no files in a language this scanner reads",
+      // which is the same sentence for an empty repository and for a Rust
+      // codebase the extension filter silently excluded. Now it can name what
+      // IS there and why none of it was read.
+      message: profile && profile.languages.length
+        ? `No readable source files were fetched. ${discovered.profile.summary}`
+        : "No files in a language this scanner reads were found in the repository.",
       findings: [], summary: null, coverage: null,
+      profile,
+      profileSummary: (discovered.profile && discovered.profile.summary) || null,
     };
   }
 
@@ -722,6 +799,11 @@ async function runSourceScan(repo, fetchImpl, env, ctx, request, userId) {
         filesEligible: discovered.totalInRepo,
         truncated: discovered.truncated,
       },
+      // What the scanner decided it could do with this repository, and what it
+      // could not. Present on every ok scan so a reader never has to infer
+      // coverage from the absence of findings.
+      profile: (discovered.profile && discovered.profile.repositoryProfile) || null,
+      profileSummary: (discovered.profile && discovered.profile.summary) || null,
     };
   } catch (err) {
     console.error("analyze/vuln: source scan error", err);
@@ -973,6 +1055,61 @@ export async function analyzeAlgoHandler(request, env, ctx) {
  * which is also why the analyzer enforces its own size caps rather than
  * relying on the platform's.
  */
+/**
+ * POST /api/analyze/profile — the repository profiler as a standalone answer.
+ *
+ * Body: `{ repoUrl }`.
+ *
+ * Free and unmetered, deliberately. It reads one git-tree listing and no file
+ * contents, so it costs a single upstream request; and its whole purpose is to
+ * let someone find out what a scan WOULD cover before paying for one. Metering
+ * the question "will this tool even work on my repository?" is how a scanner
+ * gets a reputation for being useless on languages it simply never told anyone
+ * it could not read.
+ *
+ * The same profile rides along inside every repo scan's `source.profile`, so
+ * this endpoint adds a surface rather than a second code path.
+ */
+export async function analyzeProfileHandler(request, env, ctx) {
+  let body;
+  try { body = await request.json(); }
+  catch { return json({ error: "invalid_json", message: "request body must be valid JSON" }, 400); }
+
+  const repo = parseGithubUrl(body && body.repoUrl);
+  if (!repo) {
+    return json({
+      error: "invalid_repo_url",
+      message: "`repoUrl` must be a public GitHub repository URL, e.g. https://github.com/owner/name",
+    }, 400);
+  }
+
+  const fetchImpl = (env && env.FETCH) || fetch;
+  let discovered;
+  try {
+    discovered = await discoverSourceFiles(repo, fetchImpl, env);
+  } catch (err) {
+    await captureException(env, ctx, err, {
+      request, userId: request.user && request.user.userId,
+      tags: { source: "analyzer", analyzer: "analyze/profile", upstream: "github.com" },
+    });
+    discovered = null;
+  }
+
+  // Same rule as the scan: an unreadable repository is reported as unreadable,
+  // never as a repository with no languages in it.
+  if (!discovered || !discovered.profile) {
+    return json({
+      error: "repo_unreadable",
+      message: "The repository's tree could not be listed (private repository, or GitHub rate-limited the request).",
+    }, 502);
+  }
+
+  return json({
+    repoUrl: `https://github.com/${repo.owner}/${repo.repo}`,
+    ...discovered.profile,
+  }, 200);
+}
+
 export async function analyzeArchitectureHandler(request, env, ctx) {
   let body;
   try { body = await request.json(); }

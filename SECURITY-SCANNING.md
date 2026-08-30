@@ -207,6 +207,147 @@ rather than to silence.
 
 ---
 
+## Language auto-detection
+
+Every repository scan begins by profiling the repository: what languages are
+in it, which frameworks, which manifests, how deeply each part can be
+analysed, and what will not be covered.
+
+### Why it exists
+
+Coverage used to be one regex of thirteen extensions in `handlers/analyze.js`.
+A Rust, C#, Kotlin, Swift, Solidity or Terraform repository matched none of
+them, was fetched as **zero files**, and was reported:
+
+> No files in a language this scanner reads were found in the repository.
+
+Which reads as *there is nothing here to scan*. It was never true — eleven
+rules in the registry are tagged `languages: ["*"]` (hardcoded private keys,
+cloud credentials, weak crypto, `curl | sh`) and fire on any text. The rules
+existed and the files were never fetched.
+
+The profiler now **derives** the fetch filter from the language registry, so
+adding a language there is the whole of adding support: its files start being
+fetched, the language-agnostic rules start firing, and the summary names it.
+
+### Support tiers
+
+A tier is a claim about analysis that exists **today**, not a roadmap entry.
+
+| Tier | Name | What you get | Languages |
+| --- | --- | --- | --- |
+| 1 | deep semantic | Values followed from request to sink; a finding names its source | JavaScript |
+| 2 | parser/AST | Parsed to a syntax tree, no dataflow | *(none yet)* |
+| 3 | generic pattern | Lines matched against known-dangerous shapes | TypeScript, Python, Ruby, Go, Java, Kotlin, Scala, C#, PHP, Rust, Swift, C/C++, Objective-C, Dart, Elixir, Perl, Lua, Solidity, Shell, HTML/templates, SQL |
+| 4 | dependency/config | Not read as code; secrets, config mistakes and dependencies still checked | YAML, JSON, TOML, XML, Terraform, Docker, Properties, `.env`, Gradle |
+
+**Tier 2 is deliberately empty.** TypeScript sits at tier 3 rather than 2
+because acorn treats a type annotation as a syntax error — the pattern engine
+is genuinely all that runs on it. Promoting it because a TS parser is on the
+roadmap would make the coverage summary a promise instead of a description.
+
+### Analyzer routing
+
+The tier selects the code analyzers; two decisions are made separately.
+
+- **Secrets is unconditional.** A credential is a credential in a language
+  nobody can parse.
+- **Dependency analysis follows the lockfile, not the language.** It is routed
+  only where `analyzers/lockfile.js` can actually parse the manifest —
+  `package-lock.json`, `yarn.lock`, `requirements.txt`, `Gemfile.lock`,
+  `go.sum`. `Cargo.lock`, `composer.lock`, `pnpm-lock.yaml` and `pom.xml` are
+  **detected and reported as unaudited**. Routing dependency analysis wherever
+  a manifest exists would put an empty result in the report, and an empty
+  dependency result reads as a clean dependency tree.
+
+### Framework detection
+
+Signals are weighted, and every detection carries the evidence that produced
+it: `dependency` and `configFile` are worth 3, `markerFile` 2, `directory` 1.
+Thresholds are 3 = high, 2 = medium, 1 = low.
+
+One cap sits on top of the arithmetic: **a detection built only from directory
+names never rises above low confidence**, however many match. Two weight-1
+folders would otherwise sum to "medium", which is how a static site with
+`pages/` and `app/` gets announced as Next.js — sending a reviewer hunting for
+`getServerSideProps` in a project that has never had any.
+
+Detected: Next.js, React, Vue, Nuxt, Angular, Svelte/SvelteKit, Remix,
+Express, NestJS, Fastify, Django, Flask, FastAPI, Rails, Sinatra, Spring/Spring
+Boot, Gin, Echo, Fiber, `net/http`, Laravel, Symfony, ASP.NET Core.
+
+### Ignore rules
+
+Configurable per call; `DEFAULT_IGNORED_DIRS` covers vendored code
+(`node_modules`, `vendor`, `site-packages`), build output (`dist`, `build`,
+`.next`, `target`, `coverage`) and our own deliberately-vulnerable
+`fixtures/`. The engine returns **which rule** matched, so the summary reports
+`node_modules: 4,102 files` rather than an opaque total — a reader who thinks
+the scan missed something needs to see what swallowed it.
+
+### Where to get it
+
+| Surface | How |
+| --- | --- |
+| Inside a scan | `source.profile` and `source.profileSummary` on `POST /api/analyze/vuln` with a `repoUrl` |
+| Standalone | `POST /api/analyze/profile` — `{ repoUrl }`. Free and unmetered: one tree listing, no file reads |
+| MCP | `algosize_profile_repository` |
+| Dashboard | The coverage strip above source findings, with a per-language tier stripe |
+
+There is no CLI in this product, so there is no `scanner detect-languages`
+command; the API and MCP tool are the equivalents.
+
+`POST /api/analyze/profile` is deliberately unmetered. Its whole purpose is to
+answer *"would a scan even cover my repository?"* before you pay for one, and
+metering that question is how a scanner earns a reputation for being useless
+on languages it never said it could not read.
+
+### Example
+
+```json
+{
+  "repositoryProfile": {
+    "languages": [
+      { "name": "JavaScript", "fileCount": 12, "extensions": [".js"],
+        "supportTier": 1, "supportTierLabel": "deep semantic scan",
+        "analyzers": ["taint", "pattern", "secrets", "dependency"],
+        "evidence": ["next.config.js", "src/lib/db.js"] },
+      { "name": "Rust", "fileCount": 2, "extensions": [".rs"],
+        "supportTier": 3, "supportTierLabel": "generic pattern scan",
+        "analyzers": ["pattern", "secrets"],
+        "evidence": ["services/worker/src/main.rs"] }
+    ],
+    "frameworks": [
+      { "name": "Next.js", "language": "javascript", "confidence": "high",
+        "evidence": ["dependency: next", "file: next.config.js"] }
+    ],
+    "scanPlan": {
+      "selectedAnalyzers": ["dependency", "pattern", "secrets", "taint"],
+      "dependencyAudit": { "available": true, "from": ["package-lock.json"] },
+      "gaps": [
+        { "kind": "dependency_manifest_unsupported",
+          "detail": "Found cargo.lock, which the dependency audit cannot parse. Those packages are not checked against advisories." }
+      ]
+    }
+  },
+  "summary": "Detected JavaScript and Rust. JavaScript gets deep semantic scan — values are followed from request to sink…"
+}
+```
+
+### Limitations
+
+- **Detection is path-first.** Content is sampled only from manifests the scan
+  already fetched, so a language embedded in an unusual extension is missed.
+  This is a deliberate performance trade: profiling 5,000 paths takes ~30ms.
+- **Generated lockfiles are recognised but not downloaded.** Detection from a
+  path is free; fetching `package-lock.json` would spend the scan's 120-file
+  and 3 MB budgets on machine-written JSON.
+- **A tier-3 language gets no dataflow.** Findings that depend on following a
+  value across statements are not reported for anything but JavaScript.
+- **Framework detection is a heuristic.** It reports confidence and evidence
+  rather than certainty, and a low-confidence detection should be read as
+  "this is worth checking", not as a fact.
+
 ## Scheduled scanning
 
 A monitor's nightly sweep runs the source scan on every pass, stores what it
@@ -239,8 +380,9 @@ as new findings tonight on a codebase where nothing changed.
 
 ## Roadmap
 
-1. **TypeScript AST coverage.** The largest single gap; needs a TS-aware
-   parser inside the Worker's bundle budget.
+1. **TypeScript AST coverage.** The largest single gap, and the one that would
+   move TypeScript from tier 3 to tier 1; needs a TS-aware parser inside the
+   Worker's bundle budget.
 2. **Interprocedural taint.** Build a call graph and follow tainted arguments
    into callees — the change that would move several `medium` rules to `high`.
 3. **Framework-aware authorization.** Model the router's middleware chain so

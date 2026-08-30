@@ -64,6 +64,62 @@ export const POSTURE_TOOLS = [
   },
 
   {
+    name: "algosize_profile_repository",
+    title: "Profile a repository's languages and scan coverage",
+    description:
+      "Detect the languages, frameworks and manifests in a public GitHub repository, and report how " +
+      "deeply each part can be scanned BEFORE running a scan. Free, read-only and unmetered: it reads " +
+      "one git-tree listing and no file contents. " +
+      "Each language carries a support tier — 1 semantic (values followed from source to sink), " +
+      "2 AST, 3 pattern (line matching only), 4 config (not read as code, but secrets, configuration " +
+      "and dependencies still checked). " +
+      "Read `scanPlan.gaps` before treating a clean scan as a clean repository: it names what will NOT " +
+      "be covered, including manifests the dependency audit cannot parse.",
+    scope: SCOPES.READ,
+    paidOnly: false,
+    metered: false,
+    annotations: READ_ONLY,
+    inputSchema: {
+      type: "object",
+      properties: {
+        repoUrl: { type: "string", description: "Public GitHub repository URL, e.g. https://github.com/owner/name" },
+      },
+      required: ["repoUrl"],
+      additionalProperties: false,
+    },
+    outputSchema: {
+      type: "object",
+      properties: { repositoryProfile: { type: "object" }, summary: { type: "string" } },
+    },
+    async run({ args, request, env, ctx }) {
+      const res = await callHandler(CHAINS.profile.chain, {
+        method: CHAINS.profile.method, path: CHAINS.profile.path, request, env, ctx,
+        body: { repoUrl: args && args.repoUrl },
+      });
+      const fail = failureOf(res, "Profiling the repository");
+      if (fail) return fail;
+
+      const d = res.json || {};
+      const p = d.repositoryProfile || {};
+      const langs = p.languages || [];
+      const lines = langs.map((l) =>
+        `• ${l.name} — ${l.fileCount} file${l.fileCount === 1 ? "" : "s"}, tier ${l.supportTier} ` +
+        `(${l.supportTierLabel}) → ${l.analyzers.join(", ")}`);
+      const gaps = ((p.scanPlan && p.scanPlan.gaps) || []).map((g) => `! ${g.detail}`);
+
+      return {
+        text: [
+          d.summary || "",
+          "",
+          ...lines,
+          ...(gaps.length ? ["", "Not covered:", ...gaps] : []),
+        ].join("\n").trim(),
+        structured: { repositoryProfile: p, summary: d.summary || null },
+      };
+    },
+  },
+
+  {
     name: "algosize_list_arch_snapshots",
     title: "List architecture snapshots",
     description:

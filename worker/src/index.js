@@ -6,6 +6,7 @@
 //   POST /api/stripe/webhook      → signature-verified webhook
 //   POST /api/analyze/cost        → cloud cost-savings analyzer (Task #5)
 //   POST /api/analyze/vuln        → vulnerability scanner (Task #6)
+//   POST /api/analyze/profile     → repository language profiler (pre-scan)
 //   POST /api/analyze/algo        → algorithm optimizer (Task #7)
 //   POST /api/logout              → revoke session + clear cookie (Task #8)
 //   GET  /api/me                  → dashboard hydration (Task #11)
@@ -61,6 +62,7 @@ import {
   analyzeVulnHandler,
   analyzeAlgoHandler,
   analyzeArchitectureHandler,
+  analyzeProfileHandler,
 } from "./handlers/analyze.js";
 import {
   listMonitorsHandler,
@@ -209,6 +211,9 @@ router.post("/api/analyze/algo",    analyzeRateLimit, requireAuth, apiKeyAnalyze
 // submission is a whole repository, so it is metered like any other run
 // rather than being cheaper because it makes no upstream calls.
 router.post("/api/analyze/architecture", analyzeRateLimit, requireAuth, apiKeyAnalyzeRateLimit, enforceQuota(analyzeArchitectureHandler));
+// Deliberately NOT quota-enforced: one tree listing, no file reads, and its
+// purpose is to answer "would a scan cover my repository?" before you buy one.
+router.post("/api/analyze/profile", analyzeRateLimit, requireAuth, analyzeProfileHandler);
 
 // Per-finding fix generation ("Generate fix" on vuln + architecture
 // findings). Rate-limited and authenticated, but deliberately NOT behind

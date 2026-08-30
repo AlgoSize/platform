@@ -5106,3 +5106,47 @@ a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
 .sast-tag-cwe    { color: var(--accent); border-color: var(--accent); }
 .sast-tag-owasp  { color: var(--accent-warm); border-color: var(--accent-warm); }
 .sast-tag-module { color: var(--text-dim); }
+
+/* ---------------------------------------------------------------------------
+   Repository coverage profile (language auto-detection)
+   ---------------------------------------------------------------------------
+   Rendered above the findings so "what was scanned" is read before "what was
+   found". The tier stripe is the load-bearing part: it is the difference
+   between a clean result over deep analysis and a clean result over a language
+   nobody can parse, and colour is the only way that lands at a glance. */
+.scan-profile {
+  margin: 0 0 var(--s-4);
+  padding: var(--s-3);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  display: flex; flex-direction: column; gap: var(--s-2);
+}
+.scan-profile-summary { margin: 0; font-size: 0.86rem; color: var(--text-muted); line-height: 1.5; }
+.scan-profile-langs { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.scan-profile-lang {
+  display: inline-flex; align-items: baseline; gap: var(--s-2);
+  padding: 3px 9px 3px 7px;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+.scan-profile-lang-name { color: var(--text); font-weight: 600; }
+.scan-profile-lang-meta { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+/* Deepest coverage reads as the accent; shallowest is deliberately muted, so a
+   grid of tier-4 chips does not look like a thorough scan. */
+.scan-profile-tier-1 { border-left-color: var(--accent); }
+.scan-profile-tier-2 { border-left-color: var(--accent); opacity: 0.92; }
+.scan-profile-tier-3 { border-left-color: var(--accent-warm); }
+.scan-profile-tier-4 { border-left-color: var(--border); opacity: 0.85; }
+.scan-profile-fw { margin: 0; font-size: 0.72rem; color: var(--text-muted); }
+.scan-profile-gap {
+  margin: 0;
+  padding-left: var(--s-3);
+  border-left: 2px solid var(--accent-warm);
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
