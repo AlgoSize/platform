@@ -454,7 +454,201 @@
       wrap.appendChild(el("pre", { class: "result-snippet" }, result.fixCommand));
     }
 
+    renderSourceFindings(wrap, result);
     showOutput("vuln", wrap);
+  }
+
+  // -------------------------------------------------------------------------
+  // Source-code findings (SAST)
+  // -------------------------------------------------------------------------
+  //
+  // Rendered as its own labelled section, deliberately never merged into the
+  // advisory table above. "A package you install has a published CVE" and "a
+  // line you wrote builds SQL from a request parameter" are different work,
+  // owned by different people, on different timescales — one is an upgrade,
+  // the other is a code change. Interleaving them produces a list nobody can
+  // triage.
+
+  var SEV_ORDER = ["critical", "high", "medium", "low", "info"];
+
+  function renderSourceFindings(wrap, result) {
+    var src = result.source;
+    // The key is absent on a stored run from before source scanning existed.
+    // That is not "no findings" — it is "this run never looked" — so nothing
+    // is rendered rather than an empty, reassuring section.
+    if (!src) return;
+
+    wrap.appendChild(el("h4", { class: "result-section-title" }, "Source code"));
+
+    if (src.status !== "ok") {
+      wrap.appendChild(el("p", { class: "result-reason" },
+        src.message || "The source scan did not run."));
+      return;
+    }
+
+    var findings = src.findings || [];
+    var cov = src.coverage || {};
+
+    var meta = "Scanned " + (cov.filesScanned || 0) + " file" +
+      ((cov.filesScanned === 1) ? "" : "s") +
+      (cov.astParsed ? " · " + cov.astParsed + " with full AST + taint analysis" : "");
+    // Said out loud, because a file the parser could not read was covered by
+    // the pattern engine alone. Silence here would let partial coverage read
+    // as full coverage, which is the one claim a security tool must not make.
+    if (cov.astUnparseable && cov.astUnparseable.length) {
+      meta += " · " + cov.astUnparseable.length + " pattern-only (unparseable)";
+    }
+    if (cov.truncated) {
+      meta += " · capped at " + (cov.filesScanned || 0) + " of " + cov.filesEligible;
+    }
+    wrap.appendChild(el("p", { class: "result-item-meta mono" }, meta));
+
+    if (!findings.length) {
+      wrap.appendChild(emptyState("No source-code findings in the files scanned."));
+      return;
+    }
+
+    var counts = (src.summary && src.summary.bySeverity) || {};
+    var stats = el("div", { class: "result-stats result-stats-4" });
+    SEV_ORDER.forEach(function (sev) {
+      if (sev === "info" && !counts.info) return;
+      stats.appendChild(statCard(sev, String(counts[sev] || 0), "sev-" + sev));
+    });
+    wrap.appendChild(stats);
+
+    // Filters. Built from what is actually present rather than from a fixed
+    // list, so a filter never offers a category with nothing behind it.
+    var state = { severity: "all", category: "all", confidence: "all" };
+    var listBox = el("div", { class: "sast-list" });
+
+    wrap.appendChild(buildSastFilters(findings, state, function () {
+      drawSastList(listBox, findings, state);
+    }));
+    wrap.appendChild(listBox);
+    drawSastList(listBox, findings, state);
+  }
+
+  function distinct(findings, key) {
+    var seen = [];
+    findings.forEach(function (f) {
+      if (f[key] && seen.indexOf(f[key]) === -1) seen.push(f[key]);
+    });
+    return seen;
+  }
+
+  function buildSastFilters(findings, state, onChange) {
+    var bar = el("div", { class: "sast-filters" });
+
+    function group(label, key, values) {
+      if (values.length < 2) return;      // a filter with one option is furniture
+      var g = el("div", { class: "sast-filter-group" });
+      g.appendChild(el("span", { class: "sast-filter-label mono" }, label));
+      ["all"].concat(values).forEach(function (v) {
+        var b = el("button", {
+          type: "button",
+          class: "seg-btn" + (state[key] === v ? " is-active" : ""),
+        }, v === "all" ? "All" : v);
+        b.addEventListener("click", function () {
+          state[key] = v;
+          [].forEach.call(g.querySelectorAll(".seg-btn"), function (x) {
+            x.classList.remove("is-active");
+          });
+          b.classList.add("is-active");
+          onChange();
+        });
+        g.appendChild(b);
+      });
+      bar.appendChild(g);
+    }
+
+    group("Severity", "severity",
+      SEV_ORDER.filter(function (s) { return distinct(findings, "severity").indexOf(s) !== -1; }));
+    group("Category", "category", distinct(findings, "category").sort());
+    group("Confidence", "confidence",
+      ["high", "medium", "low"].filter(function (c) {
+        return distinct(findings, "confidence").indexOf(c) !== -1;
+      }));
+    return bar;
+  }
+
+  function drawSastList(box, findings, state) {
+    box.textContent = "";
+    var shown = findings.filter(function (f) {
+      return (state.severity === "all"   || f.severity === state.severity) &&
+             (state.category === "all"   || f.category === state.category) &&
+             (state.confidence === "all" || f.confidence === state.confidence);
+    });
+
+    if (!shown.length) {
+      box.appendChild(el("p", { class: "result-reason" },
+        "No findings match these filters."));
+      return;
+    }
+
+    // Grouped by file: a reviewer opens one file and fixes everything in it,
+    // rather than paging between files per finding.
+    var byFile = {};
+    var order = [];
+    shown.forEach(function (f) {
+      if (!byFile[f.path]) { byFile[f.path] = []; order.push(f.path); }
+      byFile[f.path].push(f);
+    });
+
+    order.forEach(function (path) {
+      var fileBox = el("div", { class: "sast-file" });
+      fileBox.appendChild(el("div", { class: "sast-file-head mono" },
+        path + "  ·  " + byFile[path].length + " finding" +
+        (byFile[path].length === 1 ? "" : "s")));
+      byFile[path].forEach(function (f) {
+        fileBox.appendChild(sastCard(f));
+      });
+      box.appendChild(fileBox);
+    });
+  }
+
+  function sastCard(f) {
+    var card = el("div", { class: "sast-card sast-card-" + f.severity });
+
+    var head = el("div", { class: "sast-card-head" });
+    head.appendChild(el("span", { class: "tag sev-tag-" + f.severity }, f.severity));
+    head.appendChild(el("span", { class: "sast-conf mono" }, f.confidence + " confidence"));
+    head.appendChild(el("span", { class: "sast-title" }, f.title || f.type));
+    head.appendChild(el("span", { class: "sast-loc mono" },
+      "line " + f.line + (f.column ? ":" + f.column : "")));
+    card.appendChild(head);
+
+    if (f.snippet) {
+      card.appendChild(el("pre", { class: "result-snippet sast-snippet" }, f.snippet));
+    }
+
+    // The taint path, when the AST engine proved one. This is the field that
+    // makes a finding checkable in seconds instead of minutes — it names the
+    // request property the value came from, not just the line it ended at.
+    if (f.evidence && f.evidence.source && f.evidence.sink) {
+      var flow = el("div", { class: "sast-flow mono" });
+      flow.appendChild(el("span", { class: "sast-flow-src" }, f.evidence.source));
+      flow.appendChild(el("span", { class: "sast-flow-arrow" }, " → "));
+      flow.appendChild(el("span", { class: "sast-flow-sink" }, f.evidence.sink));
+      card.appendChild(flow);
+    }
+
+    card.appendChild(el("p", { class: "sast-remediation" }, f.recommendation));
+
+    var tags = el("div", { class: "sast-tags" });
+    tags.appendChild(el("span", { class: "sast-tag mono" }, f.ruleId));
+    (f.cwe || []).forEach(function (c) {
+      tags.appendChild(el("a", {
+        class: "sast-tag sast-tag-cwe mono",
+        href: "https://cwe.mitre.org/data/definitions/" + String(c).replace("CWE-", "") + ".html",
+        target: "_blank", rel: "noopener",
+      }, c));
+    });
+    (f.owasp || []).forEach(function (o) {
+      tags.appendChild(el("span", { class: "sast-tag sast-tag-owasp mono" }, o));
+    });
+    tags.appendChild(el("span", { class: "sast-tag sast-tag-module mono" }, f.module));
+    card.appendChild(tags);
+    return card;
   }
 
   function renderAlgo(result) {

@@ -5046,3 +5046,63 @@ a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
   .mcp-conn { align-items: flex-start; }
   .mcp-test-state { flex-direction: column; }
 }
+
+/* ---------------------------------------------------------------------------
+   Source-code findings (SAST)
+   ---------------------------------------------------------------------------
+   Its own visual language, deliberately unlike the advisory table above it.
+   A dependency advisory is a row you sort and bulk-upgrade; a source finding
+   is a thing you read — snippet, taint path, remediation — so it gets a card
+   with room for that instead of a cell. */
+.sast-filters {
+  display: flex; flex-wrap: wrap; gap: var(--s-4);
+  margin: var(--s-3) 0 var(--s-4);
+}
+.sast-filter-group { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+.sast-filter-label {
+  font-size: var(--fs-xs); color: var(--text-dim);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.sast-list { display: flex; flex-direction: column; gap: var(--s-4); }
+.sast-file { display: flex; flex-direction: column; gap: var(--s-2); }
+.sast-file-head {
+  font-size: 0.72rem; color: var(--text-muted);
+  padding-bottom: var(--s-1); border-bottom: 1px solid var(--border);
+  overflow-x: auto; white-space: nowrap;
+}
+.sast-card {
+  border: 1px solid var(--border); border-left-width: 3px;
+  border-radius: 9px; padding: var(--s-3);
+  display: flex; flex-direction: column; gap: var(--s-2);
+  background: var(--bg-elevated);
+}
+/* Severity on the left edge: scannable down a long list without reading. */
+.sast-card-critical { border-left-color: var(--danger); }
+.sast-card-high     { border-left-color: var(--accent-warm); }
+.sast-card-medium   { border-left-color: var(--accent); }
+.sast-card-low      { border-left-color: var(--border); }
+.sast-card-info     { border-left-color: var(--border); }
+.sast-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); }
+.sast-title { font-weight: 600; }
+.sast-conf, .sast-loc { font-size: var(--fs-xs); color: var(--text-dim); white-space: nowrap; }
+.sast-loc { margin-left: auto; }
+.sast-snippet { margin: 0; overflow-x: auto; }
+/* source → sink, the one line that makes a finding checkable at a glance. */
+.sast-flow {
+  font-size: 0.72rem; display: flex; flex-wrap: wrap; align-items: center;
+  gap: 2px; padding: var(--s-2);
+  border: 1px dashed var(--border); border-radius: 7px;
+  overflow-x: auto;
+}
+.sast-flow-src   { color: var(--danger); }
+.sast-flow-arrow { color: var(--text-dim); }
+.sast-flow-sink  { color: var(--accent-warm); }
+.sast-remediation { margin: 0; font-size: 0.82rem; color: var(--text-muted); }
+.sast-tags { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.sast-tag {
+  font-size: 0.63rem; padding: 1px 6px; border-radius: 5px;
+  border: 1px solid var(--border); color: var(--text-dim); white-space: nowrap;
+}
+.sast-tag-cwe    { color: var(--accent); border-color: var(--accent); }
+.sast-tag-owasp  { color: var(--accent-warm); border-color: var(--accent-warm); }
+.sast-tag-module { color: var(--text-dim); }
