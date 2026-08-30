@@ -2,6 +2,7 @@
 import worker from "../src/index.js";
 import { makeD1 } from "./_d1-stub.mjs";
 import { issueJWT } from "../src/auth.js";
+import { adminAiUsageHandler } from "../src/handlers/admin.js";
 
 let failures = 0;
 const expect = (cond, label) => {
@@ -187,6 +188,63 @@ await bq(`INSERT INTO ai_usage
 const quiet = await callWith(bare, "/api/admin/ai-usage?window=7d");
 expect(quiet.body.emptyState.reason === "no_rows_in_window" && quiet.body.lastRowAt === oldAt,
   "rows outside the window read as a quiet period, with the last recorded call named");
+
+// ---------------------------------------------------------------------------
+// An unapplied migration is an operator fact, not a blank 500.
+// ---------------------------------------------------------------------------
+//
+// THE BUG THIS PINS. Migrations here are applied BY HAND — no ledger table, and
+// the deploy pipeline does not run them (which is why /api/admin/schema-check
+// exists). Pointed at a database without migration 0025, this handler's
+// unguarded `SELECT … FROM ai_usage` threw, the Worker's top-level catch turned
+// it into `{"error":"internal_error"}`, and the panel showed "Could not load
+// this section" — telling an operator nothing about the one thing they could
+// actually fix. Reported from production.
+
+const noTable = { ...env, DB: makeD1(), SESSIONS: kv(), USERS: kv() };
+const nq = (sql, ...a) => noTable.DB.prepare(sql).bind(...a).run();
+await nq(`INSERT INTO organisations (org_id, name, created_at, updated_at) VALUES (?, ?, ?, ?)`,
+         "org_a", "Aster", Math.floor(now / 1000), Math.floor(now / 1000));
+await nq(`INSERT INTO users (user_id, email, active_org_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+         "usr_admin", ADMIN, "org_a", Math.floor(now / 1000), Math.floor(now / 1000));
+await noTable.DB.prepare("DROP TABLE ai_usage").run();
+
+{
+  const token = await issueJWT(noTable, "usr_admin", ADMIN, "active");
+  const res = await worker.fetch(new Request("https://algosize.com/api/admin/ai-usage", {
+    headers: { Cookie: `algosize_session=${token}` },
+  }), noTable, { waitUntil() {} });
+  const body = await res.json();
+
+  expect(body.error === "schema_missing",
+    "a database without migration 0025 reports schema_missing, not a bare internal_error");
+  expect(body.migration === "0025_ai_usage" && body.missing.name === "ai_usage",
+    "…naming the migration and the missing object, which is the one thing an operator can act on");
+  expect(/applied by hand/.test(body.message) && /Settings → Environment/.test(body.message),
+    "…and saying why a deploy did not create it, plus where to check what this database has");
+  expect(body.state === "unreadable",
+    "…flagged unreadable: the table that would hold the answer is absent, which is neither " +
+    "'no spend' nor 'nothing recorded yet'");
+  expect(body.summary === undefined && body.groups === undefined,
+    "…and it returns NO totals — a schema gap must not render as $0 across the page");
+}
+
+{
+  // A fault that is NOT a schema gap must still reach the top-level handler, so
+  // Sentry keeps seeing real bugs. Swallowing everything to keep this panel
+  // calm would be the same mistake as reporting unmeasured spend as zero.
+  const broken = {
+    ...env,
+    DB: { prepare() { return { bind() { return this; },
+      all() { throw new Error("D1_ERROR: connection lost"); },
+      first() { throw new Error("D1_ERROR: connection lost"); } }; } },
+  };
+  let threw = false;
+  try {
+    await adminAiUsageHandler(new Request("https://algosize.com/api/admin/ai-usage"), broken, { waitUntil() {} });
+  } catch { threw = true; }
+  expect(threw, "a genuine D1 fault is re-thrown rather than dressed up as a schema gap");
+}
 
 console.log("");
 if (failures) {

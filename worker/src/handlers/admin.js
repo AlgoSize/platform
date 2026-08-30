@@ -241,6 +241,84 @@ function totalTokens(row) {
   return (inTok || 0) + (outTok || 0);
 }
 
+/**
+ * Turn a D1 "no such table/column" into a named, actionable answer.
+ *
+ * Migrations in this platform are applied BY HAND — there is no ledger table
+ * and the deploy pipeline does not run `wrangler d1 execute` (which is why
+ * /api/admin/schema-check exists at all). So the single most likely reason
+ * this panel cannot read is that migration 0025 was never applied to the
+ * database it is pointed at, and an operator seeing "internal_error" has no
+ * way to know that.
+ *
+ * Returns a body for a schema problem, or null for anything else — an
+ * unexpected error must keep bubbling to the top-level handler so Sentry still
+ * captures it. Swallowing every failure to make this panel look calm would be
+ * the same mistake as rendering unmeasured spend as $0.
+ */
+function schemaGap(err) {
+  const detail = String((err && err.message) || "");
+  const m = /no such (table|column):\s*([A-Za-z0-9_.]+)/i.exec(detail);
+  if (!m) return null;
+  return {
+    error: "schema_missing",
+    message: `This database has no ${m[1]} \`${m[2]}\`, so there is no AI usage to read. ` +
+      "Migration 0025_ai_usage has not been applied here — migrations are applied by hand, " +
+      "so a deploy does not create it. Settings → Environment lists which migrations this " +
+      "database actually has.",
+    missing: { kind: m[1], name: m[2] },
+    migration: "0025_ai_usage",
+    // Not "no spend" and not "nothing recorded yet": the table that would hold
+    // the answer is absent, so the question cannot be asked at all.
+    state: "unreadable",
+  };
+}
+
+/**
+ * Every ai_usage read this panel makes, in one place.
+ *
+ * Kept together so the caller has exactly one place to catch a schema gap —
+ * two separate try/catches around two queries is how one of them ends up
+ * unguarded later.
+ */
+async function readUsage(env, range) {
+  const orgResult = await env.DB.prepare(
+    "SELECT org_id, name FROM organisations ORDER BY org_id"
+  ).all();
+  const orgs = (orgResult && orgResult.results) || [];
+
+  const perOrg = await Promise.all(orgs.map(async (org) => {
+    const result = await env.DB.prepare(
+      `SELECT id, org_id, user_id, repository_id, feature_name, provider, model,
+              request_type, input_tokens, output_tokens, neurons_consumed,
+              total_cost, platform_margin_cost,
+              algosize_price, status, error_code, scan_id, fix_task_id, created_at
+         FROM ai_usage
+        WHERE org_id = ? AND created_at >= ? AND created_at <= ?
+        ORDER BY created_at DESC`
+    ).bind(org.org_id, range.startAt, range.endAt).all();
+    return (result && result.results) || [];
+  }));
+
+  // The newest recorded call for a known tenant, ignoring the window. This is
+  // the difference between "this account spent nothing in the last 7 days" and
+  // "nothing has ever written to ai_usage" — an empty table is a plumbing
+  // problem, an empty window is a quiet week, and a dashboard that renders
+  // both as an empty state teaches an operator to ignore the first one.
+  // Queried per org with the same explicit binding as the usage read, so a row
+  // outside the enumerated tenants can never widen the answer.
+  const lastPerOrg = await Promise.all(orgs.map(async (org) => {
+    const result = await env.DB.prepare(
+      "SELECT MAX(created_at) AS last_at FROM ai_usage WHERE org_id = ?"
+    ).bind(org.org_id).first();
+    const at = result && result.last_at;
+    return typeof at === "number" ? at : null;
+  }));
+  const seen = lastPerOrg.filter((at) => at !== null);
+
+  return { orgs, rows: perOrg.flat(), lastRowAt: seen.length ? Math.max(...seen) : null };
+}
+
 function configuredAiBudget(env) {
   const n = Number(env && env.AI_BUDGET_USD);
   return Number.isFinite(n) && n > 0 ? n : null;
@@ -284,45 +362,21 @@ export async function adminAiUsageHandler(request, env) {
 
   const now = Date.now();
   const range = aiUsageRange(windowName, now);
-  const orgResult = await env.DB.prepare(
-    "SELECT org_id, name FROM organisations ORDER BY org_id"
-  ).all();
-  const orgs = (orgResult && orgResult.results) || [];
 
-  const perOrg = await Promise.all(orgs.map(async (org) => {
-    const result = await env.DB.prepare(
-      `SELECT id, org_id, user_id, repository_id, feature_name, provider, model,
-              request_type, input_tokens, output_tokens, neurons_consumed,
-              total_cost, platform_margin_cost,
-              algosize_price, status, error_code, scan_id, fix_task_id, created_at
-         FROM ai_usage
-        WHERE org_id = ? AND created_at >= ? AND created_at <= ?
-        ORDER BY created_at DESC`
-    ).bind(org.org_id, range.startAt, range.endAt).all();
-    return (result && result.results) || [];
-  }));
-  const rows = perOrg.flat();
+  let orgs, rows, lastRowAt;
+  try {
+    ({ orgs, rows, lastRowAt } = await readUsage(env, range));
+  } catch (err) {
+    const gap = schemaGap(err);
+    // A schema gap is an operator fact, reported as one. Anything else is a
+    // real bug and is re-thrown so the top-level handler captures it.
+    if (!gap) throw err;
+    return jsonResponse({ generatedAt: Math.floor(now / 1000), window: windowName, groupBy, ...gap }, 500);
+  }
 
-  // The newest recorded call for a known tenant, ignoring the window. This is
-  // the difference between "this account spent nothing in the last 7 days" and
-  // "nothing has ever written to ai_usage" — an empty table is a plumbing
-  // problem, an empty window is a quiet week, and a dashboard that renders
-  // both as an empty state teaches an operator to ignore the first one.
-  // Queried per org with the same explicit binding as the usage read, so a row
-  // outside the enumerated tenants can never widen the answer.
-  const lastPerOrg = await Promise.all(orgs.map(async (org) => {
-    const result = await env.DB.prepare(
-      "SELECT MAX(created_at) AS last_at FROM ai_usage WHERE org_id = ?"
-    ).bind(org.org_id).first();
-    const at = result && result.last_at;
-    return typeof at === "number" ? at : null;
-  }));
-  const seen = lastPerOrg.filter((at) => at !== null);
-  const lastRowAt = seen.length ? Math.max(...seen) : null;
   const dimension = AI_USAGE_GROUPS[groupBy];
   const orgNames = new Map(orgs.map((org) => [org.org_id, org.name || org.org_id]));
   const limitUsd = configuredAiBudget(env);
-
   const groups = sortGroups(aggregateBy(rows, dimension).map((group) => {
     const key = group[dimension];
     return {
