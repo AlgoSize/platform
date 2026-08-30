@@ -66,6 +66,10 @@
       glyph: "⚙", route: "#/pipeline", analyzer: null,
       answers: "Pick a model for each fix stage, see the per-finding cost, or route the fix to your own agent.",
       cta: "Tune the pipeline" },
+    { id: "models",    name: "Model explorer",       short: "the models",
+      glyph: "◎", route: "#/models", analyzer: null,
+      answers: "Which model this platform routes each job to, what it costs per million tokens, and why.",
+      cta: "Compare the models" },
   ];
 
   // ------------------------------------------------------------------ load

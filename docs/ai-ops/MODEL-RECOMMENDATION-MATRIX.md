@@ -56,3 +56,62 @@ has no entry for "decide if this fix is correct."
 datasets by default, refused for new pricing by `costOf`. Do not promote a
 deprecated model to a default even if it still appears in the Cloudflare
 catalog.
+
+
+---
+
+## The Model explorer (`#/models`)
+
+The read-only view over this registry, under Workspace beside the Fix pipeline.
+Three views over one dataset, all served by `GET /api/ai/models`:
+
+| View | Query | What it answers |
+| --- | --- | --- |
+| Scatter | `?graph=cost_vs_capability \| latency_vs_quality \| cost_vs_autofix` | where a model sits on two axes at once |
+| Fit matrix | `?graph=model_fit_by_task` | which model is rated for which job |
+| Recommend | `?task=<family>` | the ranked list `recommend()` would return |
+
+Plus `?includeDeprecated=1` (the Show-superseded toggle) and `?taskFamily=<id>`
+(narrow a plot to models rated for one job). Unknown values are rejected by
+name — `invalid_graph`, `invalid_task`, `invalid_task_family` — never silently
+defaulted. Adding these filters is what gave the toggle a server side; it had
+none, and `graphData` had supported them since it was written.
+
+### Every axis is oriented so higher is better
+
+Including cost, which plots **efficiency, not price**. That makes the top-right
+corner the best corner on all three plots, so a reader learns the convention
+once instead of per-plot. The speed plot's y axis is labelled *capability*
+rather than *quality*, because capability is what it plots — there is no
+separate quality score in this registry, and naming one would invent a
+measurement the data does not contain.
+
+### Three things the explorer must not soften
+
+1. **The scores are estimates.** `capability`, `coding` and `latencyScore` are
+   seeded engineering judgements, flagged `scored: false`. Only `costScore` is
+   anchored to the sourced price ladder. The page says so in the tooltip and in
+   the standing caveat; a 0–100 number with no such note reads as a benchmark.
+2. **`avoid` ≠ `unrated`.** A pairing somebody looked at and rejected is a
+   different fact from one nobody rated, and the matrix renders them as
+   different marks (`✗` vs `·`). `graphData` used to return tier-or-`null` and
+   collapse the two. `bestTierOf()` also refuses to colour an avoid-only model
+   as though it had earned a tier.
+3. **The prices are relayed.** `PRICE_PROVENANCE` in `ai/pricing.js` is the one
+   place the date, source and caveat live, and the banner is rendered from it —
+   so refreshing the prices refreshes the caveat instead of leaving stale copy
+   behind. If a client receives no provenance at all, the page says the figures
+   are *unsourced* rather than dropping the warning.
+
+An empty recommendation is `empty: true`, not an absent key: nothing on the
+shortlist scored well enough for that job, so it runs deterministically or not
+at all. That is a deliberate blank, not a hole in the data.
+
+### Cloudflare-side work: none
+
+The explorer reads the in-repo registry through the already-deployed Worker —
+no binding, no table, no migration, nothing to provision. The one thing that
+would change what it shows is the **price reconciliation** already tracked as
+Prompt 1 in [REPLIT-PROMPTS.md](./REPLIT-PROMPTS.md): that job is what would
+let `PRICE_PROVENANCE.confirmedAgainstBill` flip to `true`, at which point the
+banner stops saying "relayed, not confirmed" on its own.

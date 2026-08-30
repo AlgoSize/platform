@@ -1130,6 +1130,21 @@ permalink: /dashboard/
       <div id="pipeline-body"><div class="panel-empty">Loading…</div></div>
     </div>
 
+    <div id="view-models" class="dash-view" hidden>
+      <div class="dash-head">
+        <span class="eyebrow">Model explorer</span>
+        <h2 class="dash-view-title">A curated shortlist, scored for the jobs this platform actually runs.</h2>
+        <p class="lede">
+          Not a catalogue dump. Every model here is one Algosize routes work to,
+          scored on the axes that decide that routing — and every axis is
+          oriented so higher is better, cost included, so the top-right corner
+          is the best corner on all three plots. Hover a point for its real
+          per-million prices and the job it is rated for.
+        </p>
+      </div>
+      <div id="models-body"><div class="panel-empty">Loading…</div></div>
+    </div>
+
     <div id="view-account" class="dash-view" hidden>
       <div class="dash-head">
         <span class="eyebrow">Account</span>
@@ -1341,4 +1356,5 @@ permalink: /dashboard/
 <script src="{{ '/assets/js/dash-account.js' | relative_url }}" defer></script>
     <script src="{{ '/assets/js/dash-mcp.js' | relative_url }}" defer></script>
     <script src="{{ '/assets/js/dash-pipeline.js' | relative_url }}" defer></script>
+    <script src="{{ '/assets/js/dash-models.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-router.js' | relative_url }}" defer></script>
