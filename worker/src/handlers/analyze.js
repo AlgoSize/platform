@@ -379,6 +379,99 @@ async function discoverLockfiles({ owner, repo }, fetchImpl, env) {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Source-code discovery for the SAST pass
+// ---------------------------------------------------------------------------
+//
+// The dependency audit answers "are the packages you install known-bad". It
+// says nothing about the code in the repository, which is where most of a
+// team's own vulnerabilities live. This fetch is what gives the source
+// scanner something to read on the `repoUrl` path.
+//
+// Every bound here exists because this runs inside a Worker with a subrequest
+// budget and a CPU limit, and because a scan that times out is worth less than
+// a smaller scan that finishes and says what it skipped.
+
+const SOURCE_EXT_RE = /\.(?:js|mjs|cjs|jsx|ts|tsx|py|rb|go|php|java|sh|bash)$/i;
+const SOURCE_NAME_RE = /(?:^|\/)(?:Dockerfile(?:\.[\w.-]+)?|\.env(?:\.[\w.-]+)?|docker-compose\.ya?ml|\.github\/workflows\/[\w.-]+\.ya?ml)$/i;
+// Directories whose contents are somebody else's code, generated, or a
+// deliberate collection of bad examples. Scanning our own test fixtures would
+// report the scanner's own corpus as vulnerabilities — which is true and
+// useless.
+const SOURCE_SKIP_RE = /(^|\/)(node_modules|vendor|bundle|\.git|dist|build|out|coverage|_site|target|\.next|\.venv|venv|__pycache__|site-packages|third_party|fixtures?|__fixtures__|testdata)(\/|$)/i;
+const MAX_SOURCE_FILES = 120;
+const MAX_SOURCE_FILE_BYTES = 200 * 1024;
+const MAX_SOURCE_TOTAL_BYTES = 3 * 1024 * 1024;
+
+/**
+ * Fetch a bounded set of source files for the SAST pass.
+ *
+ * Returns `{ files, truncated, totalInRepo }`, or null when the tree cannot be
+ * listed at all. Null is NOT an empty list: a private repo, a renamed default
+ * branch, or a throttle must never be reported as "we read your code and it
+ * was clean". The caller renders the two differently.
+ */
+async function discoverSourceFiles({ owner, repo }, fetchImpl, env) {
+  const headers = { "User-Agent": "algosize-sast", Accept: "application/vnd.github+json" };
+  if (env && env.GITHUB_TOKEN) headers.Authorization = `Bearer ${env.GITHUB_TOKEN}`;
+
+  for (const branch of ["main", "master"]) {
+    let res;
+    try {
+      res = await fetchImpl(
+        `https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`,
+        { headers });
+    } catch { continue; }
+    if (res.status === 429 || res.status === 403) return null;
+    if (!res.ok) continue;
+
+    let body;
+    try { body = await res.json(); } catch { continue; }
+    const entries = Array.isArray(body && body.tree) ? body.tree : [];
+
+    const eligible = entries
+      .filter((e) => e && e.type === "blob" && typeof e.path === "string")
+      .filter((e) => SOURCE_EXT_RE.test(e.path) || SOURCE_NAME_RE.test(e.path))
+      .filter((e) => !SOURCE_SKIP_RE.test(e.path))
+      .filter((e) => !/\.(?:min|bundle)\.js$/i.test(e.path))
+      .filter((e) => !(typeof e.size === "number" && e.size > MAX_SOURCE_FILE_BYTES));
+
+    if (!eligible.length) return { files: [], truncated: false, totalInRepo: 0 };
+
+    // Shallowest first. When the cap bites, application code near the root
+    // beats a deeply nested script — and the response says it was capped.
+    const wanted = eligible
+      .sort((a, b) => a.path.split("/").length - b.path.split("/").length ||
+                      (a.path < b.path ? -1 : 1))
+      .slice(0, MAX_SOURCE_FILES);
+
+    let budget = MAX_SOURCE_TOTAL_BYTES;
+    const results = await Promise.all(wanted.map(async ({ path }) => {
+      if (budget <= 0) return null;
+      let r;
+      try {
+        r = await fetchImpl(`https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${encodeURI(path)}`);
+      } catch { return null; }
+      if (!r.ok) return null;
+      const content = await r.text();
+      if (content.length > MAX_SOURCE_FILE_BYTES) return null;
+      budget -= content.length;
+      if (budget < 0) return null;
+      return { path, content };
+    }));
+
+    const files = results.filter(Boolean);
+    if (files.length > 0 || eligible.length === 0) {
+      return {
+        files,
+        truncated: eligible.length > files.length,
+        totalInRepo: eligible.length,
+      };
+    }
+  }
+  return null;
+}
+
 async function fetchLockfilesFromGithub({ owner, repo }, fetchImpl, env) {
   const discovered = await discoverLockfiles({ owner, repo }, fetchImpl, env);
   if (discovered !== null && discovered.length > 0) return discovered;
@@ -565,10 +658,85 @@ export async function runLockfileAudit(body, env, request, ctx) {
   const audit = await auditManifests(manifests, fetchImpl, { env, ctx, request, userId });
   if (!audit.ok) return json(audit.body, audit.status);
 
+  // The source scan rides along, and fails SOFT. The dependency audit is the
+  // contract this endpoint has always honoured; a GitHub hiccup while reading
+  // source must degrade to "we could not read the code" beside a complete
+  // advisory list, never to a 502 that loses both. `status` carries which of
+  // those happened so the UI never renders an unread repository as clean.
+  const source = await runSourceScan(repo, fetchImpl, env, ctx, request, userId);
+
   return json({
     repoUrl: `https://github.com/${repo.owner}/${repo.repo}`,
     ...audit.result,
+    source,
   }, 200);
+}
+
+/**
+ * Scan repository source, as a block that is always present and always says
+ * what state it is in.
+ *
+ * There is no branch here that returns undefined or omits the block. A
+ * missing key reads as "this feature does not exist" and an empty findings
+ * list reads as "your code is clean" — and both are wrong when what actually
+ * happened is that the tree could not be listed. Every path sets `status`.
+ */
+async function runSourceScan(repo, fetchImpl, env, ctx, request, userId) {
+  let discovered;
+  try {
+    discovered = await discoverSourceFiles(repo, fetchImpl, env);
+  } catch (err) {
+    try {
+      await captureException(env || {}, ctx, err, {
+        request, userId,
+        tags: { source: "analyzer", analyzer: "analyze/vuln", subpath: "source_fetch",
+                upstream: "github.com" },
+      });
+    } catch { /* observability must never mask the audit */ }
+    discovered = null;
+  }
+
+  if (discovered === null) {
+    return {
+      status: "unavailable",
+      message: "The repository's source could not be read (private repository, or GitHub rate-limited the request). The dependency audit above is unaffected.",
+      findings: [], summary: null, coverage: null,
+    };
+  }
+  if (!discovered.files.length) {
+    return {
+      status: "no_source_files",
+      message: "No files in a language this scanner reads were found in the repository.",
+      findings: [], summary: null, coverage: null,
+    };
+  }
+
+  try {
+    const result = analyzeVuln({ files: discovered.files });
+    return {
+      status: "ok",
+      findings: result.findings,
+      summary: result.summary,
+      coverage: {
+        ...result.coverage,
+        filesEligible: discovered.totalInRepo,
+        truncated: discovered.truncated,
+      },
+    };
+  } catch (err) {
+    console.error("analyze/vuln: source scan error", err);
+    try {
+      await captureException(env || {}, ctx, err, {
+        request, userId,
+        tags: { source: "analyzer", analyzer: "analyze/vuln", subpath: "source_scan" },
+      });
+    } catch { /* as above */ }
+    return {
+      status: "failed",
+      message: "The source scanner errored on this repository. The dependency audit above is unaffected.",
+      findings: [], summary: null, coverage: null,
+    };
+  }
 }
 
 /**

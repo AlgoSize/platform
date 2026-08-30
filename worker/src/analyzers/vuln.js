@@ -152,6 +152,8 @@ import {
   maskSecrets,
   scanLine,
 } from "./secrets.js";
+import { analyzeFileAst } from "./sast/ast.js";
+import { isAstParseable, normalizeFindings, summarizeFindings } from "./sast/schema.js";
 
 /**
  * One pass per file: collect every secret string by line, so the global
@@ -406,7 +408,10 @@ const CODE_PATTERNS = [
     severity: "high",
     // yaml.load is only unsafe without a safe loader, hence `unless`.
     regex: /\bpickle\.loads?\s*\(|\byaml\.load\s*\(|\bunserialize\s*\(|\bMarshal\.load\s*\(|readObject\s*\(\s*\)/,
-    unless: /SafeLoader|safe_load|Loader\s*=\s*yaml\.C?SafeLoader/,
+    // js-yaml v4's `load` is the old `safeLoad`, and an explicit restricted
+    // schema is safe in v3 too — both are correct code, and flagging them
+    // would send someone to "fix" a line that is already right.
+    unless: /SafeLoader|safe_load|Loader\s*=\s*yaml\.C?SafeLoader|CORE_SCHEMA|JSON_SCHEMA|FAILSAFE_SCHEMA|json\s*:\s*true/,
     recommendation: "Deserializing untrusted data executes attacker-chosen code. Use a data-only format (JSON), or the safe variant of the API — `yaml.safe_load`, and never `pickle` on anything that crossed a trust boundary.",
   },
   {
@@ -442,11 +447,164 @@ const CODE_PATTERNS = [
     recommendation: "Math.random() and Python's `random` are predictable and must not generate security tokens. Use `crypto.getRandomValues` / `crypto.randomUUID` in JS, or `secrets` in Python.",
   },
   {
+    type: "weak_cipher_algorithm",
+    severity: "high",
+    // DES/RC4 by name, and any ECB-mode spelling. ECB is the one that looks
+    // fine to a reader who has not seen the penguin: it encrypts identical
+    // plaintext blocks to identical ciphertext blocks, so structure survives.
+    regex: /createCipheriv?\s*\(\s*["'](?:des|des-ede3|rc4|[a-z0-9-]*-ecb)["']|Cipher\.getInstance\s*\(\s*["'][A-Z]+\/ECB|\bDES\.new\s*\(|\bARC4\.new\s*\(/i,
+    recommendation: "Use an authenticated cipher — AES-256-GCM or ChaCha20-Poly1305 — with a unique nonce per message. DES and RC4 are broken, and ECB mode leaks the shape of the plaintext.",
+  },
+  {
+    type: "weak_password_hash",
+    severity: "high",
+    // A general-purpose digest applied to something named like a password.
+    // The `requires` gate is what keeps this off every legitimate checksum.
+    regex: /createHash\s*\(\s*["'](?:md5|sha1|sha256|sha512)["']|\bhashlib\.(?:md5|sha1|sha256|sha512)\s*\(/i,
+    requires: /password|passwd|pwd|passphrase/i,
+    recommendation: "A fast digest is the wrong primitive for a password — speed is exactly what an offline cracker wants. Use bcrypt, scrypt or Argon2id through a maintained library, with a per-password salt.",
+  },
+  {
+    type: "jwt_none_algorithm",
+    severity: "critical",
+    // Either half is fatal: decoding without verifying, or accepting "none".
+    regex: /\bjwt\.decode\s*\(|algorithms?\s*:\s*\[[^\]]*["']none["']|\balgorithm\s*[:=]\s*["']none["']|verify_signature["']?\s*:\s*False|\boptions\s*=\s*\{\s*["']verify_signature["']\s*:\s*False/i,
+    // `jwt.decode(token, { complete: true })` after a verify is a legitimate
+    // read; a verify on the same line means the signature was checked.
+    unless: /\bjwt\.verify\s*\(|verify_signature["']?\s*:\s*True/,
+    recommendation: "Verify the signature with an explicit algorithm allowlist — `jwt.verify(token, key, { algorithms: [\"RS256\"] })`. An unverified decode returns attacker-authored claims.",
+  },
+  {
+    type: "permissive_cors",
+    severity: "high",
+    // Wildcard origin AND credentials. Either alone can be legitimate; the
+    // pair means any site can read authenticated responses.
+    regex: /origin\s*:\s*["']\*["'][^}]*credentials\s*:\s*true|credentials\s*:\s*true[^}]*origin\s*:\s*["']\*["']|Access-Control-Allow-Origin["']\s*,\s*["']\*["'][\s\S]{0,120}Allow-Credentials["']\s*,\s*["']true|supports_credentials\s*=\s*True[^)]*origins\s*=\s*["']\*/i,
+    recommendation: "Reflect only allowlisted origins when credentials are enabled. Browsers refuse `*` with credentials for this exact reason — code that routes around that refusal is disabling the protection on purpose.",
+  },
+  {
+    type: "cors_reflects_origin",
+    severity: "high",
+    // Echoing the caller's own Origin header allowlists the whole internet.
+    regex: /Access-Control-Allow-Origin["']\s*,\s*(?:req|request)\.(?:headers|get)[^)]*origin|setHeader\s*\(\s*["']Access-Control-Allow-Origin["']\s*,\s*origin\b/i,
+    recommendation: "Compare the request's origin against an allowlist and echo it back only on a match. Reflecting it unconditionally is the same as `*`, but it also works with credentials.",
+  },
+  {
+    type: "security_middleware_disabled",
+    severity: "high",
+    regex: /csrf\s*:\s*false|csrfProtection\s*:\s*false|\bWTF_CSRF_ENABLED\s*=\s*False|helmet\s*:\s*false|\.disable\s*\(\s*["']x-powered-by["']\s*\)\s*;?\s*\/\/\s*helmet|@csrf_exempt\b|csrf_exempt\s*=\s*True/i,
+    recommendation: "Re-enable the middleware. If a single endpoint genuinely cannot use it — a webhook that verifies its own signature — exempt that one route rather than turning the protection off globally.",
+  },
+  {
+    type: "debug_mode_enabled",
+    severity: "medium",
+    regex: /\bDEBUG\s*=\s*True\b|\bapp\.run\s*\([^)]*debug\s*=\s*True|\bFLASK_DEBUG\s*[:=]\s*["']?1\b|\bNODE_ENV\s*[:=]\s*["']development["'][^]*production/i,
+    recommendation: "Drive the debug flag from the environment and default it off. Debug handlers print stack traces and environment variables, and some frameworks expose an interactive console on the error page.",
+  },
+  {
+    type: "xxe_external_entities",
+    severity: "high",
+    regex: /noent\s*:\s*true|resolve_entities\s*=\s*True|\bXMLParser\s*\([^)]*resolve_entities\s*=\s*True|setFeature\s*\(\s*["']http:\/\/apache\.org\/xml\/features\/nonvalidating\/load-external-dtd["']\s*,\s*true|LIBXML_NOENT/i,
+    recommendation: "Leave entity and DTD resolution off — the default in every modern parser. A document that resolves external entities can read local files and make requests from your server.",
+  },
+  {
+    type: "template_injection",
+    severity: "high",
+    // A template COMPILED from an assembled string, rather than data passed
+    // to a static template. `requires` keeps it to dynamic sources.
+    regex: /(?:Handlebars|_|lodash|ejs|pug|jade|nunjucks)\.(?:compile|template|render(?:String)?)\s*\(|\brender_template_string\s*\(|\bTemplate\s*\(/,
+    requires: /\+|\$\{|\bf["']|%s|\.format\s*\(|req\.|request\./,
+    recommendation: "Compile templates from static files and pass user data as template VARIABLES. Building the template SOURCE from user input hands the attacker the template language, which in most engines reaches the host process.",
+  },
+  {
+    type: "nosql_injection",
+    severity: "high",
+    // A request value used as (or spread into) a query document, so the
+    // attacker controls operators, not just values.
+    regex: /\.(?:find|findOne|findOneAndUpdate|updateOne|updateMany|deleteOne|deleteMany|count)\s*\(\s*(?:req|request)\.(?:body|query|params)\b|\.(?:find|findOne)\s*\(\s*\{[^}]*:\s*(?:req|request)\.(?:body|query|params)\.[A-Za-z_$][\w$]*\s*[},]/,
+    recommendation: "Coerce request values to the primitive you expect — `String(req.body.user)` — or validate against a schema. Passing the raw value lets an attacker send `{\"$ne\": null}` and match every row.",
+  },
+  {
+    type: "path_traversal",
+    severity: "high",
+    // A filesystem call whose path is joined/concatenated with request data.
+    regex: /(?:readFile|readFileSync|writeFile|writeFileSync|createReadStream|createWriteStream|unlink|unlinkSync|sendFile|open)\s*\(\s*(?:[^)]*\b(?:path\.)?join\s*\([^)]*(?:req|request)\.(?:params|query|body)|[^),]*(?:req|request)\.(?:params|query|body)\.[A-Za-z_$][\w$]*)|\bopen\s*\(\s*(?:os\.path\.)?join\s*\([^)]*request\.(?:args|form|json)/,
+    recommendation: "Resolve the path and confirm it is still inside the intended root: `const p = path.resolve(base, name); if (!p.startsWith(base + path.sep)) throw`. Better still, look the user's input up in an allowlist rather than treating it as a path.",
+  },
+  {
+    type: "ssrf_user_url",
+    severity: "high",
+    regex: /\b(?:fetch|axios(?:\.(?:get|post|put|delete|request))?|got|superagent\.get|https?\.get|requests\.(?:get|post|put|delete))\s*\(\s*(?:req|request)\.(?:body|query|params)\.[A-Za-z_$][\w$]*|\b(?:fetch|axios|got)\s*\(\s*`[^`]*\$\{\s*(?:req|request)\.(?:body|query|params)\./,
+    recommendation: "Allowlist the destination host before the call, and disable redirect following so an allowed host cannot bounce you onto an internal one. Blocklists lose to DNS rebinding and IPv6-mapped addresses.",
+  },
+  {
+    type: "open_redirect",
+    severity: "medium",
+    regex: /\.redirect\s*\(\s*(?:req|request)\.(?:query|body|params)\.[A-Za-z_$][\w$]*|\.redirect\s*\(\s*`?\$?\{?\s*(?:req|request)\.(?:query|body|params)\.|\bwindow\.location(?:\.href)?\s*=\s*(?:new\s+URLSearchParams|[^;]*\.searchParams\.get)/,
+    recommendation: "Accept a path, not a URL: reject anything containing a scheme or a leading `//`. Or map an opaque key to a destination held server-side, so the user never names the target at all.",
+  },
+  {
+    type: "response_send_tainted_html",
+    severity: "high",
+    regex: /res\.(?:send|write|end)\s*\(\s*(?:`[^`]*<[a-z]+[^`]*\$\{\s*(?:req|request)\.|["'][^"']*<[a-z]+[^"']*["']\s*\+\s*(?:req|request)\.)/i,
+    recommendation: "Render through a template engine with contextual auto-escaping, or HTML-encode the value at the point it enters the markup.",
+  },
+  {
+    type: "sensitive_data_logging",
+    severity: "medium",
+    // A logging call whose argument names a credential. Deliberately requires
+    // the credential-ish identifier to be the thing logged, not merely present
+    // somewhere on the line.
+    regex: /\b(?:console\.(?:log|info|warn|error|debug)|logger?\.(?:info|debug|warn|error|log)|print|println|puts|fmt\.Print\w*)\s*\([^)]*\b(?:password|passwd|secret|api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|private[_-]?key|session[_-]?token|credit[_-]?card|ssn)\b/i,
+    // A log that says a secret is MISSING or being redacted names the field
+    // without printing it — the exact pattern this codebase uses itself.
+    unless: /redact|\bmask|not set|missing|undefined|\bhas[A-Z]|\?\s*["']set["']|length|NOT CONFIGURED/i,
+    recommendation: "Log an identifier instead of the value. Where the shape genuinely matters for debugging, log the length or a truncated hash — logs are retained longer and read by more people than the secret store.",
+  },
+  {
+    type: "insecure_cookie_flags",
+    severity: "medium",
+    // `[^)]*` was wrong here: it cannot cross the closing paren of a nested
+    // call, so the single most common spelling —
+    // `res.cookie("sid", makeToken(), { httpOnly: false })` — never matched.
+    // The rule looked present and tested and detected nothing.
+    regex: /\bcookie\s*\([\s\S]{0,200}?(?:httpOnly|secure)\s*:\s*false|\bset_cookie\s*\([\s\S]{0,200}?(?:httponly|secure)\s*=\s*False/i,
+    requires: /session|sid|auth|token|jwt|login|remember/i,
+    recommendation: "Set `httpOnly: true`, `secure: true` and an explicit `sameSite` on every cookie that carries session state. httpOnly is what stops an XSS bug from becoming a session theft.",
+  },
+  {
+    type: "unrestricted_file_upload",
+    severity: "medium",
+    // multer/formidable configured with neither a size cap nor a filter.
+    regex: /\bmulter\s*\(\s*\{\s*(?:dest|storage)\s*:[^}]*\}\s*\)|\bmulter\s*\(\s*\)/,
+    unless: /fileFilter|limits/,
+    recommendation: "Set `limits.fileSize` and a `fileFilter` that allowlists content types. Store uploads outside the web root, and generate your own filename — the client-supplied one is attacker input.",
+  },
+  {
+    type: "remote_code_execution_install",
+    severity: "high",
+    regex: /\b(?:curl|wget)\b[^|\n]*\|\s*(?:sudo\s+)?(?:ba|z|)sh\b/,
+    recommendation: "Download to a file, verify a pinned checksum or signature, then run it. A pipe to a shell executes whatever that URL serves at that instant, with the build's privileges.",
+  },
+  {
+    type: "hardcoded_db_connection_string",
+    severity: "critical",
+    // A driver URI carrying inline credentials. The `:pass@` shape is the
+    // finding — a URI with no password in it is not one.
+    regex: /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp|mssql):\/\/[A-Za-z0-9._%-]+:[^@\s"'`$]{3,}@/,
+    unless: /\$\{|process\.env|os\.getenv|<[a-z_]+>|:password@|:pass@|:changeme@|:secret@|localhost:.*:.*@$/i,
+    recommendation: "Rotate the database password, then build the connection string from environment variables at runtime. A committed URI is a credential plus the address it opens.",
+  },
+  {
     type: "xss_sink",
     severity: "high",
     // innerHTML / document.write fed something that isn't a bare literal,
     // plus React's explicit escape hatch.
     regex: /\.innerHTML\s*=\s*(?:[^"'`\s][^;]*|`[^`]*\$\{)|\bdocument\.write\s*\(\s*[^"')]|dangerouslySetInnerHTML/,
+    // Sanitizing at the sink is the documented fix. Continuing to flag the
+    // fixed line would make the finding impossible to clear, which is how a
+    // rule ends up globally suppressed along with its true positives.
+    unless: /DOMPurify|\bsanitize|\bescapeHtml\b|\bxss\s*\(|createDOMPurify/i,
     recommendation: "Assigning untrusted data to innerHTML executes it. Use textContent for text, or sanitize with a vetted library (DOMPurify) when HTML is genuinely required.",
   },
 ];
@@ -478,6 +636,92 @@ function detectCodePatterns(file) {
 }
 
 // ---------------------------------------------------------------------------
+// Detector 7: Dockerfile ADD from a remote URL
+// ---------------------------------------------------------------------------
+//
+// Its own detector rather than a table row because it is only a finding in a
+// Dockerfile: `ADD https://...` in prose, a shell script, or a test fixture is
+// not an instruction Docker will execute. The table has no access to the path.
+
+const DOCKERFILE_RE = /(?:^|\/)Dockerfile(?:\.[\w.-]+)?$/i;
+
+function detectDockerfileRisks(file) {
+  if (!DOCKERFILE_RE.test(file.path)) return [];
+  const findings = [];
+  const lines = file.content.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const text = lines[i];
+    if (/^\s*#/.test(text)) continue;
+    if (/^\s*ADD\s+(?:--\S+\s+)*https?:\/\//i.test(text)) {
+      findings.push({
+        severity: "medium",
+        type: "dockerfile_remote_add",
+        path: file.path,
+        line: i + 1,
+        snippet: trimSnippet(text),
+        recommendation: "Replace with `RUN curl -fsSL <url> -o file && echo '<sha256>  file' | sha256sum -c -` so the build fails loudly when the remote payload changes. ADD also auto-extracts archives, which is a second surprise.",
+      });
+    }
+  }
+  return findings;
+}
+
+// ---------------------------------------------------------------------------
+// Detector 8: multi-tenant queries missing their tenant filter
+// ---------------------------------------------------------------------------
+//
+// This one needs the whole FILE, which is what makes it worth having and also
+// what keeps it honest. A query with no tenant column in its WHERE clause is
+// unremarkable on its own — most applications are not multi-tenant, and a
+// scanner that flagged every un-scoped SELECT would be unusable.
+//
+// So the rule is comparative: it only fires in a file where OTHER queries
+// against the same table DO filter by a tenant column. That is the file
+// telling us its own convention, and the finding is the line that departs
+// from it. Confidence stays `low` in the registry regardless — the analyzer
+// cannot see whether scoping happens in a wrapper — but a low-confidence
+// finding pointed at a real inconsistency is worth a human's thirty seconds,
+// which a generic "this query has no WHERE clause" never is.
+
+const TENANT_COL_RE = /\b(org_id|tenant_id|account_id|workspace_id|customer_id)\b/i;
+const SQL_STATEMENT_RE = /\b(SELECT|UPDATE|DELETE)\b[\s\S]{0,400}?\bFROM\b\s+([A-Za-z_][\w.]*)|(?:\bUPDATE|\bDELETE\s+FROM)\s+([A-Za-z_][\w.]*)/i;
+
+function detectMissingTenantScope(file) {
+  if (!/\.(?:js|mjs|cjs|ts|tsx)$/i.test(file.path)) return [];
+  const lines = file.content.split("\n");
+
+  // Pass 1: which tables does this file ever scope by tenant?
+  const scopedTables = new Set();
+  const candidates = [];
+  for (let i = 0; i < lines.length; i++) {
+    const text = lines[i];
+    if (isCommentLine(text)) continue;
+    if (!/\b(SELECT|UPDATE|DELETE)\b/i.test(text)) continue;
+    if (!/\b(FROM|UPDATE|INTO)\b/i.test(text)) continue;
+
+    const m = SQL_STATEMENT_RE.exec(text);
+    const table = m && (m[2] || m[3]);
+    if (!table) continue;
+    const key = table.toLowerCase();
+    if (TENANT_COL_RE.test(text)) scopedTables.add(key);
+    else if (/\bWHERE\b/i.test(text)) candidates.push({ line: i + 1, text, table: key });
+  }
+
+  // Pass 2: a candidate is a finding only when the file scopes that same
+  // table elsewhere. No convention in the file, no claim from us.
+  return candidates
+    .filter((c) => scopedTables.has(c.table))
+    .map((c) => ({
+      severity: "high",
+      type: "missing_tenant_scope",
+      path: file.path,
+      line: c.line,
+      snippet: trimSnippet(c.text),
+      recommendation: `Other queries against \`${c.table}\` in this file filter by a tenant column and this one does not. Add the same filter, or move the scoping into a shared helper so it cannot be forgotten one statement at a time.`,
+    }));
+}
+
+// ---------------------------------------------------------------------------
 // Aggregator
 // ---------------------------------------------------------------------------
 
@@ -488,6 +732,8 @@ const DETECTORS = [
   detectSqlTemplateLiteral,
   detectInsecureHttp,
   detectCodePatterns,
+  detectDockerfileRisks,
+  detectMissingTenantScope,
 ];
 
 const SEVERITY_RANK = { critical: 4, high: 3, medium: 2, low: 1 };
@@ -512,10 +758,25 @@ function normalizeFile(f) {
 export function analyzeVuln(input) {
   const files = (input?.files ?? []).map(normalizeFile);
   const allFindings = [];
+  const coverage = { filesScanned: 0, astParsed: 0, astUnparseable: [] };
 
   for (const file of files) {
     const fileFindings = [];
     for (const d of DETECTORS) fileFindings.push(...d(file));
+
+    // The AST engine runs only where acorn can parse the file, and its
+    // outcome is RECORDED either way. A file the parser could not read has
+    // been scanned by the pattern engine alone, and reporting that as fully
+    // covered would overstate exactly the checks the AST engine exists to
+    // provide — so `astUnparseable` travels with the result and the UI says
+    // "pattern only" rather than nothing.
+    if (isAstParseable(file.path)) {
+      const ast = analyzeFileAst(file);
+      if (ast.parsed) coverage.astParsed++;
+      else coverage.astUnparseable.push(file.path);
+      fileFindings.push(...ast.findings);
+    }
+    coverage.filesScanned++;
 
     const secretsByLine = collectSecretsByLine(file);
     if (secretsByLine.size > 0) {
@@ -527,11 +788,13 @@ export function analyzeVuln(input) {
     allFindings.push(...fileFindings);
   }
 
-  allFindings.sort((a, b) =>
-    (SEVERITY_RANK[b.severity] ?? 0) - (SEVERITY_RANK[a.severity] ?? 0) ||
-    a.path.localeCompare(b.path) ||
-    a.line - b.line ||
-    a.type.localeCompare(b.type)
-  );
-  return { findings: allFindings };
+  // Normalization joins registry metadata, fingerprints, dedupes the overlap
+  // between the two engines, sorts and numbers. It runs AFTER the redaction
+  // pass above so no fingerprint is ever derived from live secret material.
+  const findings = normalizeFindings(allFindings);
+
+  // `findings` keeps every legacy field in the legacy order, so the existing
+  // shape is unchanged for every existing reader; `summary` and `coverage`
+  // are additive.
+  return { findings, summary: summarizeFindings(findings), coverage };
 }

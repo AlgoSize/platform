@@ -36,6 +36,34 @@ const SECURITY_SEVERITY = {
   unknown:  "5.0",
 };
 
+/**
+ * A SARIF rule descriptor for a source finding.
+ *
+ * `tags` is the field GitHub renders as filter chips, so the CWE and OWASP
+ * mappings go there rather than into prose nobody can filter on.
+ */
+function sourceRuleFor(f) {
+  return {
+    id: f.ruleId,
+    name: String(f.ruleId || "").replace(/[^A-Za-z0-9]+/g, ""),
+    shortDescription: { text: f.title || f.type },
+    fullDescription: { text: f.recommendation || f.title || f.type },
+    help: {
+      text: f.recommendation || "",
+      markdown: `**${f.title || f.type}**\n\n${f.recommendation || ""}` +
+        (f.cwe && f.cwe.length
+          ? `\n\n` + f.cwe.map((c) =>
+              `[${c}](https://cwe.mitre.org/data/definitions/${String(c).replace("CWE-", "")}.html)`).join(" · ")
+          : ""),
+    },
+    properties: {
+      tags: ["security", f.category].concat(f.cwe || []).concat(f.owasp || []),
+      "security-severity": SECURITY_SEVERITY[f.severity] || "5.0",
+      precision: f.confidence === "high" ? "high" : f.confidence === "medium" ? "medium" : "low",
+    },
+  };
+}
+
 /** A stable rule id per advisory: one GitHub rule per CVE/GHSA. */
 function ruleIdFor(advisory) {
   return `algosize/${advisory.id}`;
@@ -127,6 +155,48 @@ export function toSarif(result, { runId = null, siteOrigin = "" } = {}) {
   const rulesById = new Map();
   const results = [];
 
+  // Source findings first. GitHub's code-scanning UI is where a reviewer
+  // already works, and a SAST finding has something a dependency advisory
+  // does not: a real file and a real line. Emitting them alongside the
+  // advisories is the difference between "the scanner found something, go
+  // open our dashboard" and the finding appearing inline on the pull request
+  // that introduced it.
+  const sourceFindings = (result && result.source && Array.isArray(result.source.findings))
+    ? result.source.findings : [];
+  for (const f of sourceFindings) {
+    if (!f || !f.ruleId) continue;
+    if (!rulesById.has(f.ruleId)) rulesById.set(f.ruleId, sourceRuleFor(f));
+    results.push({
+      ruleId: f.ruleId,
+      level: LEVEL_BY_SEVERITY[f.severity] || "warning",
+      message: {
+        text: `${f.title || f.type}: ${f.recommendation}` +
+          (f.evidence && f.evidence.source && f.evidence.sink
+            ? ` (data flows from ${f.evidence.source} to ${f.evidence.sink})`
+            : ""),
+      },
+      locations: [{
+        physicalLocation: {
+          artifactLocation: { uri: f.path, uriBaseId: "%SRCROOT%" },
+          region: f.column
+            ? { startLine: f.line, startColumn: f.column }
+            : { startLine: f.line },
+        },
+      }],
+      // Our own fingerprint, which is deliberately not keyed on the line
+      // number — so GitHub keeps tracking a finding as one issue when
+      // unrelated edits move it down the file, instead of closing it and
+      // opening a new one on every commit.
+      partialFingerprints: { algosizeFinding: f.fingerprint },
+      properties: {
+        confidence: f.confidence,
+        category: f.category,
+        module: f.module,
+        ...(f.cwe && f.cwe.length ? { cwe: f.cwe } : {}),
+      },
+    });
+  }
+
   for (const a of advisories) {
     if (!a || !a.id) continue;
     const id = ruleIdFor(a);
@@ -167,6 +237,13 @@ export function toSarif(result, { runId = null, siteOrigin = "" } = {}) {
         ...(runId ? { algosizeRunId: runId } : {}),
         manifestsScanned: manifests.map((m) => m.filename),
         complete: !!(result && result.summary && result.summary.complete),
+        // Which passes actually ran. A SARIF log with no source results
+        // because the source could not be READ must not be indistinguishable
+        // from one with no source results because the code was clean.
+        sourceScanStatus: (result && result.source && result.source.status) || "not_run",
+        ...(result && result.source && result.source.coverage
+          ? { sourceFilesScanned: result.source.coverage.filesScanned }
+          : {}),
         ...(manifests.length > 1
           ? { locationCaveat: "Findings are attached to the first scanned manifest; packages from several manifests are merged before the advisory lookup." }
           : {}),
