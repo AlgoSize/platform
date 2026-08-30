@@ -197,6 +197,54 @@ gatewayed traffic is billable and distinguishable the moment the binding lands.
 
 ---
 
+## Prompt 4 — Vectorize index for the fix pipeline's retrieval layer
+
+```
+You are operating in Replit and hold the Cloudflare API token
+(CLOUDFLARE_API_TOKEN with Vectorize edit). This is a Cloudflare provisioning
+job — the AlgoSize worker uses the index once it exists but cannot create it.
+
+GOAL
+Create a Cloudflare Vectorize index so the multi-model fix pipeline's support
+layer (worker/src/ai/retrieval.js) can embed findings and retrieve similar
+prior fixes as context for fix generation. Without the index, retrieval
+degrades to "no prior art" — the pipeline still runs, this only enriches it.
+
+DO
+1. Create a Vectorize index named "algosize-fixes". Dimensions MUST match the
+   embedding model the worker routes to (recommend("embeddings") → bge-m3,
+   which outputs 1024-dim vectors — confirm the current dimension against the
+   model card before creating; a dimension mismatch makes every query fail).
+   Metric: cosine.
+2. Bind it to the worker as env.VECTORIZE (the binding name retrieval.js
+   checks). Return the exact wrangler.toml [[vectorize]] block to add.
+3. Confirm the metadata fields retrieval.js writes are indexable: ruleId,
+   category, fingerprint, summary. Enable metadata indexing on category and
+   ruleId so filtered queries work.
+4. Verify: insert one test vector with the descriptor metadata, run one query,
+   confirm a match comes back. Report PASS/FAIL.
+
+DO NOT
+- Do NOT store file content in the index. retrieval.js writes a source-free
+  descriptor (rule/category/fingerprint/hashes) only; keep it that way — the
+  index must never become a second copy of customer source.
+- Do NOT report the binding as ready until a query has actually returned a
+  match AND the dimension matches the live embedding model.
+- Do NOT write the Cloudflare token into the repo or the handoff doc.
+
+OUTPUT
+vectorize-handoff.md with the index name, the [[vectorize]] binding block, the
+confirmed dimension + metric, and the insert/query verification result.
+```
+
+**Why this can't be worker code:** creating a Vectorize index is a Cloudflare
+provisioning call needing the API token; the worker only reads/writes the index
+once the `env.VECTORIZE` binding exists. `retrieval.js` already degrades
+gracefully when the binding is absent, so the pipeline ships and works before
+this lands — the index only turns on the "similar prior fixes" context.
+
+---
+
 ## What stays with the operator (not Replit, not the worker)
 
 Three decisions are human calls, listed here so nothing falls between the seams:

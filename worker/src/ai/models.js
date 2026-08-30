@@ -80,8 +80,8 @@ export const MODELS = Object.freeze([
   m("workers-ai", "@cf/deepseek-ai/deepseek-v4-flash-0731", "DeepSeek V4 Flash", {
     capability: 85, coding: 80, costScore: 45, latencyScore: 55,
     p50Ms: 2000, contextWindow: 128000, tools: true, reasoning: true, vision: false,
-    tasks: { fix_suggestion: "primary", multifile_fix: "secondary", repo_summarization: "secondary", report_writing: "secondary" },
-    notes: "Capable agentic/reasoning model with cached-input pricing.",
+    tasks: { fix_suggestion: "primary", multifile_fix: "secondary", repo_summarization: "secondary", report_writing: "secondary", vuln_classification: "secondary" },
+    notes: "Capable agentic/reasoning model with cached-input pricing. Third voter in the critical-finding exploitability ensemble.",
   }),
   // ---- premium coding / remediation ----
   m("workers-ai", "@cf/zai-org/glm-5.3-flash", "GLM-5.3 Flash", {
