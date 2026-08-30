@@ -1427,6 +1427,61 @@ console.log("\nthe sweep grades the code it already reads\n");
     `an untruncated baseline reports exactly what is new (got ${grew.newFindings.length})`);
 }
 
+// ---------------------------------------------------------------------------
+console.log("\na sweep survives a database that is behind on migrations\n");
+// ---------------------------------------------------------------------------
+//
+// Migrations here are applied BY HAND, on purpose, so there is always a window
+// where the deployed Worker writes a column the database does not have yet.
+//
+// Unguarded, that window was not a degraded feature. D1 raises "no such
+// column", the UPDATE throws, and the sweep dies before recording anything —
+// so the organisation loses its DEPENDENCY alert too, the baseline stays
+// frozen, and the queue retries the same failure every night. A diagnostic
+// column taking the whole audit down with it is the wrong trade in every
+// direction, and this pins that it cannot happen again for any future column.
+{
+  const env = makeEnv();
+  // Roll the database back behind two migrations, exactly as production sits
+  // between a deploy and a `wrangler d1 execute`.
+  await env.DB.prepare("ALTER TABLE monitors DROP COLUMN last_source_json").run();
+  await env.DB.prepare("ALTER TABLE monitors DROP COLUMN last_cost_json").run();
+
+  const orgId = await seedOrg(env, { userId: "usr_mig", email: "mig@example.com" });
+  const m = await createMonitor(env, {
+    orgId, repoUrl: "https://github.com/o/behind", analyzers: ["vuln"],
+  });
+
+  const recorded = await recordMonitorRun(env, m.monitorId, {
+    ranAt: NOW, resultHash: "h", advisoryIds: ["GHSA-x"],
+    severities: { critical: 1, high: 0, medium: 0, low: 0 },
+    source: { total: 3, counts: { critical: 1 }, keys: ["a"], truncated: false, at: NOW },
+    cost:   { currentSpend: 100, totalSavingsPct: 5, suggestions: 1, at: NOW },
+  });
+
+  expect(Array.isArray(recorded.droppedColumns) && recorded.droppedColumns.length === 2,
+    `the write reports which columns were missing (got ${JSON.stringify(recorded && recorded.droppedColumns)})`);
+  expect(recorded.droppedColumns.includes("last_source_json") &&
+         recorded.droppedColumns.includes("last_cost_json"),
+    "…naming them, so an operator knows which migration to run");
+
+  // The whole point: everything the database CAN hold was still written.
+  const after = await getMonitorById(env, m.monitorId);
+  expect(after.lastRunAt === NOW && JSON.stringify(after.lastAdvisoryIds) === '["GHSA-x"]',
+    `the advisory baseline still lands (ranAt ${after.lastRunAt}, ids ${JSON.stringify(after.lastAdvisoryIds)})`);
+  expect(after.lastSeverities && after.lastSeverities.critical === 1,
+    "…and so does the severity mix the scorecard grades from");
+
+  // A real error must still propagate. A safety net that swallows everything
+  // is the silent failure it was built to prevent.
+  let threw = false;
+  try {
+    await recordMonitorRun({ DB: { prepare() { throw new Error("D1_ERROR: database is locked"); } } },
+      m.monitorId, { ranAt: NOW, resultHash: "h", advisoryIds: [] });
+  } catch { threw = true; }
+  expect(threw, "a non-schema failure still throws rather than being swallowed");
+}
+
 console.log("");
 if (failures === 0) {
   console.log("\x1b[32m  all monitor tests passed\x1b[0m\n");

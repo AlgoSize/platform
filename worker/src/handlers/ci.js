@@ -34,6 +34,7 @@
 // here, so both paths produce the same answer from the same bytes.
 
 import { auditManifests } from "./analyze.js";
+import { analyzeVuln } from "../analyzers/vuln.js";
 import { persistRun } from "./runs.js";
 import { storeReportFor } from "../reports/render.js";
 import { SUPPORTED_FILES as LOCKFILE_NAMES, MAX_LOCKFILE_BYTES } from "../analyzers/lockfile.js";
@@ -302,6 +303,45 @@ export async function ciRunHandler(request, env, ctx) {
   const ciContext = { repo: v.value.repo, ref: v.value.ref, commitSha: v.value.commitSha };
 
   // ---------------------------------------------------------------------
+  // Source scan — on the files the workflow ALREADY submits
+  // ---------------------------------------------------------------------
+  //
+  // `files` has always carried real source content: the architecture step
+  // globs .js/.ts/.py/.go and posts it so the X-ray can find import edges.
+  // Those same bytes are exactly what the SAST engine wants, and until now
+  // the gate read them for architecture and threw the security half away.
+  //
+  // So this costs no extra upload, no extra workflow step, and no second
+  // trip: the PR comment stops being a severity table that speaks only for
+  // third-party packages, which is what it was on every repository including
+  // this one's own pull requests.
+  //
+  // Fails SOFT. The dependency audit is the contract this endpoint has always
+  // honoured, and a source-scanner bug must degrade to "the code was not
+  // scanned" beside a complete advisory list — never take the gate down.
+  let sourceScan = null;
+  if (v.value.archInput && v.value.archInput.files.length) {
+    try {
+      const scanned = analyzeVuln({ files: v.value.archInput.files });
+      sourceScan = {
+        status: "ok",
+        findings: scanned.findings,
+        summary: scanned.summary,
+        coverage: scanned.coverage,
+      };
+    } catch (err) {
+      await captureException(env, ctx, err, {
+        request, tags: { source: "ci_ingest", phase: "source_scan" },
+      });
+      sourceScan = {
+        status: "failed",
+        message: "The source scanner errored on the submitted files. The dependency audit is unaffected.",
+        findings: [], summary: null, coverage: null,
+      };
+    }
+  }
+
+  // ---------------------------------------------------------------------
   // Dependency audit — only when lockfiles were submitted
   // ---------------------------------------------------------------------
   let vuln = null;
@@ -319,6 +359,9 @@ export async function ciRunHandler(request, env, ctx) {
     // dashboard row can say which commit it was and link back to the build.
     const result = {
       ...audit.result,
+      // Under the same key the dashboard and the nightly sweep use, so a CI
+      // run, a manual scan and a monitored repo all render through one path.
+      ...(sourceScan ? { source: sourceScan } : {}),
       ci: { ...ciContext, failOn: v.value.failOn, failed },
     };
 
@@ -517,6 +560,28 @@ export async function ciRunHandler(request, env, ctx) {
     failed:        Boolean((vuln && vuln.failed) || (architecture && architecture.failed)),
     ...(vuln && vuln.warning ? { warning: vuln.warning } : {}),
     ...(architecture ? { architecture } : {}),
+    // The security half of the files already submitted. Reported beside the
+    // architecture block rather than folded into `summary`, because a reader
+    // has to be able to tell which half a number came from: `npm audit fix`
+    // clears one and does nothing for the other.
+    //
+    // Deliberately NOT folded into the top-level `failed` either. Source
+    // findings annotate today and gate never — the same posture
+    // `monthlyCeilingUsd: null` takes in algosize.budget.json. A brand-new
+    // analyzer that starts failing builds on its first run gets deleted from
+    // the workflow before anyone reads a finding, and then it protects nobody.
+    ...(sourceScan ? { source: {
+      status:   sourceScan.status,
+      findings: sourceScan.status === "ok" ? sourceScan.summary.total : 0,
+      summary:  sourceScan.status === "ok" ? sourceScan.summary.bySeverity : null,
+      // The top few, so the comment can name something concrete instead of
+      // asking the reader to go and look.
+      top: (sourceScan.findings || []).slice(0, 5).map((f) => ({
+        severity: f.severity, ruleId: f.ruleId, title: f.title,
+        path: f.path, line: f.line, confidence: f.confidence,
+      })),
+      ...(sourceScan.message ? { message: sourceScan.message } : {}),
+    } } : {}),
     // Deliberately NOT folded into the top-level `failed`. The optimizer gate
     // decides its own verdict from the ceilings in optimizer.config.json and
     // has already exited non-zero by the time it files this; making the
@@ -761,6 +826,24 @@ jobs:
           : > table.md
           if [ "$(jq -r 'has("summary") and (.runId != null)' response.json)" = "true" ]; then
             jq -r '"| Severity | Count |\\n|---|---|\\n| Critical | \\(.summary.critical) |\\n| High | \\(.summary.high) |\\n| Medium | \\(.summary.medium) |\\n| Low | \\(.summary.low) |"' response.json >> table.md
+          fi
+          # The security half of the same files. Before this, the comment was a
+          # severity table that spoke only for third-party packages — a clean
+          # table on a pull request that introduced a SQL injection.
+          if [ "$(jq -r '.source.status // empty' response.json)" = "ok" ]; then
+            {
+              echo ""
+              jq -r '"**Code scan** · \\(.source.findings) finding(s) (\\(.source.summary.critical) critical, \\(.source.summary.high) high) in the files submitted"' response.json
+              if [ "$(jq -r '.source.findings' response.json)" != "0" ]; then
+                echo ""
+                jq -r '.source.top[] | "- \\(.severity | ascii_upcase) \\(.path):\\(.line) — \\(.title)"' response.json
+              fi
+            } >> table.md
+          elif [ "$(jq -r 'has("source")' response.json)" = "true" ]; then
+            {
+              echo ""
+              jq -r '"**Code scan** · did not run — \\(.source.message // \\"no reason given\\")"' response.json
+            } >> table.md
           fi
           if [ "$(jq -r 'has("architecture")' response.json)" = "true" ]; then
             {
