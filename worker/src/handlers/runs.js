@@ -482,12 +482,22 @@ export async function attachPipelineResult(env, scope, id, pipeline) {
   // truncated — half a result read as a whole one is worse than none.
   if (serialized.length > MAX_INPUT_BYTES) return false;
 
-  const scopeSql  = orgId && userId ? "(org_id = ? OR user_id = ?)" : orgId ? "org_id = ?" : "user_id = ?";
-  const scopeArgs = orgId && userId ? [orgId, userId] : orgId ? [orgId] : [userId];
+  // Three fully literal statements, one per owner shape — no interpolation and
+  // no concatenation with a variable, so the SQL text is fixed at parse time.
+  // The predicate here is chosen from a ternary rather than built from input,
+  // but "the interpolated value happens to be safe today" is the reasoning that
+  // breaks the next time someone edits the line; the platform's rule (and its
+  // code-scanning gate) is that a query is a literal and every value is bound.
   try {
-    await env.DB.prepare(
-      `UPDATE runs SET result_json = ? WHERE id = ? AND ${scopeSql}`
-    ).bind(serialized, id, ...scopeArgs).run();
+    const stmt = orgId && userId
+      ? env.DB.prepare("UPDATE runs SET result_json = ? WHERE id = ? AND (org_id = ? OR user_id = ?)")
+          .bind(serialized, id, orgId, userId)
+      : orgId
+        ? env.DB.prepare("UPDATE runs SET result_json = ? WHERE id = ? AND org_id = ?")
+            .bind(serialized, id, orgId)
+        : env.DB.prepare("UPDATE runs SET result_json = ? WHERE id = ? AND user_id = ?")
+            .bind(serialized, id, userId);
+    await stmt.run();
     return true;
   } catch {
     return false;
