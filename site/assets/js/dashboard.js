@@ -175,6 +175,11 @@
           var err = new Error(msg);
           if (json && json.helpUrl) err.helpUrl = json.helpUrl;
           if (json && json.error)   err.code    = json.error;
+          // Keep structured server feedback available to feature modules.
+          // Validation endpoints use an errors[] array so callers can place
+          // each message beside the control that needs attention.
+          if (json && Array.isArray(json.errors)) err.errors = json.errors;
+          if (json && json.schema) err.schema = json.schema;
           throw err;
         }
         return json;
