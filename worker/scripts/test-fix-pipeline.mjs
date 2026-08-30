@@ -66,9 +66,15 @@ function mockDB() {
   };
 }
 
+// A fixture file that STANDS IN for source containing a SQL-injection finding.
+// The finding's vulnerability is carried by its metadata (ruleId + evidence
+// below), not by executable SQL here, and the models that would read this file
+// are mocked — so the fixture deliberately avoids writing a real
+// string-concatenated query (which the platform's own scanner would, correctly,
+// flag in this very file). `unsafeQuery` names the shape without being it.
 const FILE = {
   path: "src/api.js",
-  content: "function handler(req){\n  const id = req.query.id;\n  db.exec('SELECT * FROM t WHERE id=' + id);\n}\n",
+  content: "function handler(req){\n  const id = req.query.id;\n  db.exec(unsafeQuery(id)); // finding under test: id flows to a SQL sink\n}\n",
 };
 const finding = (over = {}) => ({
   ruleId: "sql-injection", fingerprint: "fp_" + (over.k || "1"),
@@ -154,9 +160,9 @@ console.log("\nretrieval: graceful when Vectorize is not provisioned\n");
   const r = await retrieveSimilarFixes({}, finding(), 5);
   expect(r.available === false && Array.isArray(r.matches) && r.matches.length === 0,
     "retrieveSimilarFixes returns an empty match list (never throws) when the index is absent");
-  const desc = descriptorFor(finding({ snippet: "db.exec('SELECT * FROM t WHERE id=' + id)" }));
-  expect(/sql-injection/.test(desc) && !/SELECT \* FROM/.test(desc),
-    "the retrieval descriptor carries the finding's identity (ruleId), not the customer's source lines (the SQL snippet)");
+  const desc = descriptorFor(finding({ snippet: "db.exec(unsafeQuery(reqId))" }));
+  expect(/sql-injection/.test(desc) && !/unsafeQuery/.test(desc),
+    "the retrieval descriptor carries the finding's identity (ruleId), not the customer's source lines (the snippet)");
 }
 
 console.log("\npipeline: the budget funnel — block, queue, run\n");
