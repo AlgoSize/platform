@@ -457,6 +457,59 @@ export async function getRun(env, scope, id) {
 }
 
 /**
+ * Attach a fix-pipeline result to the scan run it was computed from.
+ *
+ * The pipeline is ABOUT a scan: it reads that run's findings and decides, per
+ * finding, whether one is a false positive, needs a person, got a patch, or is
+ * parked for an external agent. Storing it anywhere else would leave the
+ * handoff endpoint joining two tables to answer "which findings on this run
+ * are waiting for an agent" — so it lives on the run, under `result.pipeline`,
+ * where getRun already returns it.
+ *
+ * The UPDATE is scoped by the same owner predicate as getRun, so a caller can
+ * only ever write to a run their own credential can already read. Returns true
+ * when a row was actually updated.
+ */
+export async function attachPipelineResult(env, scope, id, pipeline) {
+  const { userId = null, orgId = null } = typeof scope === "string" ? { userId: scope } : (scope || {});
+  if (!env || !env.DB || !id || (!userId && !orgId)) return false;
+  const run = await getRun(env, scope, id);
+  if (!run) return false;
+
+  const result = Object.assign({}, run.result || {}, { pipeline });
+  const serialized = JSON.stringify(result);
+  // A pipeline result that would blow the history row is dropped rather than
+  // truncated — half a result read as a whole one is worse than none.
+  if (serialized.length > MAX_INPUT_BYTES) return false;
+
+  // ONE literal statement, always filtered by BOTH tenant columns.
+  //
+  // getRun above has already proved this caller may see this run, so the write
+  // pins itself to the owner that read returned rather than re-deriving a
+  // predicate from the caller's scope. Three things fall out of that:
+  //
+  //   • the SQL is a fixed literal with every value bound — no interpolation,
+  //     and no per-owner branch that can drift one statement at a time;
+  //   • both org_id and user_id are always in the predicate, so there is no
+  //     shape of this query that writes without a tenant filter;
+  //   • it is strictly stronger than a scope check, because a row that changed
+  //     owner between the read and the write no longer matches and the update
+  //     lands nowhere instead of on somebody else's run.
+  //
+  // `IS` rather than `=` because either column is legitimately NULL — a CI run
+  // has an org and no user, a personal run the reverse — and `= NULL` is never
+  // true in SQL, which would silently make this a no-op for half the rows.
+  try {
+    await env.DB.prepare(
+      "UPDATE runs SET result_json = ? WHERE id = ? AND org_id IS ? AND user_id IS ?"
+    ).bind(serialized, id, run.orgId, run.userId).run();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Resolve the run scope for a request under either credential.
  *
  * A cookie session has a user (and, through them, an org); an API key has only

@@ -125,6 +125,98 @@ Every finding ends on exactly one outcome (`src/fix/pipeline.js`):
 | `ineligible` | cannot become a fix task (dependency advisory, file too large) |
 | `error` | a stage failed in a way that is not a verdict |
 
+## Running it — `POST /api/pipeline/run`
+
+Until this endpoint landed, `runFullPipeline` had **no caller**: the orchestrator
+was fully built and fully tested, but nothing in the Worker ever invoked it, so
+`waiting_for_agent` was an outcome no finding could actually reach and the Fix
+Pipeline page could configure a pipeline it had no way to start.
+
+Two input modes, mirroring `POST /api/fix/propose`:
+
+```jsonc
+// A stored scan: the Worker refetches only the files the findings name.
+{ "runId": "run_…", "config": { "triage": "@cf/…", "fix": "@cf/…" }, "routeToMcp": ["fix"] }
+
+// The caller holds the source (MCP client with a checkout, the CLI, a test).
+{ "findings": [ … ], "files": [ { "path": "…", "content": "…" } ], "config": { … } }
+```
+
+- **The config is validated before any model is called.** A configuration the
+  dashboard would reject inline is rejected here too (`422`, with the same
+  per-stage `errors` array), so an invalid pipeline costs nothing and cannot be
+  smuggled past the UI by posting directly.
+- **Routing the fix stage means no source is fetched at all.** The run stops at
+  validation and parks, so there is no patch to generate and nothing to read.
+- **Caps are reported, not hidden.** `coverage.capped` says when only the first
+  N findings were run; a run that examined 50 of 300 and reported three
+  fix-ready findings would otherwise read as a clean sweep.
+- The result is attached to the scan run under `result.pipeline`, which is what
+  lets `GET /api/fix/handoff` return the parked set rather than the raw scan.
+
+### The handoff hands over what the funnel parked
+
+`GET /api/fix/handoff` reports its `selection`:
+
+| `selection` | Meaning |
+| --- | --- |
+| `parked` | the pipeline ran; these findings passed triage **and** validation and are waiting for an agent |
+| `all_findings` | no pipeline result on this run — this is the raw scan, untriaged |
+
+The distinction matters because handing an agent a raw scan and calling it a
+handoff sends it exactly the false-positive noise the first three stages exist
+to remove, on the customer's own tokens.
+
+The generated prompt carries the MCP connection command for the chosen agent
+(Claude Code, Kimi, or a generic MCP host) and names `ASK_LIVE_KEY` **as a
+variable only** — the server holds no plaintext key and none is ever rendered,
+logged, or copied.
+
+## The cost funnel is a blend, not a sum
+
+`estimatePipelineCost` prices each stage at **its own share of the findings**:
+
+| Stage | Share | Why |
+| --- | --- | --- |
+| S1 detect | 100% | deterministic rules, $0 — no model |
+| S2 triage | 100% | cheap enough to see everything |
+| S3 validate | ~15% | only what survives triage |
+| S4 fix | ~10% | only what validation confirms |
+| S5 verify | ~10% | one per patch |
+
+Charging every stage at full volume quotes **roughly 4× the real cost**, because
+the coding model — by far the most expensive — sees about a tenth of what
+detection produces. Each `perStage` row therefore reports both figures:
+`algosizePricePerRun` (what one finding costs *if* it reaches that stage) and
+`algosizePrice` (that figure at the stage's share, which is what sums to the
+total).
+
+**An unpriced stage has no total, not a smaller one.** If any selected model has
+no published rate, `perFinding.algosizePrice` is `null` with `partial: true` and
+`unpricedStages` naming the culprit — and the page renders the word *partial*.
+This is deliberately stricter than the admin rollups, which show a labelled
+lower bound: an operator reading a dashboard can act on "at least $X", but a
+customer-facing **price** cannot be a number we are unable to stand behind.
+
+## Routing S4 parks S5 with it
+
+`expandRouting` applies the coupling in one place, consumed by the estimate, the
+validator and the orchestrator alike. The agent that writes a patch in its own
+checkout is the only party holding it, so an "S4 routed, S5 in-house" pipeline
+would be verifying a patch it never received.
+
+Two consequences:
+
+1. Both stages bill $0 Workers AI.
+2. The **S5 ≠ S4** rule is not enforced on them. It exists to stop a fix being
+   graded by its own author *inside Algosize*; when the agent runs both there is
+   no in-house grader to conflict with, and rejecting there would teach someone
+   to clear a field to get past an error about nothing.
+
+The **verdict** is still Algosize's either way: a patch handed back through
+`algosize_record_patch` goes through the same static validation as an in-house
+one. What moves to the agent is the model work, not the judgement.
+
 ## Budget funnel
 
 The pipeline gates on the **customer-billed** spend (`algosize_price`, incl. the
@@ -162,6 +254,8 @@ is a normal fix, not a failure.
 | --- | --- | --- |
 | Stages 2/3/5, routing, pipeline, budget funnel | repo | none |
 | Stage 4 (reuses merged orchestrator) | repo | none |
+| `POST /api/pipeline/run`, the estimate, the handoff | repo | none |
+| `AI_BUDGET_USD` (optional; unset = tracked, not capped) | operator | Worker var |
 | `model_routing_config` overrides | operator (D1) | SQL |
 | **Vectorize index** for retrieval | operator / Replit | Cloudflare binding |
 | AI Gateway (routing/observability for the calls) | operator / Replit | Cloudflare |

@@ -151,6 +151,7 @@ import { captureException } from "./observability.js";
 import { generateFixHandler, proposeFixHandler, validateFixHandler, explainRuleHandler, importSarifHandler } from "./handlers/fix.js";
 import { handoffFindingsHandler, applyPatchHandler } from "./handlers/handoff.js";
 import { stageModelsHandler, estimateStageCostHandler, validateStageConfigHandler } from "./handlers/ai.js";
+import { runPipelineHandler } from "./handlers/pipeline.js";
 import { estimateHandler, estimateProvidersHandler } from "./handlers/estimate.js";
 import { withEstimateHistory } from "./handlers/estimate_history.js";
 export { UsageCounter } from "./usage-counter.js";
@@ -242,6 +243,11 @@ router.post("/api/import/sarif", analyzeRateLimit, requireAuth, importSarifHandl
 router.get("/api/ai/models", requireAuth, stageModelsHandler);
 router.post("/api/ai/estimate", requireAuth, estimateStageCostHandler);
 router.post("/api/ai/stage-config/validate", requireAuth, validateStageConfigHandler);
+
+// Run the five-stage pipeline over a scan's findings. Rate limited like every
+// AI-backed route; the stage config is validated server-side before any model
+// is called, so an invalid configuration costs nothing.
+router.post("/api/pipeline/run", analyzeRateLimit, requireAuth, runPipelineHandler);
 
 // ---- Infrastructure Cost Estimator ----------------------------------------
 // No cloud-account connector and no credential storage, ever: the estimate is

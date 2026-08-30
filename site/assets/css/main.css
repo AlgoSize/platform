@@ -5364,6 +5364,30 @@ a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
 .pipe-row.routed .pipe-select { opacity: 0.55; }
 .pipe-row-err { grid-area: err; color: var(--sev-high); font-size: 0.8rem; }
 
+/* Stage copy + funnel share. `desc` and `note` span the row under the head so
+   the dropdown keeps its own column. */
+.pipe-row { grid-template-areas: "head toggle" "desc toggle" "note toggle" "select toggle" "err err"; }
+.pipe-row-desc { grid-area: desc; margin: 0; color: var(--text-muted); font-size: 0.82rem; max-width: 62ch; }
+.pipe-row-note { grid-area: note; margin: 0; color: var(--text-dim); font-size: 0.74rem; max-width: 62ch; }
+.pipe-share { margin-left: auto; color: var(--text-dim); font-size: 0.7rem; white-space: nowrap; }
+
+/* Stage 1 is an anchor: no control, so no control column. */
+.pipe-row-anchor { grid-template-areas: "head head" "desc desc" "note note"; opacity: 0.85; }
+
+.pipe-row.routed .pipe-toggle input[disabled] { cursor: default; }
+
+.pipe-run-out { margin-top: var(--s-4); display: flex; flex-direction: column; gap: var(--s-2); }
+.pipe-run-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s-3); flex-wrap: wrap; }
+.pipe-run-meta { color: var(--text-dim); font-size: 0.74rem; }
+.pipe-run-list { list-style: none; margin: 0; padding: 0; }
+.pipe-run-list li {
+  display: flex; justify-content: space-between; gap: var(--s-4);
+  padding: var(--s-2) 0; border-top: 1px solid var(--border-soft); font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.pipe-run-list li.parked { color: var(--accent-warm); font-weight: 600; }
+.pipe-run-note { margin: 0; color: var(--text-dim); font-size: 0.75rem; max-width: 62ch; }
+
 .pipe-total { display: flex; align-items: baseline; gap: var(--s-3); margin-bottom: var(--s-4); }
 .pipe-total-num { font: 700 1.8rem/1 var(--font-mono, monospace); color: var(--text); }
 .pipe-total-note { color: var(--text-muted); font-size: 0.82rem; }
@@ -5373,7 +5397,11 @@ a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
   padding: var(--s-2) 0; border-top: 1px solid var(--border-soft);
   font-size: 0.85rem;
 }
-.pipe-cost-stage { color: var(--text-muted); }
+.pipe-cost-stage { color: var(--text-muted); display: inline-flex; align-items: baseline; gap: var(--s-2); }
+.pipe-cost-share { color: var(--text-dim); font-size: 0.7rem; }
+.pipe-cost-free { color: var(--text-dim); }
+/* A partial estimate is not a small number — it is not a number. */
+.pipe-total-partial { color: var(--sev-medium, var(--text-muted)); font-size: 1.4rem; }
 .pipe-cost-routed { color: var(--accent-warm); }
 .pipe-cost-null { color: var(--text-dim); }
 .pipe-cost-foot { color: var(--text-dim); font-size: 0.75rem; margin-top: var(--s-3); }

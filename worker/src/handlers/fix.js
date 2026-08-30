@@ -75,7 +75,10 @@ export async function generateFixHandler(request, env, ctx) {
 
 const RAW_TIMEOUT_PATHS = /(^|\/)\.\.(\/|$)/;
 
-async function fetchFindingFile(repoUrl, path, env) {
+// Exported so the pipeline runner can pull the same single file the same way,
+// under the same caps, rather than growing a second fetch path with its own
+// idea of what a safe repository path is.
+export async function fetchFindingFile(repoUrl, path, env) {
   const m = /^https?:\/\/(?:www\.)?github\.com\/([^\/\s]+)\/([^\/\s#?]+)/.exec(String(repoUrl || ""));
   if (!m) return { error: "invalid_repo_url", message: "repoUrl must be a public GitHub repository URL" };
   if (typeof path !== "string" || !path || RAW_TIMEOUT_PATHS.test(path) || path.startsWith("/")) {
