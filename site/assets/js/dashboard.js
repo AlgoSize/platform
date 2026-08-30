@@ -184,6 +184,7 @@
           // err.errors without every endpoint's error shape being forced
           // through the single-string convention.
           if (json && Array.isArray(json.errors)) err.errors = json.errors;
+          if (json && json.schema) err.schema = json.schema;
           throw err;
         }
         return json;

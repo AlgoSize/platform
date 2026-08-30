@@ -19,11 +19,16 @@
   if (!core) return;
   var el = core.el;
 
-  var state = { loaded: false, stages: null, config: {}, route: {} };
+  var state = { loaded: false, stages: null, config: {}, route: {}, request: 0 };
 
   function load() {
     if (state.loaded) return;
     state.loaded = true;
+    var body = document.getElementById("pipeline-body");
+    if (body) {
+      clear(body);
+      body.appendChild(el("div", { class: "panel-empty" }, "Loading pipeline models…"));
+    }
     core.callApi("/api/ai/models", null, "GET")
       .then(function (d) { state.stages = d.stages || []; render(); estimate(); })
       .catch(function (err) { fail(err && err.message); });
@@ -33,8 +38,15 @@
     var body = document.getElementById("pipeline-body");
     if (!body) return;
     clear(body);
-    body.appendChild(core.errorState ? core.errorState(msg || "Could not load the pipeline.") :
-      el("div", { class: "panel-empty" }, msg || "Could not load the pipeline."));
+    var panel = core.errorState ? core.errorState(msg || "Could not load the pipeline.") :
+      el("div", { class: "panel-empty" }, msg || "Could not load the pipeline.");
+    var retry = el("button", { class: "btn btn-ghost btn-sm pipe-retry", type: "button" }, "Try again");
+    retry.addEventListener("click", function () {
+      state.loaded = false;
+      load();
+    });
+    panel.appendChild(retry);
+    body.appendChild(panel);
   }
 
   function render() {
@@ -42,6 +54,7 @@
     if (!body) return;
     clear(body);
 
+    body.appendChild(funnel());
     var grid = el("div", { class: "pipe-grid" });
 
     // --- Left: the stage selector -----------------------------------------
@@ -63,10 +76,67 @@
     cost.appendChild(el("div", { class: "panel-empty", id: "pipe-cost-body" }, "…"));
     right.appendChild(cost);
 
+    var validation = el("section", { class: "panel pipe-validation", id: "pipe-validation" });
+    validation.appendChild(el("h3", { class: "panel-title" }, "Configuration check"));
+    validation.appendChild(el("div", {
+      class: "pipe-validation-body", id: "pipe-validation-body",
+      role: "status", "aria-live": "polite", "aria-atomic": "true"
+    },
+      "Checking the server rules…"));
+    right.appendChild(validation);
+
     right.appendChild(handoffPanel());
 
     grid.appendChild(right);
     body.appendChild(grid);
+    refreshFunnel();
+  }
+
+  function funnel() {
+    var section = el("section", { class: "panel pipe-funnel", id: "pipe-funnel" });
+    var head = el("div", { class: "pipe-funnel-head" });
+    var copy = el("div", { class: "pipe-funnel-copy" });
+    copy.appendChild(el("h3", { class: "panel-title" }, "The fix funnel"));
+    copy.appendChild(el("p", { class: "panel-desc" },
+      "Every finding moves through the same evidence chain. The last model checks the fix, never the model that wrote it."));
+    head.appendChild(copy);
+    head.appendChild(el("span", { class: "pipe-funnel-state mono", id: "pipe-funnel-state" }, "awaiting choices"));
+    section.appendChild(head);
+
+    var track = el("div", { class: "pipe-funnel-track", role: "list", "aria-label": "Fix pipeline stages" });
+    (state.stages || []).forEach(function (stage, i) {
+      if (i) track.appendChild(el("span", { class: "pipe-funnel-line", "aria-hidden": "true" }));
+      var node = el("div", { class: "pipe-funnel-node", id: "pipe-funnel-" + stage.id, role: "listitem" });
+      node.appendChild(el("span", { class: "pipe-funnel-number mono" }, "S" + stage.stage));
+      node.appendChild(el("strong", { class: "pipe-funnel-label" }, stage.label));
+      node.appendChild(el("span", { class: "pipe-funnel-model mono", "data-funnel-model": stage.id }, "auto"));
+      track.appendChild(node);
+    });
+    section.appendChild(track);
+    return section;
+  }
+
+  function refreshFunnel() {
+    var stateEl = document.getElementById("pipe-funnel-state");
+    if (!stateEl) return;
+    var routed = Object.keys(state.route).filter(function (k) { return state.route[k]; }).length;
+    stateEl.textContent = routed ? routed + " stage" + (routed === 1 ? "" : "s") + " routed" : "platform run";
+    (state.stages || []).forEach(function (stage) {
+      var node = document.getElementById("pipe-funnel-" + stage.id);
+      var model = node && node.querySelector("[data-funnel-model='" + stage.id + "']");
+      if (!node || !model) return;
+      var routedHere = !!state.route[stage.id];
+      node.classList.toggle("routed", routedHere);
+      model.textContent = routedHere ? "your agent · $0" : (state.config[stage.id] ? shortModel(state.config[stage.id]) : "auto");
+      model.classList.toggle("pipe-funnel-unpriced", !routedHere && !!state.config[stage.id] && !stage.options.some(function (o) {
+        return o.model === state.config[stage.id] && o.priceHint && o.priceHint.outputPer1M != null;
+      }));
+    });
+  }
+
+  function shortModel(model) {
+    var parts = String(model || "").split("/");
+    return parts[parts.length - 1] || "selected";
   }
 
   function stageRow(stage) {
@@ -79,7 +149,10 @@
     row.appendChild(head);
 
     // Model dropdown — valid options only.
-    var sel = el("select", { class: "pipe-select", "data-stage": stage.id, "aria-label": stage.label + " model" });
+    var sel = el("select", {
+      class: "pipe-select", "data-stage": stage.id,
+      "aria-label": stage.label + " model", "aria-describedby": "pipe-err-" + stage.id
+    });
     sel.appendChild(el("option", { value: "" }, "Auto (recommended)"));
     stage.options.forEach(function (o) {
       var opt = el("option", { value: o.model }, o.label + priceSuffix(o));
@@ -89,24 +162,34 @@
     sel.addEventListener("change", function () {
       if (sel.value) state.config[stage.id] = sel.value;
       else delete state.config[stage.id];
+      refreshFunnel();
       estimate();
     });
     row.appendChild(sel);
 
     // Route-to-agent toggle.
     var toggle = el("label", { class: "pipe-toggle" });
-    var cb = el("input", { type: "checkbox", "data-stage": stage.id });
+    var cb = el("input", {
+      type: "checkbox", "data-stage": stage.id,
+      "aria-describedby": "pipe-err-" + stage.id
+    });
     if (state.route[stage.id]) cb.setAttribute("checked", "checked");
     cb.addEventListener("change", function () {
       state.route[stage.id] = cb.checked;
       row.classList.toggle("routed", cb.checked);
+      sel.disabled = cb.checked;
+      sel.setAttribute("aria-disabled", cb.checked ? "true" : "false");
+      refreshFunnel();
       estimate();
     });
     toggle.appendChild(cb);
     toggle.appendChild(el("span", null, "Route to agent"));
     row.appendChild(toggle);
 
-    var err = el("div", { class: "pipe-row-err", id: "pipe-err-" + stage.id, hidden: "hidden" });
+    var err = el("div", {
+      class: "pipe-row-err", id: "pipe-err-" + stage.id,
+      hidden: "hidden", role: "alert"
+    });
     row.appendChild(err);
     return row;
   }
@@ -118,15 +201,24 @@
 
   // Recompute cost + re-validate on every change. Both are server-truth.
   function estimate() {
+    var request = ++state.request;
     var routeToMcp = Object.keys(state.route).filter(function (k) { return state.route[k]; });
+    renderValidation({ pending: true });
     core.callApi("/api/ai/estimate", { config: state.config, routeToMcp: routeToMcp }, "POST")
-      .then(renderCost)
-      .catch(function () { /* leave the last estimate up */ });
+      .then(function (d) { if (request === state.request) renderCost(d); })
+      .catch(function (err) {
+        if (request !== state.request) return;
+        var body = document.getElementById("pipe-cost-body");
+        if (!body) return;
+        clear(body);
+        body.appendChild(core.errorState ? core.errorState(err && err.message || "Could not estimate this pipeline.") :
+          el("div", { class: "panel-empty" }, "Could not estimate this pipeline."));
+      });
     core.callApi("/api/ai/stage-config/validate", { config: state.config }, "POST")
-      .then(function (v) { renderValidation({ ok: true, errors: [] }); })
+      .then(function (v) { if (request === state.request) renderValidation(v); })
       .catch(function (err) {
         // A 422 throws here with the validation body; surface it inline.
-        renderValidation({ ok: false, errors: (err && err.errors) || [{ message: err && err.message }] });
+        if (request === state.request) renderValidation({ ok: false, errors: (err && err.errors) || [{ message: err && err.message }] });
       });
   }
 
@@ -166,13 +258,37 @@
   }
 
   function renderValidation(v) {
+    var summary = document.getElementById("pipe-validation-body");
+    if (summary) {
+      clear(summary);
+      if (v.pending) {
+        summary.appendChild(el("span", { class: "pipe-validation-pending" }, "Checking the server rules…"));
+      } else if (v.ok) {
+        summary.appendChild(el("span", { class: "pipe-validation-ok" }, "Ready to run"));
+        summary.appendChild(el("p", { class: "pipe-validation-help" },
+          "The selected stages satisfy the server's role and cross-model checks."));
+      } else {
+        summary.appendChild(el("span", { class: "pipe-validation-bad" },
+          (v.errors || []).length + " configuration issue" + ((v.errors || []).length === 1 ? "" : "s")));
+        summary.appendChild(el("p", { class: "pipe-validation-help" },
+          "Fix the highlighted stage before starting a pipeline run."));
+      }
+    }
     (state.stages || []).forEach(function (s) {
       var errEl = document.getElementById("pipe-err-" + s.id);
       if (!errEl) return;
       var mine = (v.errors || []).filter(function (e) { return e.stage === s.id; });
-      if (v.ok || mine.length === 0) { errEl.hidden = true; clear(errEl); return; }
+      var row = document.getElementById("pipe-row-" + s.id);
+      var controls = row ? row.querySelectorAll("select, input") : [];
+      if (v.ok || mine.length === 0) {
+        errEl.hidden = true;
+        clear(errEl);
+        controls.forEach(function (control) { control.removeAttribute("aria-invalid"); });
+        return;
+      }
       clear(errEl);
       errEl.hidden = false;
+      controls.forEach(function (control) { control.setAttribute("aria-invalid", "true"); });
       errEl.appendChild(el("span", null, mine.map(function (e) { return e.message; }).join(" ")));
     });
   }
@@ -187,7 +303,12 @@
       "findings and reports back with the algosize_record_patch tool."));
 
     var form = el("div", { class: "pipe-handoff-form" });
-    var runInput = el("input", { class: "pipe-input", id: "pipe-run", type: "text", placeholder: "scan run id (e.g. run_…)" });
+    var runLabel = el("label", { class: "panel-input-label", for: "pipe-run" }, "Scan run ID");
+    form.appendChild(runLabel);
+    var runInput = el("input", {
+      class: "pipe-input", id: "pipe-run", type: "text",
+      placeholder: "run_…", autocomplete: "off", spellcheck: "false"
+    });
     form.appendChild(runInput);
 
     var agents = [
@@ -195,23 +316,33 @@
       { id: "kimi", label: "Kimi k2.7 / k3" },
       { id: "mcp", label: "Generic MCP host" },
     ];
-    var picker = el("div", { class: "pipe-agents" });
+    var picker = el("div", { class: "pipe-agents", role: "group", "aria-label": "Coding agent" });
     agents.forEach(function (a, i) {
-      var b = el("button", { class: "btn btn-ghost btn-sm pipe-agent" + (i === 0 ? " active" : ""), "data-agent": a.id }, a.label);
+      var b = el("button", {
+        class: "btn btn-ghost btn-sm pipe-agent" + (i === 0 ? " active" : ""),
+        "data-agent": a.id, type: "button", "aria-pressed": i === 0 ? "true" : "false"
+      }, a.label);
       b.addEventListener("click", function () {
-        picker.querySelectorAll(".pipe-agent").forEach(function (x) { x.classList.remove("active"); });
+        picker.querySelectorAll(".pipe-agent").forEach(function (x) {
+          x.classList.remove("active");
+          x.setAttribute("aria-pressed", "false");
+        });
         b.classList.add("active");
+        b.setAttribute("aria-pressed", "true");
       });
       picker.appendChild(b);
     });
     form.appendChild(picker);
 
-    var go = el("button", { class: "btn btn-primary btn-sm", id: "pipe-handoff-go" }, "Get handoff prompt");
+    var go = el("button", { class: "btn btn-primary btn-sm", id: "pipe-handoff-go", type: "button" }, "Get handoff prompt");
     go.addEventListener("click", function () { fetchHandoff(runInput.value, picker); });
     form.appendChild(go);
     p.appendChild(form);
 
-    p.appendChild(el("div", { class: "pipe-handoff-out", id: "pipe-handoff-out", hidden: "hidden" }));
+    p.appendChild(el("div", {
+      class: "pipe-handoff-out", id: "pipe-handoff-out", hidden: "hidden",
+      "aria-live": "polite"
+    }));
 
     // The connection snippet keeps the contract's rule: NEVER render a real
     // key — an env-var placeholder only.
@@ -243,7 +374,7 @@
           n + " finding" + (n === 1 ? "" : "s") + " · framed for " + (d.agent || agent)));
         var pre = el("pre", { class: "pipe-prompt" }, d.prompt || "");
         out.appendChild(pre);
-        var copy = el("button", { class: "btn btn-ghost btn-sm" }, "Copy prompt");
+        var copy = el("button", { class: "btn btn-ghost btn-sm", type: "button" }, "Copy prompt");
         copy.addEventListener("click", function () { copyText(d.prompt || ""); copy.textContent = "Copied ✓"; });
         out.appendChild(copy);
       })
