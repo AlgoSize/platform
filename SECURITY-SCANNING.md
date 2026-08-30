@@ -122,6 +122,34 @@ carries a source→sink path the pattern match cannot).
 Secrets rules deliberately have **no** group: two different leaked credentials
 on one line are two rotations, not one finding.
 
+### Severity is calibrated to evidence
+
+A pattern match and a traced taint flow are not the same claim, and they are
+not graded the same:
+
+- `sast.sql-injection.tainted-query` (AST, source→sink path) is **critical**.
+- `sast.sql-injection.string-concat` and `.template-literal` (shape, no
+  taint) are **medium** — the canonical safe idiom, literal fragments with
+  `?` binds joined at runtime, matches the same shape.
+
+The SQL shape detectors also require the shape of a *statement* (`SELECT…FROM`,
+`INSERT INTO`, `UPDATE…SET`, a `WHERE` with a comparison), not a lone keyword:
+an unanchored keyword list once reported `.join(", ")` as SQL because of
+`JOIN`, 188 times in this repository alone.
+
+### Test code is capped, labelled, and never dropped
+
+A finding in a recognizably-test path (`test/`, `__tests__/`, `*.spec.js`,
+`test-*.mjs`, …) is capped at **medium** severity and tagged
+`evidence.inTestCode` — a planted vector in a test is not reachable attack
+surface, and grading it at parity with a request handler buries the handler.
+
+**Secrets are never capped.** A credential does not care which directory it
+leaks from; test files are where real keys most often land. Placeholder
+recognition instead judges the *value*: a delimited `test`/`dummy`/`sample`
+token inside it (`sk-ant-test`) marks it fake, while `latest` or
+`attestation` — which merely contain the letters — do not.
+
 ---
 
 ## Architecture

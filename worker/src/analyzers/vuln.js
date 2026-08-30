@@ -271,7 +271,50 @@ function detectDangerousEval(file) {
 // Detector 3: SQL string concatenation
 // ---------------------------------------------------------------------------
 
-const SQL_KEYWORD = /(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE|VALUES|JOIN|UNION)/i;
+// A lone SQL keyword is not a query.
+//
+// This used to be an unanchored, case-insensitive alternation, which meant
+// `.join(", ")` matched JOIN and `Object.values()` matched VALUES — two of the
+// most common expressions in JavaScript. On this repository alone that rule
+// produced 188 findings across 78 files at HIGH severity, essentially all of
+// them noise, and a gate that reports 371 highs is a gate nobody reads.
+//
+// So detection now requires the SHAPE of a statement: the keyword pairs that
+// only ever co-occur in SQL. `SELECT` near a `FROM`, `INSERT INTO`, an
+// `UPDATE` with its `SET`, a `WHERE` followed by an actual comparison. Prose
+// containing the word "from" no longer qualifies, and neither does an array
+// join.
+//
+// The bounded `{0,400}` gaps keep this linear — an unbounded `[\s\S]*?`
+// between two alternated keywords is how a linter regex becomes a denial of
+// service on a minified file.
+const SQL_STATEMENT = new RegExp([
+  "\\bSELECT\\b[\\s\\S]{0,400}?\\bFROM\\b",
+  "\\bINSERT\\s+(?:OR\\s+\\w+\\s+)?INTO\\b",
+  "\\bREPLACE\\s+INTO\\b",
+  "\\bUPDATE\\b[\\s\\S]{0,200}?\\bSET\\b",
+  "\\bDELETE\\s+FROM\\b",
+  "\\bUNION\\s+(?:ALL\\s+)?SELECT\\b",
+  // A fragment: FROM/JOIN naming a table, or a WHERE with a real comparison.
+  "\\b(?:FROM|JOIN)\\s+[`\"'\\[]?\\w+[`\"'\\]]?\\s*(?:\\bWHERE\\b|\\bJOIN\\b|\\bON\\b|\\bORDER\\b|\\bGROUP\\b|\\bLIMIT\\b|\\bSET\\b)",
+  "\\bWHERE\\b\\s+[\\w`\"'.\\[\\]]+\\s*(?:=|<|>|!=|<>|\\bLIKE\\b|\\bIN\\b|\\bIS\\b)",
+].join("|"), "i");
+
+// The concatenation case, where SQL is split across operands and no single
+// literal holds a whole statement: `"WHERE " + clause`. Such a fragment counts
+// only when the literal is NOTHING BUT a clause keyword — visibly a query
+// being assembled, not a sentence that happens to contain the word.
+//
+// The keyword list here is deliberately shorter than the one above. DELETE,
+// FROM, SET, JOIN, INTO and ON are all ordinary English, and every one of them
+// produced a false positive on this repository's own UI copy: `"Delete " +
+// phrase`, `"from " + price`, `"Remove " + label + " from the organisation?"`.
+// Those verbs only earn a finding as part of a full statement shape, which
+// SQL_STATEMENT already covers. What is left — WHERE, VALUES, ORDER BY and
+// friends — has no plausible reading as prose glued to a variable.
+const SQL_CLAUSE_ONLY = /^\s*(?:WHERE|VALUES|ORDER\s+BY|GROUP\s+BY|HAVING|LIMIT|OFFSET|UNION(?:\s+ALL)?)\s*\(?\s*$/i;
+
+const looksLikeSqlLiteral = (text) => SQL_STATEMENT.test(text) || SQL_CLAUSE_ONLY.test(text);
 
 function detectSqlConcat(file) {
   const findings = [];
@@ -282,11 +325,17 @@ function detectSqlConcat(file) {
     const ci = commentStartIndex(text);
     const code = ci >= 0 ? text.slice(0, ci) : text;
 
-    const left  = /["'][^"']*\b(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE|VALUES)\b[^"']*["']\s*\+\s*[A-Za-z_$][\w$.]*/i;
-    const right = /[A-Za-z_$][\w$.]*\s*\+\s*["'][^"']*\b(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE|VALUES)\b[^"']*["']/i;
-    if (left.test(code) || right.test(code)) {
+    // Pull out the quoted operand next to a `+` and judge the LITERAL, rather
+    // than asking whether a SQL word appears somewhere on the line. The old
+    // form matched `"Scanned " + n + " packages from " + names` — an English
+    // sentence — because "from" is in it.
+    const left  = /(["'])((?:(?!\1)[^\\]|\\.)*)\1\s*\+\s*[A-Za-z_$][\w$.]*/;
+    const right = /[A-Za-z_$][\w$.]*\s*\+\s*(["'])((?:(?!\1)[^\\]|\\.)*)\1/;
+    const l = left.exec(code);
+    const r = right.exec(code);
+    if ((l && looksLikeSqlLiteral(l[2])) || (r && looksLikeSqlLiteral(r[2]))) {
       findings.push({
-        severity: "high",
+        severity: "medium", // shape without taint — see the registry note
         type: "sql_string_concatenation",
         path: file.path,
         line: i + 1,
@@ -319,9 +368,9 @@ function detectSqlTemplateLiteral(file) {
     const tmpl = /`([^`]*)`/.exec(code);
     if (!tmpl) continue;
     const body = tmpl[1];
-    if (SQL_KEYWORD.test(body) && /\$\{[^}]+\}/.test(body)) {
+    if (looksLikeSqlLiteral(body) && /\$\{[^}]+\}/.test(body)) {
       findings.push({
-        severity: "high",
+        severity: "medium", // shape without taint — see the registry note
         type: "sql_template_literal_injection",
         path: file.path,
         line: i + 1,
