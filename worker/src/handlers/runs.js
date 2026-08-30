@@ -482,22 +482,27 @@ export async function attachPipelineResult(env, scope, id, pipeline) {
   // truncated — half a result read as a whole one is worse than none.
   if (serialized.length > MAX_INPUT_BYTES) return false;
 
-  // Three fully literal statements, one per owner shape — no interpolation and
-  // no concatenation with a variable, so the SQL text is fixed at parse time.
-  // The predicate here is chosen from a ternary rather than built from input,
-  // but "the interpolated value happens to be safe today" is the reasoning that
-  // breaks the next time someone edits the line; the platform's rule (and its
-  // code-scanning gate) is that a query is a literal and every value is bound.
+  // ONE literal statement, always filtered by BOTH tenant columns.
+  //
+  // getRun above has already proved this caller may see this run, so the write
+  // pins itself to the owner that read returned rather than re-deriving a
+  // predicate from the caller's scope. Three things fall out of that:
+  //
+  //   • the SQL is a fixed literal with every value bound — no interpolation,
+  //     and no per-owner branch that can drift one statement at a time;
+  //   • both org_id and user_id are always in the predicate, so there is no
+  //     shape of this query that writes without a tenant filter;
+  //   • it is strictly stronger than a scope check, because a row that changed
+  //     owner between the read and the write no longer matches and the update
+  //     lands nowhere instead of on somebody else's run.
+  //
+  // `IS` rather than `=` because either column is legitimately NULL — a CI run
+  // has an org and no user, a personal run the reverse — and `= NULL` is never
+  // true in SQL, which would silently make this a no-op for half the rows.
   try {
-    const stmt = orgId && userId
-      ? env.DB.prepare("UPDATE runs SET result_json = ? WHERE id = ? AND (org_id = ? OR user_id = ?)")
-          .bind(serialized, id, orgId, userId)
-      : orgId
-        ? env.DB.prepare("UPDATE runs SET result_json = ? WHERE id = ? AND org_id = ?")
-            .bind(serialized, id, orgId)
-        : env.DB.prepare("UPDATE runs SET result_json = ? WHERE id = ? AND user_id = ?")
-            .bind(serialized, id, userId);
-    await stmt.run();
+    await env.DB.prepare(
+      "UPDATE runs SET result_json = ? WHERE id = ? AND org_id IS ? AND user_id IS ?"
+    ).bind(serialized, id, run.orgId, run.userId).run();
     return true;
   } catch {
     return false;

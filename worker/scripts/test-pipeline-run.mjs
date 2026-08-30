@@ -271,6 +271,39 @@ async function post(env, path, body) {
     "…and nothing is attached anywhere, because there is no run to attach it to");
 }
 
+group("the pipeline result is written to the run it was computed from, and no other");
+
+{
+  const calls = [];
+  const env = await makeEnv(calls);
+  const sec = Math.floor(now / 1000);
+  const q = (sql, ...a) => env.DB.prepare(sql).bind(...a).run();
+  // A second tenant with its own scan run.
+  await q(`INSERT INTO organisations (org_id, name, created_at, updated_at) VALUES (?, ?, ?, ?)`,
+          "org_b", "Beacon", sec, sec);
+  await q(`INSERT INTO runs (id, user_id, org_id, source, analyzer, input_json, result_json, ms, headline, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          "run_other_tenant", "usr_2", "org_b", "dashboard", "vuln",
+          "{}", JSON.stringify({ source: { findings: [FINDING] } }), 10, "1 issue", now);
+
+  const stolen = await post(env, "/api/pipeline/run", { runId: "run_other_tenant", config: FULL });
+  expect(stolen.status === 404,
+    "a run belonging to another tenant is 404 — the pipeline cannot be pointed at it");
+
+  const row = await env.DB.prepare("SELECT result_json FROM runs WHERE id = ?")
+    .bind("run_other_tenant").first();
+  expect(JSON.parse(row.result_json).pipeline === undefined,
+    "…and nothing was written to it: the attach is pinned to the owner the scoped read returned, " +
+    "so there is no shape of that UPDATE that lands on another tenant's row");
+
+  // The legitimate write still lands.
+  await post(env, "/api/pipeline/run", { runId: "run_scan_1", config: FULL, routeToMcp: ["fix"] });
+  const mine = await env.DB.prepare("SELECT result_json FROM runs WHERE id = ?")
+    .bind("run_scan_1").first();
+  expect(JSON.parse(mine.result_json).pipeline.summary.funnel.waiting_for_agent === 1,
+    "…while the caller's own run does get its pipeline result");
+}
+
 console.log("");
 if (failures) {
   console.log(`\x1b[31m  ${failures} pipeline-run test(s) failed\x1b[0m\n`);
