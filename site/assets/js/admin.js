@@ -229,9 +229,28 @@
     if (!rows.length) {
       return stateBox("empty", options.emptyTitle || "Nothing here", options.emptyMessage || "");
     }
+    // A column is sortable only when the caller supplies both a sortKey on the
+    // column and a sort handler in options — sorting a rollup is a re-fetch,
+    // not a client-side reorder, because only the server still holds the nulls
+    // that decide which groups have no rank at all.
+    var sortState = options.sort || null;
     var thead = el("thead", null, [
       el("tr", null, columns.map(function (c) {
-        return el("th", { text: c.label, scope: "col" });
+        var th = el("th", { scope: "col" });
+        if (!sortState || !c.sortKey) { th.textContent = c.label; return th; }
+        var active = sortState.key === c.sortKey;
+        th.setAttribute("aria-sort", active ? (sortState.dir === "asc" ? "ascending" : "descending") : "none");
+        th.appendChild(el("button", {
+          type: "button", class: "adm-sort", "data-active": active ? "true" : null,
+          onclick: function () {
+            sortState.onSort(c.sortKey, active && sortState.dir === "desc" ? "asc" : "desc");
+          },
+        }, [
+          el("span", { text: c.label }),
+          el("span", { class: "adm-sort-mark", "aria-hidden": "true",
+            text: active ? (sortState.dir === "asc" ? "▲" : "▼") : "↕" }),
+        ]));
+        return th;
       })),
     ]);
     var tbody = el("tbody", null, rows.map(function (row, i) {
@@ -610,6 +629,61 @@
   // -------------------------------------------------------------------------
 
   var aiUsageChart = null;
+  // Sorting is a server round-trip, so the chosen column lives here and rides
+  // along on the next fetch rather than reordering the rows already on screen.
+  var aiUsageSort = { key: "cost", dir: "desc" };
+
+  function fmtPct(n, digits) {
+    if (n === null || n === undefined) return null;
+    return Number(n).toFixed(digits === undefined ? 1 : digits) + "%";
+  }
+
+  function fmtTokens(n) {
+    if (n === null || n === undefined) return null;
+    if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/, "") + "M tok";
+    if (n >= 1000) return Math.round(n / 1000) + "k tok";
+    return n + " tok";
+  }
+
+  /**
+   * How much of this window could be priced at all.
+   *
+   * Rendered whenever anything is missing, and NOT rendered as a reassuring
+   * green bar when nothing is: full coverage is already the meaning of the
+   * plain totals above it, and a banner that appears in both states trains an
+   * operator to stop reading it.
+   */
+  function coverageBanner(cov) {
+    if (!cov || cov.state === "full" || cov.state === "empty") return null;
+    var missing = cov.unmeasuredRequests;
+    return el("div", { class: "adm-coverage", "data-state": cov.state }, [
+      el("div", { class: "adm-coverage-text" }, [
+        el("strong", { text: cov.state === "none"
+          ? "No call in this window could be priced"
+          : fmtInt(missing) + " of " + fmtInt(cov.requests) + " calls have no measured cost" }),
+        el("span", { text:
+          "Those calls are excluded from every figure on this page and flagged in the table rather " +
+          "than priced at zero — a missing measurement is not free usage, so every total here is a " +
+          "lower bound." }),
+      ]),
+      el("span", { class: "adm-coverage-pct",
+        text: fmtPct(cov.measuredPct) + " measured" }),
+    ]);
+  }
+
+  /** Why the page is empty — a dead pipe and a quiet week are different facts. */
+  function aiUsageEmptyBox(data) {
+    var e = data.emptyState;
+    if (e && e.reason === "no_rows_ever") {
+      return stateBox("empty", "Nothing has ever been recorded",
+        "Not $0 of spend — no rows at all. The ai_usage table is empty, so there is nothing to " +
+        "attribute cost, margin or revenue against. Check that usage inserts are reaching D1.");
+    }
+    return stateBox("empty", "No AI usage in this window",
+      "Rows exist, but none in this period" +
+      (e && e.lastRowAt ? " — the last recorded call was " + fmtRelative(Math.floor(e.lastRowAt / 1000)) : "") +
+      ". Widen the window to see it.");
+  }
 
   function budgetPill(budget) {
     if (!budget || budget.state === "unmeasured") return pill("unmeasured", "warn");
@@ -620,15 +694,27 @@
 
   function renderAiUsageChart(points) {
     var canvas = $("#adm-aiusage-chart");
+    var note = $("#adm-aiusage-chart-note");
     if (aiUsageChart) {
       aiUsageChart.destroy();
       aiUsageChart = null;
     }
+    // A day whose bar is built from measured calls only is a lower bound, and
+    // a bar cannot say that by height. It is marked on the bar and counted in
+    // words underneath, because a shorter bar otherwise reads as a cheaper day.
+    var partialDays = points.filter(function (p) { return p.partial; }).length;
+    note.textContent = !points.length ? ""
+      : partialDays
+        ? partialDays + " of " + points.length + " days include calls with no measured cost" +
+          " (outlined bars). Those days are lower bounds, not cheaper days."
+        : "Every call in this window was priced — these bars are exact.";
     if (!window.Chart || !points.length) {
       canvas.hidden = true;
       return;
     }
     canvas.hidden = false;
+    var edge = points.map(function (p) { return p.partial ? "#d29922" : "#4493f8"; });
+    var edgeWidth = points.map(function (p) { return p.partial ? 2 : 1; });
     aiUsageChart = new window.Chart(canvas, {
       type: "bar",
       data: {
@@ -638,16 +724,16 @@
             label: "Raw cost",
             data: points.map(function (p) { return p.totalCostUsd; }),
             backgroundColor: "rgba(68, 147, 248, .72)",
-            borderColor: "#4493f8",
-            borderWidth: 1,
+            borderColor: edge,
+            borderWidth: edgeWidth,
             stack: "spend",
           },
           {
             label: "Platform margin",
             data: points.map(function (p) { return p.platformMarginUsd; }),
             backgroundColor: "rgba(139, 124, 246, .78)",
-            borderColor: "#8b7cf6",
-            borderWidth: 1,
+            borderColor: points.map(function (p) { return p.partial ? "#d29922" : "#8b7cf6"; }),
+            borderWidth: edgeWidth,
             stack: "spend",
           },
         ],
@@ -699,7 +785,9 @@
     var windowName = $("#adm-aiusage-window").value;
     var groupBy = $("#adm-aiusage-group").value;
     return api("/api/admin/ai-usage?window=" + encodeURIComponent(windowName) +
-      "&groupBy=" + encodeURIComponent(groupBy)).then(function (data) {
+      "&groupBy=" + encodeURIComponent(groupBy) +
+      "&sort=" + encodeURIComponent(aiUsageSort.key) +
+      "&dir=" + encodeURIComponent(aiUsageSort.dir)).then(function (data) {
       $("#adm-aiusage-stamp").textContent = "as of " + fmtDateTime(data.generatedAt);
       $("#adm-aiusage-group-meta").textContent =
         data.groups.length + " group" + (data.groups.length === 1 ? "" : "s");
@@ -707,8 +795,12 @@
 
       clear(summary);
       var s = data.summary;
+      var cov = data.coverage;
       kpi(summary, "Requests", fmtInt(s.requests), null,
-        s.partial ? "some requests are unmeasured" : "all recorded calls", s.partial ? "warn" : null);
+        cov.state === "partial" || cov.state === "none"
+          ? fmtInt(cov.measuredRequests) + " of " + fmtInt(cov.requests) + " priced"
+          : "all recorded calls",
+        s.partial ? "warn" : null);
       kpi(summary, "Raw cost", fmtUsd(s.totalCostUsd),
         "No request in this window has a measured raw cost.",
         s.partial ? "lower bound · partial" : "cost of goods", s.partial ? "warn" : null);
@@ -718,31 +810,58 @@
       kpi(summary, "Revenue", fmtUsd(s.algosizePriceUsd),
         "No request in this window has a measured customer price.",
         s.partial ? "lower bound · partial" : "raw cost + margin", s.partial ? "warn" : "ok");
+      kpi(summary, "Margin %", fmtPct(s.marginPct),
+        "Margin share needs both a measured margin and measured revenue; this window has neither.",
+        "share of revenue, not of cost", null);
       kpi(summary, "Neurons", fmtInt(s.neurons),
         "No request in this window has measured Neuron usage.",
         s.partial ? "partial reconciliation total" : "reconciliation total", s.partial ? "warn" : null);
 
+      var cover = $("#adm-aiusage-coverage");
+      clear(cover);
+      var banner = coverageBanner(cov);
+      if (banner) cover.appendChild(banner);
+
       clear(tableMount);
-      tableMount.appendChild(table([
-        { label: groupBy === "org" ? "Account" : groupBy === "model" ? "Model" : "Feature",
-          wrap: true, render: function (g) { return el("span", { class: "adm-mono", text: g.label }); } },
-        { label: "Requests", numeric: true, render: function (g) { return fmtInt(g.requests); } },
-        { label: "Neurons", numeric: true, render: function (g) { return fmtInt(g.neurons); },
-          unknownReason: function () { return "No request in this group has measured Neuron usage."; } },
-        { label: "Raw cost", numeric: true, render: function (g) { return fmtUsd(g.totalCostUsd); },
-          unknownReason: function () { return "Every request in this group has unmeasured cost."; } },
-        { label: "Margin", numeric: true, render: function (g) { return fmtUsd(g.platformMarginUsd); },
-          unknownReason: function () { return "Every request in this group has unmeasured margin."; } },
-        { label: "Revenue", numeric: true, render: function (g) { return fmtUsd(g.algosizePriceUsd); },
-          unknownReason: function () { return "Every request in this group has unmeasured customer price."; } },
-        { label: "Coverage", render: function (g) {
-            return g.partial ? pill("partial", "warn") : pill("measured", "ok");
-          } },
-        { label: "Budget", render: function (g) { return budgetPill(g.budget); } },
-      ], data.groups, {
-        emptyTitle: "No AI usage in this window",
-        emptyMessage: "Recorded calls will appear here without prompts or responses.",
-      }));
+      if (!data.groups.length) {
+        tableMount.appendChild(aiUsageEmptyBox(data));
+      } else {
+        tableMount.appendChild(table([
+          { label: groupBy === "org" ? "Account" : groupBy === "model" ? "Model" : "Feature",
+            sortKey: "name", wrap: true,
+            render: function (g) { return el("span", { class: "adm-mono", text: g.label }); } },
+          { label: "Requests", sortKey: "requests", numeric: true,
+            render: function (g) { return fmtInt(g.requests); } },
+          { label: "Neurons", sortKey: "neurons", numeric: true,
+            render: function (g) { return fmtInt(g.neurons); },
+            unknownReason: function () { return "No request in this group has measured Neuron usage."; } },
+          { label: "Raw cost", sortKey: "cost", numeric: true,
+            render: function (g) { return fmtUsd(g.totalCostUsd); },
+            unknownReason: function () { return "Every request in this group has unmeasured cost."; } },
+          { label: "Margin", sortKey: "margin", numeric: true,
+            render: function (g) { return fmtUsd(g.platformMarginUsd); },
+            unknownReason: function () { return "Every request in this group has unmeasured margin."; } },
+          { label: "Revenue", sortKey: "revenue", numeric: true,
+            render: function (g) { return fmtUsd(g.algosizePriceUsd); },
+            unknownReason: function () { return "Every request in this group has unmeasured customer price."; } },
+          // Three states, not two: a group where nothing could be priced is a
+          // different fact from one where some of it could, and both differ
+          // from a fully measured group.
+          { label: "Coverage", render: function (g) {
+              if (g.measured === "none") return pill("not measured", "");
+              if (g.measured === "partial") {
+                return pill(fmtInt(g.measuredRequests) + " of " + fmtInt(g.requests), "warn");
+              }
+              return pill("measured", "ok");
+            } },
+          { label: "Budget", render: function (g) { return budgetPill(g.budget); } },
+        ], data.groups, {
+          sort: {
+            key: aiUsageSort.key, dir: aiUsageSort.dir,
+            onSort: function (key, dir) { aiUsageSort = { key: key, dir: dir }; renderAiUsage(); },
+          },
+        }));
+      }
 
       clear(topMount);
       if (!data.topExpensive.length) {
@@ -750,10 +869,18 @@
       } else {
         var list = el("div", { class: "adm-aiusage-top" });
         data.topExpensive.forEach(function (r) {
+          // Tokens are what make an expensive row explainable rather than just
+          // large. Omitted entirely when the provider returned no usage block
+          // — an absent count must not read as a small one.
+          var meta = [r.model || "model not known", r.orgName, r.feature || "unknown feature"];
+          if (r.totalTokens !== null && r.totalTokens !== undefined) meta.push(fmtTokens(r.totalTokens));
           list.appendChild(el("div", { class: "adm-aiusage-top-row" }, [
-            el("span", { class: "adm-aiusage-top-main", text: r.orgName + " · " + (r.feature || "unknown feature") }),
-            el("span", { class: "adm-aiusage-top-meta", text: r.model || "model not known" }),
-            el("span", { class: "adm-aiusage-top-cost", text: fmtUsd(r.totalCostUsd) }),
+            el("span", { class: "adm-aiusage-top-main", text: meta.join(" · ") }),
+            el("span", { class: "adm-aiusage-top-meta",
+              text: "cost " + fmtUsd(r.totalCostUsd) +
+                (r.platformMarginUsd === null ? "" : " · margin " + fmtUsd(r.platformMarginUsd)) }),
+            el("span", { class: "adm-aiusage-top-cost",
+              text: r.algosizePriceUsd === null ? fmtUsd(r.totalCostUsd) : fmtUsd(r.algosizePriceUsd) }),
           ]));
         });
         topMount.appendChild(list);

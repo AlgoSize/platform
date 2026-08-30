@@ -13,7 +13,7 @@
 import { requireAuth } from "../auth.js";
 import { stripeFetch, StripeError } from "../stripe.js";
 import { tierForOrg } from "../reports/branding.js";
-import { aggregateBy, costTrend, topExpensive, budgetStatus } from "../ai/aggregate.js";
+import { aggregateBy, costTrend, topExpensive, budgetStatus, coverage, sortGroups, GROUP_SORTS } from "../ai/aggregate.js";
 
 function jsonResponse(body, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
@@ -198,22 +198,47 @@ function aiUsageRange(windowName, now) {
   return { startAt: now - AI_USAGE_WINDOWS[windowName], endAt: now };
 }
 
+/**
+ * Margin as a share of what the customer is billed.
+ *
+ * Null unless BOTH sides were measured and revenue is non-zero — a ratio built
+ * from an unmeasured numerator or denominator is not a small margin, it is no
+ * margin figure at all. Revenue is the denominator (not raw cost), so a 25%
+ * markup reads as 20% of revenue; that is the number an operator reconciles
+ * against an invoice.
+ */
+function marginPct(marginUsd, revenueUsd) {
+  if (typeof marginUsd !== "number" || typeof revenueUsd !== "number") return null;
+  if (!(revenueUsd > 0)) return null;
+  return (marginUsd / revenueUsd) * 100;
+}
+
 function usageTotals(rows) {
   if (!rows.length) {
     return {
-      requests: 0, neurons: null, totalCostUsd: null,
-      platformMarginUsd: null, algosizePriceUsd: null, partial: false,
+      requests: 0, measuredRequests: 0, neurons: null, totalCostUsd: null,
+      platformMarginUsd: null, algosizePriceUsd: null, marginPct: null, partial: false,
     };
   }
   const [total] = aggregateBy(rows.map((row) => ({ ...row, report_scope: "all" })), "report_scope");
   return {
     requests: total.requests,
+    measuredRequests: total.measuredRequests,
     neurons: total.neurons,
     totalCostUsd: total.totalCostUsd,
     platformMarginUsd: total.platformMarginUsd,
     algosizePriceUsd: total.algosizePriceUsd,
+    marginPct: marginPct(total.platformMarginUsd, total.algosizePriceUsd),
     partial: total.partial,
   };
+}
+
+/** Total tokens for a usage row — null when neither side was recorded. */
+function totalTokens(row) {
+  const inTok = typeof row.input_tokens === "number" ? row.input_tokens : null;
+  const outTok = typeof row.output_tokens === "number" ? row.output_tokens : null;
+  if (inTok === null && outTok === null) return null;
+  return (inTok || 0) + (outTok || 0);
 }
 
 function configuredAiBudget(env) {
@@ -241,6 +266,21 @@ export async function adminAiUsageHandler(request, env) {
       message: "groupBy must be one of: org, model, feature.",
     }, 400);
   }
+  // Sorting is server-side because the client only ever holds the rollup, and
+  // the parking rule for unmeasured groups has to be applied where the null is
+  // still a null — once a number reaches the table it is too late to tell an
+  // unpriced group from a cheap one.
+  const sort = url.searchParams.get("sort") || "cost";
+  const dir = url.searchParams.get("dir") || "desc";
+  if (!Object.prototype.hasOwnProperty.call(GROUP_SORTS, sort)) {
+    return jsonResponse({
+      error: "invalid_sort",
+      message: "sort must be one of: " + Object.keys(GROUP_SORTS).join(", ") + ".",
+    }, 400);
+  }
+  if (dir !== "asc" && dir !== "desc") {
+    return jsonResponse({ error: "invalid_dir", message: "dir must be asc or desc." }, 400);
+  }
 
   const now = Date.now();
   const range = aiUsageRange(windowName, now);
@@ -252,7 +292,8 @@ export async function adminAiUsageHandler(request, env) {
   const perOrg = await Promise.all(orgs.map(async (org) => {
     const result = await env.DB.prepare(
       `SELECT id, org_id, user_id, repository_id, feature_name, provider, model,
-              request_type, neurons_consumed, total_cost, platform_margin_cost,
+              request_type, input_tokens, output_tokens, neurons_consumed,
+              total_cost, platform_margin_cost,
               algosize_price, status, error_code, scan_id, fix_task_id, created_at
          FROM ai_usage
         WHERE org_id = ? AND created_at >= ? AND created_at <= ?
@@ -261,25 +302,47 @@ export async function adminAiUsageHandler(request, env) {
     return (result && result.results) || [];
   }));
   const rows = perOrg.flat();
+
+  // The newest recorded call for a known tenant, ignoring the window. This is
+  // the difference between "this account spent nothing in the last 7 days" and
+  // "nothing has ever written to ai_usage" — an empty table is a plumbing
+  // problem, an empty window is a quiet week, and a dashboard that renders
+  // both as an empty state teaches an operator to ignore the first one.
+  // Queried per org with the same explicit binding as the usage read, so a row
+  // outside the enumerated tenants can never widen the answer.
+  const lastPerOrg = await Promise.all(orgs.map(async (org) => {
+    const result = await env.DB.prepare(
+      "SELECT MAX(created_at) AS last_at FROM ai_usage WHERE org_id = ?"
+    ).bind(org.org_id).first();
+    const at = result && result.last_at;
+    return typeof at === "number" ? at : null;
+  }));
+  const seen = lastPerOrg.filter((at) => at !== null);
+  const lastRowAt = seen.length ? Math.max(...seen) : null;
   const dimension = AI_USAGE_GROUPS[groupBy];
   const orgNames = new Map(orgs.map((org) => [org.org_id, org.name || org.org_id]));
   const limitUsd = configuredAiBudget(env);
 
-  const groups = aggregateBy(rows, dimension).map((group) => {
+  const groups = sortGroups(aggregateBy(rows, dimension).map((group) => {
     const key = group[dimension];
     return {
       key,
       label: groupBy === "org" ? (orgNames.get(key) || key) : key,
       requests: group.requests,
+      measuredRequests: group.measuredRequests,
+      // full | partial | none — the tri-state `partial` flattens. "none" is
+      // what parks a group below the sort on a money scale.
+      measured: group.measured,
       neurons: group.neurons,
       totalCostUsd: group.totalCostUsd,
       platformMarginUsd: group.platformMarginUsd,
       algosizePriceUsd: group.algosizePriceUsd,
+      marginPct: marginPct(group.platformMarginUsd, group.algosizePriceUsd),
       partial: group.partial,
       errors: group.errors,
       budget: budgetStatus(group.algosizePriceUsd, limitUsd),
     };
-  });
+  }), sort, dir);
 
   const expensive = topExpensive(rows, 10).map((row) => ({
     id: row.id,
@@ -291,6 +354,15 @@ export async function adminAiUsageHandler(request, env) {
     totalCostUsd: row.total_cost,
     platformMarginUsd: row.platform_margin_cost,
     algosizePriceUsd: row.algosize_price,
+    neurons: typeof row.neurons_consumed === "number" ? row.neurons_consumed : null,
+    // Tokens are what makes an expensive row explainable — "this call cost
+    // $0.41" is a number, "611k tokens through a reasoning model" is a cause.
+    // Null when the provider returned no usage block, never 0.
+    inputTokens: typeof row.input_tokens === "number" ? row.input_tokens : null,
+    outputTokens: typeof row.output_tokens === "number" ? row.output_tokens : null,
+    totalTokens: totalTokens(row),
+    scanId: row.scan_id || null,
+    fixTaskId: row.fix_task_id || null,
     status: row.status,
     createdAt: row.created_at,
   }));
@@ -299,8 +371,23 @@ export async function adminAiUsageHandler(request, env) {
     generatedAt: Math.floor(now / 1000),
     window: windowName,
     groupBy,
+    sort,
+    dir,
     range,
     summary: usageTotals(rows),
+    // How much of this window could be priced at all — the denominator under
+    // every figure above. Rendered as a banner rather than left implicit,
+    // because a total summed over measured rows only is a lower bound and must
+    // say so.
+    coverage: coverage(rows),
+    // Why the page is empty, when it is. `no_rows_ever` is a plumbing failure
+    // (nothing has ever reached ai_usage); `no_rows_in_window` is a quiet
+    // period. Neither is $0 of spend.
+    emptyState: rows.length ? null : {
+      reason: lastRowAt === null ? "no_rows_ever" : "no_rows_in_window",
+      lastRowAt,
+    },
+    lastRowAt,
     groups,
     trend: costTrend(rows, "day"),
     topExpensive: expensive,
