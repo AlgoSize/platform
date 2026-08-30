@@ -33,7 +33,7 @@
 // unfalsifiable. The same auditManifests() the dashboard analyzer calls runs
 // here, so both paths produce the same answer from the same bytes.
 
-import { auditManifests } from "./analyze.js";
+import { auditManifests, SOURCE_SKIP_RE } from "./analyze.js";
 import { analyzeVuln } from "../analyzers/vuln.js";
 import { persistRun } from "./runs.js";
 import { storeReportFor } from "../reports/render.js";
@@ -320,9 +320,21 @@ export async function ciRunHandler(request, env, ctx) {
   // honoured, and a source-scanner bug must degrade to "the code was not
   // scanned" beside a complete advisory list — never take the gate down.
   let sourceScan = null;
-  if (v.value.archInput && v.value.archInput.files.length) {
+  // The SAME exclusions the repo-scan path applies. The architecture glob is
+  // deliberately broad — the X-ray wants every manifest it can get — but a
+  // SECURITY scan of those same bytes must not read a repository's test
+  // corpus. Without this filter the gate reported 533 findings and 23
+  // criticals on a pull request that introduced none of them, every one from
+  // this repository's own scripts/fixtures/sast/vulnerable/app.js.
+  //
+  // Applied server-side rather than only in the generated workflow, because a
+  // workflow already installed in someone's repository does not re-generate
+  // itself: fixing it here fixes every existing installation at once.
+  const scanFiles = (v.value.archInput ? v.value.archInput.files : [])
+    .filter((f) => !SOURCE_SKIP_RE.test(f.path));
+  if (scanFiles.length) {
     try {
-      const scanned = analyzeVuln({ files: v.value.archInput.files });
+      const scanned = analyzeVuln({ files: scanFiles });
       sourceScan = {
         status: "ok",
         findings: scanned.findings,

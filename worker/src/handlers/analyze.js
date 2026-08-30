@@ -446,7 +446,13 @@ function isScannablePath(path) {
 // deliberate collection of bad examples. Scanning our own test fixtures would
 // report the scanner's own corpus as vulnerabilities — which is true and
 // useless.
-const SOURCE_SKIP_RE = /(^|\/)(node_modules|vendor|bundle|\.git|dist|build|out|coverage|_site|target|\.next|\.venv|venv|__pycache__|site-packages|third_party|fixtures?|__fixtures__|testdata)(\/|$)/i;
+// Exported: the CI ingest path needs the SAME exclusions. It did not have
+// them, and the consequence was immediate and embarrassing — the gate scanned
+// this repository's own deliberately-vulnerable corpus under
+// scripts/fixtures/sast/vulnerable/ and reported 533 findings, 23 critical,
+// on a pull request that introduced none of them. True, and useless, which is
+// exactly what this list exists to prevent. One definition, both paths.
+export const SOURCE_SKIP_RE = /(^|\/)(node_modules|vendor|bundle|\.git|dist|build|out|coverage|_site|target|\.next|\.venv|venv|__pycache__|site-packages|third_party|fixtures?|__fixtures__|testdata)(\/|$)/i;
 const MAX_SOURCE_FILES = 120;
 const MAX_SOURCE_FILE_BYTES = 200 * 1024;
 const MAX_SOURCE_TOTAL_BYTES = 3 * 1024 * 1024;
