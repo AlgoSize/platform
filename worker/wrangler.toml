@@ -276,6 +276,22 @@ ADMIN_EMAILS         = "guillaumelauzier@gmail.com"
 # hostname is not live yet, rather than implying a domain works when it does
 # not. See DEPLOY-account-management.md.
 REPORT_CNAME_TARGET  = "cname.algosize.com"
+# Error reporting. Leave this UNSET while Sentry is still to be decided: the
+# admin settings panel then reports the row as not configured and lists
+# SENTRY_DSN as missing, which is the correct reading of "nobody has got to
+# it yet".
+#
+# Set it to "console" to record the opposite decision — that console-only
+# logging is deliberate. The panel then says so, stops demanding SENTRY_DSN,
+# and still states the cost: Workers logs are not durable, so a production
+# exception is unobserved once it scrolls away.
+#
+# It lives here rather than in the secret store because it is a policy
+# choice, not a credential. A decision belongs where it can be read and
+# reviewed in a diff; hiding it among the secrets makes it invisible to
+# exactly the people it is meant to inform. (SENTRY_DSN itself IS a secret
+# and stays in `wrangler secret put`.)
+# ERROR_REPORTING = "console"
 
 [[env.production.kv_namespaces]]
 binding = "SESSIONS"

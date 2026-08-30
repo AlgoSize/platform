@@ -42,15 +42,32 @@ export function isPlaceholderId(id) {
 }
 
 /**
- * Every `id`/`database_id`/`bucket_name` declared under [env.<name>...] blocks.
+ * Every `id`/`database_id` declared for one environment.
+ *
+ * `envName` may be DEFAULT_ENV, which means the top-level blocks — the ones
+ * that apply when `wrangler deploy` is run with no `--env`. Those were missed
+ * by the first version of this script, and they matter more than the named
+ * ones: the default D1 id in wrangler.toml IS a placeholder
+ * (00000000-0000-0000-0000-000000000000), because local dev uses an in-memory
+ * SQLite and never reads it. A bare `wrangler deploy` would therefore have
+ * sailed past a check whose entire purpose is to stop exactly that.
  *
  * Deliberately a line scanner rather than a TOML parser: this runs in the
  * deploy workflow before dependencies are guaranteed to be installed, and the
  * shape it needs — a table header, then key = "value" — is unambiguous in the
  * subset wrangler.toml actually uses.
  */
+export const DEFAULT_ENV = "(default)";
+
 export function bindingsForEnv(toml, envName) {
-  const wanted = new RegExp(`^\\[+env\\.${envName}\\.([a-z0-9_]+)\\]+`, "i");
+  const isDefault = envName === DEFAULT_ENV;
+  // Named env: [[env.staging.kv_namespaces]]. Default env: [[kv_namespaces]],
+  // and anything under an [env.*] header must NOT count — that is another
+  // environment's configuration, and mixing them is how a gate passes the
+  // wrong ids.
+  const named = new RegExp(`^\\[+env\\.${envName}\\.([a-z0-9_]+)\\]+`, "i");
+  const topLevel = /^\[+([a-z0-9_]+)\]+/i;
+  const anyEnv = /^\[+env\./i;
   const out = [];
   let section = null;
   let binding = null;
@@ -60,8 +77,13 @@ export function bindingsForEnv(toml, envName) {
     if (!line) continue;
 
     if (line.startsWith("[")) {
-      const m = wanted.exec(line);
-      section = m ? m[1].toLowerCase() : null;
+      if (isDefault) {
+        const m = anyEnv.test(line) ? null : topLevel.exec(line);
+        section = m ? m[1].toLowerCase() : null;
+      } else {
+        const m = named.exec(line);
+        section = m ? m[1].toLowerCase() : null;
+      }
       binding = null;
       continue;
     }
@@ -88,11 +110,10 @@ const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.arg
 if (isMain) main();
 
 function main() {
-const envName = process.argv[2];
-if (!envName) {
-  console.error("usage: node scripts/check-bindings.mjs <environment>");
-  process.exit(2);
-}
+// No argument means the default environment, mirroring `wrangler deploy` with
+// no --env. Refusing to run without a name would have left the one
+// unprotected path unprotected.
+const envName = process.argv[2] || DEFAULT_ENV;
 
 const toml = readFileSync(join(HERE, "..", "wrangler.toml"), "utf8");
 const bindings = bindingsForEnv(toml, envName);
