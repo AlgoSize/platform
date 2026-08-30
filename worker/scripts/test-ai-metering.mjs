@@ -11,6 +11,7 @@ import {
 } from "../src/ai/aggregate.js";
 import { recommend, graphData, GRAPH_KINDS, MODELS, TASK_FAMILIES } from "../src/ai/models.js";
 import { buildUsageRecord, AI_USAGE_COLUMNS } from "../src/ai/usage.js";
+import { computeMargin, DEFAULT_MARGIN_RATE } from "../src/ai/margin.js";
 
 let failures = 0;
 const expect = (cond, label) => {
@@ -165,6 +166,65 @@ console.log("\nusage record: priced row, content never stored\n");
 
   const unpriced = buildUsageRecord({ ok: true, provider: "workers-ai", model: "@cf/unknown/x", usage: {} }, { orgId: "o1", feature: "x" });
   expect(unpriced.total_cost === null, "an unpriced call records null cost, never 0");
+  expect(unpriced.algosize_price === null && unpriced.platform_margin_cost === null,
+    "…and null margin + null algosize_price — unmeasured stays unmeasured through the margin");
+}
+
+console.log("\nmargin: 25% by default, computed at write time, unmeasured stays unmeasured\n");
+{
+  expect(DEFAULT_MARGIN_RATE === 0.25, "the shipped default margin rate is 25%");
+
+  // A priced call carries raw cost + a 25% markup + the billed price.
+  const rec = buildUsageRecord(
+    { ok: true, provider: "workers-ai", model: "@cf/zai-org/glm-4.7-flash", usage: { inputTokens: 1_000_000, outputTokens: 1_000_000 } },
+    { orgId: "o1", feature: "advisory_fix" });
+  expect(approx(rec.total_cost, 0.46), `raw cost is the Cloudflare cost ($0.46, got ${rec.total_cost})`);
+  expect(rec.margin_rate === 0.25, "…margin_rate is 0.25");
+  expect(approx(rec.platform_margin_cost, 0.46 * 0.25), "…platform_margin_cost is 25% of raw");
+  expect(approx(rec.algosize_price, 0.46 * 1.25), "…algosize_price is raw + margin (what the customer pays)");
+  expect(rec.margin_version === "mc_default_v1", "…and records the margin_config id it billed at");
+
+  // computeMargin unit behaviour.
+  const m = computeMargin(1.0, 0.25, false);
+  expect(approx(m.platformMarginCost, 0.25) && approx(m.algosizePrice, 1.25), "computeMargin: $1 raw → $0.25 margin, $1.25 price");
+
+  // Internal orgs are exempt: rate forced to 0, no markup.
+  const internal = buildUsageRecord(
+    { ok: true, provider: "workers-ai", model: "@cf/zai-org/glm-4.7-flash", usage: { inputTokens: 1_000_000, outputTokens: 1_000_000 } },
+    { orgId: "algosize", feature: "advisory_fix", isInternal: true });
+  expect(internal.margin_rate === 0 && internal.platform_margin_cost === 0, "internal org: rate 0, no margin");
+  expect(approx(internal.algosize_price, internal.total_cost), "…internal org is billed raw cost exactly");
+
+  // Free-tier (a real measured zero) → margin 0, price 0. Different from unmeasured.
+  const free = computeMargin(0, 0.25, false);
+  expect(free.platformMarginCost === 0 && free.algosizePrice === 0, "free-tier ($0 raw) → $0 margin, $0 price — correctly free");
+  const unmeasured = computeMargin(null, 0.25, false);
+  expect(unmeasured.platformMarginCost === null && unmeasured.algosizePrice === null, "null raw → null margin, null price — never $0");
+
+  // A rate over 100% is treated as a typo (25 vs 0.25) and refused, not billed.
+  const typo = computeMargin(1.0, 25, false);
+  expect(typo.marginRate === DEFAULT_MARGIN_RATE, "a >100% rate is rejected as a typo, falling back to the default");
+
+  // A caller-supplied historical rate is honoured — history reprices at its own rate.
+  const historical = buildUsageRecord(
+    { ok: true, provider: "workers-ai", model: "@cf/zai-org/glm-4.7-flash", usage: { inputTokens: 1_000_000, outputTokens: 1_000_000 } },
+    { orgId: "o1", feature: "x", marginRate: 0.4, marginVersion: "mc_v2" });
+  expect(historical.margin_rate === 0.4 && historical.margin_version === "mc_v2",
+    "a row bills at the rate + version supplied to it, not a global constant");
+}
+
+console.log("\naggregation: margin and algosize revenue roll up alongside raw cost\n");
+{
+  const rows = [
+    { org_id: "o1", model: "m", neurons_consumed: 10, total_cost: 0.10, platform_margin_cost: 0.025, algosize_price: 0.125, status: "ok", created_at: Date.parse("2026-08-01T10:00:00Z") },
+    { org_id: "o1", model: "m", neurons_consumed: 5,  total_cost: 0.05, platform_margin_cost: 0.0125, algosize_price: 0.0625, status: "ok", created_at: Date.parse("2026-08-01T12:00:00Z") },
+    { org_id: "o1", model: "m", neurons_consumed: null, total_cost: null, platform_margin_cost: null, algosize_price: null, status: "ok", created_at: Date.parse("2026-08-02T09:00:00Z") },
+  ];
+  const [g] = aggregateBy(rows, "org_id");
+  expect(approx(g.totalCostUsd, 0.15), "raw cost rolls up (cost of goods)");
+  expect(approx(g.platformMarginUsd, 0.0375), "platform margin rolls up (Algosize markup)");
+  expect(approx(g.algosizePriceUsd, 0.1875), "algosize revenue rolls up (what the customer is billed)");
+  expect(g.partial === true, "…and a partly-unmeasured group is still flagged partial");
 }
 
 console.log("\nusage record: columns, SQL, and record keys never drift\n");

@@ -10,14 +10,20 @@
 // scan it was measuring — the same posture the audit log takes.
 
 import { costOf } from "./pricing.js";
+import { computeMargin, DEFAULT_MARGIN_RATE, DEFAULT_MARGIN_VERSION } from "./margin.js";
 
 // The ai_usage columns, in bind order. The single source of truth for the
 // INSERT below AND for the order buildUsageRecord emits — a test asserts all
 // three agree, so a column added in one place without the others fails loudly.
+//
+// The four margin columns sit immediately after the raw-cost block, matching
+// migration 0025: total_cost is the raw Cloudflare cost, algosize_price is what
+// the customer is billed.
 export const AI_USAGE_COLUMNS = Object.freeze([
   "org_id", "user_id", "repository_id", "feature_name", "provider", "model", "request_type",
   "input_tokens", "output_tokens", "cached_input_tokens", "units",
   "neurons_consumed", "neurons_source", "unit_cost", "total_cost", "currency", "price_verified",
+  "margin_rate", "platform_margin_cost", "algosize_price", "margin_version",
   "latency_ms", "status", "error_code", "fallback_provider", "fallback_model",
   "scan_id", "fix_task_id", "request_metadata", "created_at",
 ]);
@@ -29,9 +35,10 @@ const AI_USAGE_INSERT_SQL =
   "(org_id, user_id, repository_id, feature_name, provider, model, request_type, " +
   "input_tokens, output_tokens, cached_input_tokens, units, " +
   "neurons_consumed, neurons_source, unit_cost, total_cost, currency, price_verified, " +
+  "margin_rate, platform_margin_cost, algosize_price, margin_version, " +
   "latency_ms, status, error_code, fallback_provider, fallback_model, " +
   "scan_id, fix_task_id, request_metadata, created_at) " +
-  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
 /**
  * Build a priced ai_usage row from a call.
@@ -51,6 +58,13 @@ export function buildUsageRecord(result, ctx = {}, now = Date.now()) {
 
   const status = ctx.status || (result && result.ok === false ? "error" : "ok");
 
+  // Platform margin, computed at WRITE time from the raw cost. An unpriced call
+  // (null raw cost) carries null margin and null algosize_price — unmeasured
+  // stays unmeasured through the margin, never billed as $0. Internal orgs are
+  // exempt (rate forced to 0). See worker/src/ai/margin.js.
+  const rawCost = priced ? priced.totalCostUsd : null;
+  const margin = computeMargin(rawCost, ctx.marginRate ?? DEFAULT_MARGIN_RATE, ctx.isInternal === true);
+
   return {
     org_id: ctx.orgId || null,
     user_id: ctx.userId ?? null,
@@ -68,9 +82,16 @@ export function buildUsageRecord(result, ctx = {}, now = Date.now()) {
     neurons_consumed: priced ? priced.neurons : (numOrNull(usage.reportedNeurons)),
     neurons_source: priced ? priced.neuronsSource : (usage.reportedNeurons != null ? "reported" : "none"),
     unit_cost: priced ? priced.unitCostPer1000Neurons : null,
-    total_cost: priced ? priced.totalCostUsd : null,   // null (not 0) when unpriced
+    total_cost: rawCost,                               // RAW Cloudflare cost; null (not 0) when unpriced
     currency: priced ? priced.currency : "USD",
     price_verified: priced && priced.verified ? 1 : 0,
+
+    // Margin split. algosize_price is what the customer is billed; null when the
+    // raw cost is null (can't mark up an unknown cost).
+    margin_rate: margin.marginRate,
+    platform_margin_cost: margin.platformMarginCost,
+    algosize_price: margin.algosizePrice,
+    margin_version: ctx.marginVersion || DEFAULT_MARGIN_VERSION,
 
     latency_ms: numOrNull(ctx.latencyMs),
     status,

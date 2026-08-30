@@ -297,8 +297,12 @@ const MIGRATIONS = Object.freeze([
   { id: "0025", name: "ai_usage",
     // AI metering foundation. Without it every Workers AI call is unbilled and
     // untracked — the meter has nowhere to write, so per-org AI spend reads as
-    // zero when it is merely unrecorded.
-    checks: [{ table: "ai_usage", column: "neurons_consumed" }] },
+    // zero when it is merely unrecorded. The margin column and margin_config
+    // table are checked too: if they are missing the meter writes raw cost with
+    // no markup, silently under-billing every customer.
+    checks: [{ table: "ai_usage", column: "neurons_consumed" },
+             { table: "ai_usage", column: "algosize_price" },
+             { table: "margin_config", column: "margin_rate" }] },
 ]);
 
 /** Plain SQLite identifier — the only shape we will interpolate into a PRAGMA. */
