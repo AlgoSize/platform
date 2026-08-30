@@ -40,14 +40,22 @@ export function aggregateBy(rows, dimension) {
     .map(([key, group]) => {
       const neurons = sumMeasured(group, "neurons_consumed");
       const cost = sumMeasured(group, "total_cost");
+      const margin = sumMeasured(group, "platform_margin_cost");
+      const price = sumMeasured(group, "algosize_price");
       return {
         [dimension]: key,
         requests: group.length,
         neurons: neurons.sum,
+        // RAW Cloudflare cost — the platform's cost of goods for this group.
         totalCostUsd: cost.sum,
+        // Margin split. platformMarginUsd is Algosize's markup; algosizePriceUsd
+        // is what the customer is billed (raw cost + margin). Both stay null
+        // when nothing in the group was measured — never rounded up to zero.
+        platformMarginUsd: margin.sum,
+        algosizePriceUsd: price.sum,
         // A group whose cost could not be fully measured is flagged, never
         // rounded up to a confident number.
-        partial: neurons.partial || cost.partial,
+        partial: neurons.partial || cost.partial || price.partial,
         errors: group.filter((r) => r.status === "error").length,
       };
     })
@@ -69,7 +77,15 @@ export function costTrend(rows, granularity = "day") {
   const bucketed = withDateBucket(rows, granularity);
   return aggregateBy(bucketed, "date_bucket")
     .sort((a, b) => String(a.date_bucket).localeCompare(String(b.date_bucket)))
-    .map((g) => ({ date: g.date_bucket, neurons: g.neurons, totalCostUsd: g.totalCostUsd, requests: g.requests, partial: g.partial }));
+    .map((g) => ({
+      date: g.date_bucket,
+      neurons: g.neurons,
+      totalCostUsd: g.totalCostUsd,
+      platformMarginUsd: g.platformMarginUsd,
+      algosizePriceUsd: g.algosizePriceUsd,
+      requests: g.requests,
+      partial: g.partial,
+    }));
 }
 
 /** The N most expensive individual tasks (rows), for the "top expensive" panel. */
@@ -89,9 +105,13 @@ export const BUDGET_STATE = Object.freeze({ OK: "ok", SOFT: "soft", HARD: "hard"
 /**
  * Where an org (or user, or feature) stands against a budget.
  *
- * `spendUsd` may be null — meaning cost could not be measured, e.g. every call
- * hit an unverified/unpriced model. That is NOT "under budget"; it returns
- * state `unmeasured`, because a spend you cannot measure must not read as safe.
+ * `spendUsd` is the CUSTOMER-BILLED spend — pass the `algosizePriceUsd` rollup
+ * (raw cost + margin), not the raw Cloudflare cost, so a budget gates on what
+ * the customer is actually charged.
+ *
+ * It may be null — meaning cost could not be measured, e.g. every call hit an
+ * unverified/unpriced model. That is NOT "under budget"; it returns state
+ * `unmeasured`, because a spend you cannot measure must not read as safe.
  *
  * `softPct` (default 0.8) is the alert threshold; at or above the limit is
  * `hard`. Enforcement (block vs. warn) is the caller's; this only classifies.
