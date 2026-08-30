@@ -294,6 +294,11 @@ const MIGRATIONS = Object.freeze([
     // the advisory list alone — a repo with twelve injection findings reads
     // as clean.
     checks: [{ table: "monitors", column: "last_source_json" }] },
+  { id: "0025", name: "ai_usage",
+    // AI metering foundation. Without it every Workers AI call is unbilled and
+    // untracked — the meter has nowhere to write, so per-org AI spend reads as
+    // zero when it is merely unrecorded.
+    checks: [{ table: "ai_usage", column: "neurons_consumed" }] },
 ]);
 
 /** Plain SQLite identifier — the only shape we will interpolate into a PRAGMA. */

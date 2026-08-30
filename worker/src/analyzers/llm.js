@@ -131,7 +131,7 @@ export async function llmChat({ system, user, maxTokens = 800, temperature = 0.2
         ? await env.AI.run(model, input, opts)
         : await env.AI.run(model, input);
       const reply = extractWorkersAiReply(out);
-      if (reply.trim()) return { ok: true, provider: "workers-ai", reply };
+      if (reply.trim()) return { ok: true, provider: "workers-ai", reply, model, usage: extractUsage(out) };
       reason = "Workers AI returned an empty reply";
     } catch (err) {
       reason = `Workers AI failed: ${err && err.message || err}`;
@@ -166,7 +166,7 @@ export async function llmChat({ system, user, maxTokens = 800, temperature = 0.2
         // it at the top level. Reading only `.result` against K3 would find
         // undefined and report an empty reply for a call that worked.
         const reply = extractWorkersAiReply(thirdParty ? r.json : (r.json && r.json.result));
-        if (reply.trim()) return { ok: true, provider: "workers-ai", reply };
+        if (reply.trim()) return { ok: true, provider: "workers-ai", reply, model, usage: extractUsage(thirdParty ? r.json : (r.json && r.json.result)) };
         reason = "Workers AI returned an empty reply";
       } else {
         reason = `Workers AI ${r.reason}`;
@@ -181,17 +181,18 @@ export async function llmChat({ system, user, maxTokens = 800, temperature = 0.2
     if (!fetchImpl) {
       reason = "no fetch implementation available";
     } else {
+      const openaiModel = env.OPENAI_MODEL || DEFAULT_MODEL;
       const r = await timedJsonFetch(fetchImpl, ENDPOINT, {
         headers: { authorization: `Bearer ${env.OPENAI_API_KEY}` },
         body: {
-          model: env.OPENAI_MODEL || DEFAULT_MODEL,
+          model: openaiModel,
           temperature, max_tokens: maxTokens, messages,
         },
       });
       if (r.ok) {
         const reply = r.json && r.json.choices && r.json.choices[0] && r.json.choices[0].message
           ? String(r.json.choices[0].message.content || "") : "";
-        if (reply.trim()) return { ok: true, provider: "openai", reply };
+        if (reply.trim()) return { ok: true, provider: "openai", reply, model: openaiModel, usage: extractUsage(r.json) };
         reason = "OpenAI returned an empty reply";
       } else {
         reason = `OpenAI ${r.reason}`;
@@ -216,6 +217,27 @@ export async function llmChat({ system, user, maxTokens = 800, temperature = 0.2
  * Exported so tests can pin both shapes directly, not just observe them
  * through a full llmChat() round trip.
  */
+// Usage, when the provider returned it — the token/neuron block llmChat used
+// to discard. Normalized to { inputTokens, outputTokens, cachedInputTokens,
+// reportedNeurons }, each null when absent. Cloudflare, OpenAI and the
+// OpenAI-compatible Workers AI responses all expose a `usage` object; the key
+// spellings differ, so this reads every known shape and returns nulls for what
+// a given provider did not send — never a fabricated zero.
+export function extractUsage(result) {
+  const u = result && (result.usage || (result.result && result.result.usage));
+  if (!u || typeof u !== "object") {
+    return { inputTokens: null, outputTokens: null, cachedInputTokens: null, reportedNeurons: null };
+  }
+  const n = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  return {
+    inputTokens:       n(u.prompt_tokens)     ?? n(u.input_tokens),
+    outputTokens:      n(u.completion_tokens) ?? n(u.output_tokens),
+    cachedInputTokens: n(u.cached_input_tokens) ?? n(u.prompt_tokens_details && u.prompt_tokens_details.cached_tokens),
+    // Cloudflare may surface Neurons directly; if so it is the billing truth.
+    reportedNeurons:   n(u.neurons) ?? n(result && result.neurons),
+  };
+}
+
 export function extractWorkersAiReply(result) {
   if (!result) return "";
   if (typeof result.response === "string") return result.response;
