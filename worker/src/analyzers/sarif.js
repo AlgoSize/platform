@@ -44,11 +44,33 @@ const SECURITY_SEVERITY = {
  * `tags` is the field GitHub renders as filter chips, so the CWE and OWASP
  * mappings go there rather than into prose nobody can filter on.
  */
+// GitHub derives an alert's severity from the RULE's `security-severity`, not
+// from the individual result — so one rule cannot carry two severities. Our
+// severities are per-FINDING: the same injection pattern is high in a request
+// handler and capped to medium in a test file, which is the whole point of the
+// cap in sast/schema.js.
+//
+// Emitting both under one rule silently discarded the cap. A capped test
+// finding inherited "High" from whichever product-code sibling happened to be
+// serialized first, and this repository's own pull request showed ten test-file
+// alerts as high-severity security vulnerabilities — the exact noise the cap
+// exists to prevent, reintroduced at the reporting boundary.
+//
+// So a capped finding gets its OWN rule id. Different severity, different rule
+// — that is what GitHub's model requires, and the suffix says why in the id
+// itself. Alert history is keyed on partialFingerprints, which is unchanged.
+export function sarifRuleIdFor(f) {
+  return f && f.evidence && f.evidence.severityCapped
+    ? `${f.ruleId}.test-code`
+    : f.ruleId;
+}
+
 function sourceRuleFor(f) {
+  const capped = !!(f.evidence && f.evidence.severityCapped);
   return {
-    id: f.ruleId,
-    name: String(f.ruleId || "").replace(/[^A-Za-z0-9]+/g, ""),
-    shortDescription: { text: f.title || f.type },
+    id: sarifRuleIdFor(f),
+    name: String(sarifRuleIdFor(f) || "").replace(/[^A-Za-z0-9]+/g, ""),
+    shortDescription: { text: (f.title || f.type) + (capped ? " (in test code)" : "") },
     fullDescription: { text: f.recommendation || f.title || f.type },
     help: {
       text: f.recommendation || "",
@@ -59,7 +81,9 @@ function sourceRuleFor(f) {
           : ""),
     },
     properties: {
-      tags: ["security", f.category].concat(f.cwe || []).concat(f.owasp || []),
+      tags: ["security", f.category]
+        .concat(capped ? ["test-code"] : [])
+        .concat(f.cwe || []).concat(f.owasp || []),
       "security-severity": SECURITY_SEVERITY[f.severity] || "5.0",
       precision: f.confidence === "high" ? "high" : f.confidence === "medium" ? "medium" : "low",
     },
@@ -167,9 +191,21 @@ export function toSarif(result, { runId = null, siteOrigin = "" } = {}) {
     ? result.source.findings : [];
   for (const f of sourceFindings) {
     if (!f || !f.ruleId) continue;
-    if (!rulesById.has(f.ruleId)) rulesById.set(f.ruleId, sourceRuleFor(f));
+    const sarifRuleId = sarifRuleIdFor(f);
+    if (!rulesById.has(sarifRuleId)) {
+      rulesById.set(sarifRuleId, sourceRuleFor(f));
+    } else {
+      // Belt and braces for any OTHER per-finding severity override (a
+      // taint-confirmed sink outranking its registry baseline): a rule keeps
+      // the LOUDEST severity among its findings, so a shared rule can
+      // over-report but never under-report.
+      const existing = rulesById.get(sarifRuleId);
+      const seen = parseFloat(existing.properties["security-severity"]);
+      const mine = parseFloat(SECURITY_SEVERITY[f.severity] || "5.0");
+      if (mine > seen) existing.properties["security-severity"] = String(mine);
+    }
     results.push({
-      ruleId: f.ruleId,
+      ruleId: sarifRuleId,
       level: LEVEL_BY_SEVERITY[f.severity] || "warning",
       message: {
         text: `${f.title || f.type}: ${f.recommendation}` +
