@@ -148,6 +148,8 @@ import {
 import { makeRateLimit, makeApiKeyRateLimit } from "./middleware/rate-limit.js";
 import { captureException } from "./observability.js";
 import { generateFixHandler, proposeFixHandler, validateFixHandler, explainRuleHandler, importSarifHandler } from "./handlers/fix.js";
+import { handoffFindingsHandler, applyPatchHandler } from "./handlers/handoff.js";
+import { stageModelsHandler, estimateStageCostHandler, validateStageConfigHandler } from "./handlers/ai.js";
 import { estimateHandler, estimateProvidersHandler } from "./handlers/estimate.js";
 import { withEstimateHistory } from "./handlers/estimate_history.js";
 export { UsageCounter } from "./usage-counter.js";
@@ -228,7 +230,17 @@ router.post("/api/fix", analyzeRateLimit, requireAuth, generateFixHandler);
 router.post("/api/fix/propose",  analyzeRateLimit, requireAuth, proposeFixHandler);
 router.post("/api/fix/validate", analyzeRateLimit, requireAuth, validateFixHandler);
 router.get("/api/fix/rule", requireAuth, explainRuleHandler);
+// MCP agent handoff: hand findings to an external coding agent, record the
+// patch it applies back. Read + a provenance write; org-scoped in the handlers.
+router.get("/api/fix/handoff", requireAuth, handoffFindingsHandler);
+router.post("/api/fix/patch", analyzeRateLimit, requireAuth, applyPatchHandler);
 router.post("/api/import/sarif", analyzeRateLimit, requireAuth, importSarifHandler);
+
+// AI model selector: per-stage valid models, live cost estimate, and the
+// server-side Stage 5 ≠ Stage 4 enforcement. Read-only registry data.
+router.get("/api/ai/models", requireAuth, stageModelsHandler);
+router.post("/api/ai/estimate", requireAuth, estimateStageCostHandler);
+router.post("/api/ai/stage-config/validate", requireAuth, validateStageConfigHandler);
 
 // ---- Infrastructure Cost Estimator ----------------------------------------
 // No cloud-account connector and no credential storage, ever: the estimate is

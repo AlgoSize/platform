@@ -18,6 +18,7 @@ import { RUN_TOOLS }      from "./runs.js";
 import { POSTURE_TOOLS }  from "./posture.js";
 import { MONITOR_TOOLS }  from "./monitors.js";
 import { FIX_TOOLS }      from "./fixes.js";
+import { HANDOFF_TOOLS }  from "./handoff.js";
 
 export const TOOLS = Object.freeze([
   ...ANALYSIS_TOOLS,
@@ -25,6 +26,7 @@ export const TOOLS = Object.freeze([
   ...POSTURE_TOOLS,
   ...MONITOR_TOOLS,
   ...FIX_TOOLS,
+  ...HANDOFF_TOOLS,
 ]);
 
 // The four groups the dashboard's tool catalog renders under. Derived from the
@@ -36,4 +38,5 @@ export const TOOL_GROUPS = Object.freeze([
   { id: "posture",  label: "Posture",         tools: POSTURE_TOOLS.map((t) => t.name) },
   { id: "monitors", label: "Monitors",        tools: MONITOR_TOOLS.map((t) => t.name) },
   { id: "fixes",    label: "Fixes",           tools: FIX_TOOLS.map((t) => t.name) },
+  { id: "handoff",  label: "Agent handoff",   tools: HANDOFF_TOOLS.map((t) => t.name) },
 ]);

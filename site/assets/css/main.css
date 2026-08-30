@@ -5172,3 +5172,92 @@ a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
 }
 .sast-fix-diff { max-height: 320px; overflow: auto; }
 .sast-fix-risk { margin: 0; font-size: 0.75rem; color: var(--text-muted); font-style: italic; }
+
+/* ===========================================================================
+   Fix pipeline — stage model selector, cost estimate, MCP handoff (#/pipeline)
+   =========================================================================== */
+.pipe-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: var(--s-5);
+  align-items: start;
+}
+@media (max-width: 860px) { .pipe-grid { grid-template-columns: 1fr; } }
+
+.pipe-stages, .pipe-cost, .pipe-handoff { padding: var(--s-5); }
+.pipe-side { display: flex; flex-direction: column; gap: var(--s-5); }
+
+.pipe-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: "head toggle" "select toggle" "err err";
+  align-items: center;
+  gap: var(--s-2) var(--s-4);
+  padding: var(--s-4) 0;
+  border-top: 1px solid var(--border-soft);
+}
+.pipe-row:first-of-type { border-top: none; }
+.pipe-row-head { grid-area: head; display: flex; align-items: center; gap: var(--s-3); }
+.pipe-stage-no {
+  font: 600 0.7rem/1 var(--font-mono, monospace);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-radius: var(--radius-sm, 6px);
+  padding: 2px 6px;
+}
+.pipe-badge {
+  font-size: 0.68rem; color: var(--text-dim);
+  border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px;
+}
+.pipe-select, .pipe-input {
+  grid-area: select;
+  width: 100%;
+  background: var(--bg-elevated);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+  padding: var(--s-2) var(--s-3);
+  font-size: 0.9rem;
+}
+.pipe-input { grid-area: auto; }
+.pipe-toggle {
+  grid-area: toggle;
+  display: inline-flex; align-items: center; gap: var(--s-2);
+  font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; cursor: pointer;
+}
+.pipe-row.routed { background: color-mix(in srgb, var(--accent-warm) 6%, transparent); }
+.pipe-row.routed .pipe-select { opacity: 0.55; }
+.pipe-row-err { grid-area: err; color: var(--sev-high); font-size: 0.8rem; }
+
+.pipe-total { display: flex; align-items: baseline; gap: var(--s-3); margin-bottom: var(--s-4); }
+.pipe-total-num { font: 700 1.8rem/1 var(--font-mono, monospace); color: var(--text); }
+.pipe-total-note { color: var(--text-muted); font-size: 0.82rem; }
+.pipe-cost-list { list-style: none; margin: 0; padding: 0; }
+.pipe-cost-list li {
+  display: flex; justify-content: space-between; gap: var(--s-4);
+  padding: var(--s-2) 0; border-top: 1px solid var(--border-soft);
+  font-size: 0.85rem;
+}
+.pipe-cost-stage { color: var(--text-muted); }
+.pipe-cost-routed { color: var(--accent-warm); }
+.pipe-cost-null { color: var(--text-dim); }
+.pipe-cost-foot { color: var(--text-dim); font-size: 0.75rem; margin-top: var(--s-3); }
+
+.pipe-handoff-form { display: flex; flex-direction: column; gap: var(--s-3); margin: var(--s-4) 0; }
+.pipe-agents { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.pipe-agent.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.pipe-handoff-out { margin-top: var(--s-4); }
+.pipe-handoff-meta { color: var(--text-muted); font-size: 0.82rem; margin-bottom: var(--s-2); }
+.pipe-prompt {
+  background: var(--bg-elevated); border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px); padding: var(--s-4);
+  max-height: 320px; overflow: auto;
+  font-size: 0.78rem; white-space: pre-wrap; word-break: break-word;
+  margin-bottom: var(--s-3);
+}
+.pipe-handoff-note { color: var(--text-dim); font-size: 0.78rem; margin-top: var(--s-4); }
