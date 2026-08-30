@@ -104,6 +104,16 @@ jobs:
         working-directory: worker
         run: npm ci
 
+      # Placeholder binding ids deploy WITHOUT error — wrangler has no opinion
+      # about whether a D1 or KV id names a resource that exists — so a Worker
+      # whose storage points at nothing comes up looking healthy and fails
+      # later, at runtime, on a URL that looks live. staging carries
+      # placeholders today and is reachable from a branch push or a manual
+      # dispatch, so this runs before anything is deployed rather than after.
+      - name: Check binding ids are real
+        working-directory: worker
+        run: node scripts/check-bindings.mjs "$TARGET_ENV"
+
       # Deploy the sandbox sibling FIRST. The main Worker has a `[[services]]`
       # binding to `algosize-sandbox` (or `-staging`); deploying the main
       # Worker against a non-existent sandbox service fails the bind step.

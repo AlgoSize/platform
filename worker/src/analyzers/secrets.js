@@ -82,6 +82,14 @@ export const SECRET_PATTERNS = [
 /** Strings we consider "obviously a placeholder, not a real secret". */
 export const PLACEHOLDER_RE = /(\$\{|process\.env|os\.getenv|getenv\s*\(|import\.meta\.env|YOUR_|xxxxx|placeholder|example|fake|<your|<insert|todo|fixme|change[_-]?me|replace[_-]?me)/i;
 
+// A delimited test/dummy token INSIDE the candidate value — `sk-ant-test`,
+// `dummy-token-123` — marks it fake. Applied to the captured value only,
+// never the whole line: substring "test" in surrounding code (a test file
+// invoking a real leak pattern, `latest`, `attestation`) proves nothing
+// about the value itself, which is why this is a separate check and not an
+// entry in the line-scoped list above.
+export const PLACEHOLDER_TOKEN_RE = /(?:^|[-_.:/])(?:test|testing|dummy|sample|demo)(?:[-_.:/]|$)/i;
+
 /** A secret-ish key assigned a quoted literal of plausible length. */
 export const GENERIC_SECRET_RE = /(?:api[_-]?key|apikey|access[_-]?token|secret[_-]?key|client[_-]?secret|auth[_-]?token)\s*[:=]\s*["']([^"']{8,})["']/i;
 
@@ -132,10 +140,12 @@ export function scanLine(text) {
   }
 
   const generic = GENERIC_SECRET_RE.exec(text);
-  if (generic && !PLACEHOLDER_RE.test(generic[1]) && !PLACEHOLDER_RE.test(text)) {
+  if (generic && !PLACEHOLDER_RE.test(generic[1]) && !PLACEHOLDER_RE.test(text) &&
+      !PLACEHOLDER_TOKEN_RE.test(generic[1])) {
     out.push({
       type: "hardcoded_generic_secret",
       severity: null,          // caller decides: comment context downgrades it
+      index: generic.index,    // where in the line — callers use it to tell code from data
       value: generic[1],
       recommendation: GENERIC_SECRET_RECOMMENDATION,
     });

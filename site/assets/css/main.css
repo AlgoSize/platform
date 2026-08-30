@@ -5150,3 +5150,25 @@ a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
   color: var(--text-muted);
   line-height: 1.5;
 }
+
+/* ---------------------------------------------------------------------------
+   Fix pipeline on source findings
+   ---------------------------------------------------------------------------
+   A proposal is a claim, and the layout keeps its three claims separable at a
+   glance: the verdict (colour-coded), the mechanical checklist, and — always,
+   never collapsed — the line naming what was NOT checked. */
+.sast-fix { margin-top: var(--s-3); }
+.sast-fix-result { display: flex; flex-direction: column; gap: var(--s-2); margin-top: var(--s-2); }
+.sast-fix-verdict { font-size: 0.82rem; }
+.sast-fix-ok strong  { color: var(--accent); }
+.sast-fix-bad strong { color: var(--danger); }
+.sast-fix-checks { list-style: none; margin: 0; padding: 0; font-size: 0.72rem; line-height: 1.6; }
+.sast-check-ok  { color: var(--text-muted); }
+.sast-check-bad { color: var(--danger); }
+.sast-fix-notrun {
+  margin: 0; padding-left: var(--s-3);
+  border-left: 2px solid var(--accent-warm);
+  font-size: 0.72rem; color: var(--text-muted); line-height: 1.5;
+}
+.sast-fix-diff { max-height: 320px; overflow: auto; }
+.sast-fix-risk { margin: 0; font-size: 0.75rem; color: var(--text-muted); font-style: italic; }

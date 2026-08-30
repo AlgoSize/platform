@@ -192,27 +192,32 @@ console.log("\nDetector: dangerous eval / exec\n");
 
 console.log("\nDetector: SQL string concatenation\n");
 
-// 18. "SELECT ... " + var → high
+// 18. "SELECT ... " + var → medium
+//
+// Medium, not high: this detector matches the SHAPE of a query with no taint
+// evidence, and the canonical safe idiom (literal fragments with `?` binds
+// joined at runtime) matches identically. The traced-flow claim is
+// sast.sql-injection.tainted-query, and it is critical.
 {
   const out = analyzeVuln({ files: [{ path: "db.js", content: 'const q = "SELECT * FROM users WHERE id = " + userId;' }] });
   const f = out.findings.find(x => x.type === "sql_string_concatenation");
-  expect(f && f.severity === "high", "SELECT ... + var flagged high");
+  expect(f && f.severity === "medium", "SELECT ... + var flagged medium (shape without taint)");
 }
 
-// 19. var + " WHERE ..." → high
+// 19. var + " WHERE ..." → medium
 {
   const out = analyzeVuln({ files: [{ path: "db.js", content: 'const q = baseQuery + " WHERE id = 1"' }] });
   const f = out.findings.find(x => x.type === "sql_string_concatenation");
-  expect(f && f.severity === "high", "var + WHERE ... flagged high");
+  expect(f && f.severity === "medium", "var + WHERE ... flagged medium");
 }
 
 console.log("\nDetector: SQL template literal injection\n");
 
-// 20. SQL backtick template with ${} → high
+// 20. SQL backtick template with ${} → medium (same reasoning as 18)
 {
   const out = analyzeVuln({ files: [{ path: "db.js", content: 'db.query(`SELECT * FROM users WHERE id = ${id}`);' }] });
   const f = out.findings.find(x => x.type === "sql_template_literal_injection");
-  expect(f && f.severity === "high", "SQL template literal with ${} flagged high");
+  expect(f && f.severity === "medium", "SQL template literal with ${} flagged medium");
 }
 
 // 21. Plain template literal without SQL keywords is NOT flagged
@@ -1027,6 +1032,128 @@ console.log("\nHandler — lockfiles below the repository root\n");
   const res = await analyzeVulnHandler(req, { FETCH: fetchImpl }, null);
   expect(res.status === 200,
     `an unlistable tree falls back to the root-name fetch (got ${res.status})`);
+}
+
+console.log("\nSQL detectors — a keyword is not a query\n");
+
+// The regression that produced 188 findings across 78 files of this
+// repository at high severity: the SQL keyword match was unanchored, so
+// `.join(", ")` matched JOIN and `Object.values()` matched VALUES. Every
+// case here was a real reported finding from this codebase's own gate.
+{
+  const fp = (content) => analyzeVuln({ files: [{ path: "src/app.js", content }] })
+    .findings.filter((f) => /sql/.test(f.type));
+
+  expect(fp('const s = `${l.analyzers.join(", ")}`;').length === 0,
+    "`.join(\", \")` inside a template is not a SQL query");
+  expect(fp('const m = `kind must be one of ${KINDS.join(", ")}`;').length === 0,
+    "an error message interpolating a list is not a SQL query");
+  expect(fp('const t = "Scanned " + n + " packages from " + names;').length === 0,
+    "an English sentence containing \"from\" is not SQL concatenation");
+  expect(fp('const q = "Remove " + label + " from the organisation?";').length === 0,
+    "UI copy with \"Remove … from\" is not SQL concatenation");
+  expect(fp('const d = "Delete " + phrase + "?";').length === 0,
+    "\"Delete \" + variable in a confirm dialog is not SQL");
+
+  // …while every real shape still fires.
+  expect(fp('db.query(`SELECT * FROM users WHERE id = ${id}`);').length === 1,
+    "a real SELECT…FROM template still fires");
+  expect(fp('db.exec(`UPDATE users SET ${sets.join(", ")} WHERE id = ?`);').length === 1,
+    "dynamic UPDATE…SET assembly still fires");
+  expect(fp('const q = base + " WHERE org_id = 1";').length === 1,
+    "a bare WHERE-comparison fragment still fires");
+  expect(fp('const w = "WHERE " + clauses.join(" AND ");').length === 1,
+    "a literal that is nothing but a clause keyword still fires");
+}
+
+console.log("\nTest code — capped, labelled, never dropped\n");
+
+// A planted injection vector in a test file is not reachable attack surface;
+// reporting it at parity with a request handler buries the handler. Capped
+// at medium and labelled — never dropped, and secrets are NEVER capped: a
+// real key does not care which directory it leaks from.
+{
+  const VULN = 'app.get("/u", (req, res) => { db.query("SELECT * FROM t WHERE id = " + req.params.id); });';
+  const prod = analyzeVuln({ files: [{ path: "src/handler.js", content: VULN }] }).findings;
+  const test = analyzeVuln({ files: [{ path: "worker/scripts/test-gate.mjs", content: VULN }] }).findings;
+
+  const prodTop = prod.find((f) => f.type === "sql_injection_tainted");
+  const testTop = test.find((f) => f.type === "sql_injection_tainted");
+  expect(prodTop && prodTop.severity === "critical",
+    `the taint finding is critical in product code (got ${prodTop && prodTop.severity})`);
+  expect(testTop && testTop.severity === "medium" && testTop.evidence && testTop.evidence.inTestCode === true,
+    `…and capped to medium, labelled inTestCode, in a test file (got ${testTop && testTop.severity})`);
+  expect(prod.length === test.length,
+    "capping changes severity, never the count — nothing is dropped");
+
+  // Assembled at runtime so this file never carries a PEM banner at rest —
+  // a scanner's own test suite must not be a source of secret-shaped bytes,
+  // including to the scanner itself (secrets are never capped, even here).
+  const BANNER = (kind) => "-----" + kind + " RSA PRIVATE KEY-----";
+  const PEM = "const k = `" + BANNER("BEGIN") + "\nMIIEow…\n" + BANNER("END") + "`;";
+  const pemTest = analyzeVuln({ files: [{ path: "tests/e2e/setup.spec.js", content: PEM }] }).findings
+    .find((f) => f.type === "private_key_material");
+  expect(pemTest && pemTest.severity === "critical",
+    `a private key in a test file is still critical (got ${pemTest && pemTest.severity})`);
+
+  // Paths that must NOT count as test code.
+  const inSrc = analyzeVuln({ files: [{ path: "src/latest-contest.js", content: VULN }] }).findings
+    .find((f) => f.type === "sql_injection_tainted");
+  expect(inSrc && inSrc.severity === "critical",
+    "\"test\" as a substring of a real filename does not trigger the cap");
+}
+
+console.log("\nCredential values that announce their own fakeness\n");
+
+{
+  const cred = (content) => analyzeVuln({ files: [{ path: "src/cfg.js", content }] })
+    .findings.filter((f) => f.type === "hardcoded_credential_assignment");
+
+  expect(cred('const API_KEY = "sk-ant-test";').length === 0,
+    "a delimited -test token marks the value as a placeholder");
+  expect(cred('const JWT_SECRET = "monitors-test-jwt-secret-32-or-more-chars";').length === 0,
+    "…including mid-value tokens");
+  expect(cred('const PASSWORD = "dummy-password-123";').length === 0,
+    "…and dummy-");
+  // Realistic values are split at rest for the same reason as the PEM above.
+  const KEYLINE = (v) => 'const API_' + 'KEY = "' + v + '";';
+  expect(cred(KEYLINE("sk-ant-a3b8f2c9d4e6178a3b8f2c9d")).length === 1,
+    "a value without any placeholder token still fires");
+  expect(cred(KEYLINE("latest-attestation-key-9f8e7d6c5b4a")).length === 1,
+    "\"latest\" and \"attestation\" contain the letters and are NOT placeholders");
+}
+
+console.log("\nA mention of a shape is not the shape\n");
+
+// The scanner reported five of its own rule definitions as vulnerabilities:
+// a recommendation string mentioning exec(), rule regexes spelling
+// /dangerouslySetInnerHTML/ and /@csrf_exempt/. The discriminator is where
+// the match STARTS — inside a string or regex literal is a mention; outside,
+// extending into one, is code.
+{
+  const scan = (content) => analyzeVuln({ files: [{ path: "src/a.js", content }] }).findings;
+
+  expect(scan('const r = "Avoid exec() on dynamic input";').length === 0,
+    "exec() inside a prose string is a mention, not a call");
+  expect(scan("const p = /dangerouslySetInnerHTML/;").length === 0,
+    "a rule regex naming an XSS sink is not an XSS sink");
+  expect(scan("const q = /@csrf_exempt\\b|LIBXML_NOENT/i;").length === 0,
+    "a rule regex naming config tokens is not disabled middleware");
+
+  expect(scan("exec(userCmd);").some((f) => f.type === "use_of_exec"),
+    "a real exec() call still fires");
+  expect(scan('const h = crypto.createHash("md5");').some((f) => f.type === "weak_hash_algorithm"),
+    "a match that STARTS in code and extends into quotes still fires (md5)");
+
+  // The two format rules are exempt: string data is where they leak.
+  const pem = scan("const key = `" + "-----" + "BEGIN RSA PRIVATE KEY-----" + "`;");
+  expect(pem.some((f) => f.type === "private_key_material" && f.severity === "critical"),
+    "a PEM banner inside a template literal is still a critical leak");
+  // Split in THIS file so the scanner's own suite carries no URI at rest;
+  // joined before scanning so the scanned line carries a real one.
+  const uri = scan('const db = "postgres' + '://admin:hunter24aa@db.internal:5432/prod";');
+  expect(uri.some((f) => f.type === "hardcoded_db_connection_string"),
+    "a credentialed URI inside a string is still a leak");
 }
 
 console.log();

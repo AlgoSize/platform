@@ -109,6 +109,36 @@ export function fingerprintOf({ ruleId, path, snippet }, occurrence = 0) {
 }
 
 // ---------------------------------------------------------------------------
+// Test code
+// ---------------------------------------------------------------------------
+
+// Whole path components and basename shapes that mean "this file is a test".
+// Deliberately conservative: `test/` as a directory, `foo.test.js`,
+// `test-foo.mjs`, `foo.spec.ts` — not any path merely containing the letters.
+const TEST_DIR_RE = /(^|\/)(test|tests|__tests__|spec|specs|e2e)(\/)/i;
+const TEST_BASENAME_RE = /(^|\/)(?:test[-_.][^/]*|[^/]*[-_.]test\.[^/.]+|[^/]*\.(?:test|spec)\.[^/.]+|spec[-_.][^/]*)$/i;
+
+/** Is this path recognizably test code? */
+export function isTestCodePath(path) {
+  const p = String(path || "");
+  return TEST_DIR_RE.test(p) || TEST_BASENAME_RE.test(p);
+}
+
+// The highest severity a non-secret finding in test code can carry.
+//
+// An injection pattern in a test file is almost always a planted vector or a
+// mock — it is not reachable attack surface, and reporting it at high parity
+// with the same pattern in a request handler buries the handler. This
+// repository's own gate demonstrated the failure: the top of its report was
+// its own scanner test suite. Capped rather than dropped — the finding is
+// still true and still listed, labelled for what it is.
+//
+// SECRETS ARE NEVER CAPPED. A credential does not care which directory it
+// leaks from; a real key pasted into a test is exactly as compromised as one
+// in a handler, and test files are where real keys most often land.
+const TEST_CODE_SEVERITY_CAP = "medium";
+
+// ---------------------------------------------------------------------------
 // Normalization
 // ---------------------------------------------------------------------------
 
@@ -151,6 +181,12 @@ export function normalizeFindings(rawFindings, { dedupe = true } = {}) {
     };
     if (raw.column !== undefined) base.column = raw.column;
     if (raw.evidence !== undefined) base.evidence = raw.evidence;
+
+    if (base.category !== "secrets" && isTestCodePath(base.path) &&
+        (SEVERITY_RANK[base.severity] || 0) > SEVERITY_RANK[TEST_CODE_SEVERITY_CAP]) {
+      base.severity = TEST_CODE_SEVERITY_CAP;
+      base.evidence = { ...(base.evidence || {}), inTestCode: true, severityCapped: true };
+    }
 
     const occKey = `${base.ruleId}|${base.path}|${String(base.snippet).replace(/\s+/g, " ").trim()}`;
     const occ = occurrenceCount.get(occKey) || 0;

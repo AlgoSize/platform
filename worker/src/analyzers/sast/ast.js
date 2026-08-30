@@ -319,13 +319,18 @@ const CREDENTIAL_NAME_RE = /^(?:.*_)?(?:password|passwd|secret|api[_-]?key|apike
 // Values that are obviously not live credentials. Kept in step with the
 // placeholder list in analyzers/secrets.js in spirit, not by import: that
 // module's list is tuned for line scanning and this one sees the bare value.
+// Two shapes of "obviously fake": the whole value IS a placeholder word, or
+// the value carries a delimited test/dummy/sample token — `sk-ant-test`,
+// `dummy-token-123`. Delimited, not substring: "latest" and "attestation"
+// contain the letters and are not admissions of fakeness.
 const PLACEHOLDER_VALUE_RE = /^(?:|x{3,}|\*+|changeme|change[_-]?me|placeholder|example|test|todo|fixme|your[_-].*|<.*>|\$\{.*\}|process\.env\..*)$/i;
+const PLACEHOLDER_TOKEN_RE = /(?:^|[-_.:/])(?:test|testing|dummy|sample|example|demo|fake|placeholder|changeme|xxx+)(?:[-_.:/]|$)/i;
 
 function maybeCredential(name, literal, node, file, src, findings) {
   if (!name || !CREDENTIAL_NAME_RE.test(String(name))) return;
   const value = literal.value;
   if (value.length < 8) return;
-  if (PLACEHOLDER_VALUE_RE.test(value)) return;
+  if (PLACEHOLDER_VALUE_RE.test(value) || PLACEHOLDER_TOKEN_RE.test(value)) return;
   findings.push({
     severity: "high",
     type: "hardcoded_credential_assignment",

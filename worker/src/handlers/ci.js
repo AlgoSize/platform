@@ -33,7 +33,7 @@
 // unfalsifiable. The same auditManifests() the dashboard analyzer calls runs
 // here, so both paths produce the same answer from the same bytes.
 
-import { auditManifests } from "./analyze.js";
+import { auditManifests, SOURCE_SKIP_RE } from "./analyze.js";
 import { analyzeVuln } from "../analyzers/vuln.js";
 import { persistRun } from "./runs.js";
 import { storeReportFor } from "../reports/render.js";
@@ -320,9 +320,21 @@ export async function ciRunHandler(request, env, ctx) {
   // honoured, and a source-scanner bug must degrade to "the code was not
   // scanned" beside a complete advisory list — never take the gate down.
   let sourceScan = null;
-  if (v.value.archInput && v.value.archInput.files.length) {
+  // The SAME exclusions the repo-scan path applies. The architecture glob is
+  // deliberately broad — the X-ray wants every manifest it can get — but a
+  // SECURITY scan of those same bytes must not read a repository's test
+  // corpus. Without this filter the gate reported 533 findings and 23
+  // criticals on a pull request that introduced none of them, every one from
+  // this repository's own scripts/fixtures/sast/vulnerable/app.js.
+  //
+  // Applied server-side rather than only in the generated workflow, because a
+  // workflow already installed in someone's repository does not re-generate
+  // itself: fixing it here fixes every existing installation at once.
+  const scanFiles = (v.value.archInput ? v.value.archInput.files : [])
+    .filter((f) => !SOURCE_SKIP_RE.test(f.path));
+  if (scanFiles.length) {
     try {
-      const scanned = analyzeVuln({ files: v.value.archInput.files });
+      const scanned = analyzeVuln({ files: scanFiles });
       sourceScan = {
         status: "ok",
         findings: scanned.findings,
@@ -737,6 +749,23 @@ jobs:
                       or b.startswith("Dockerfile")
                       or p.endswith(CONFIG_SUFFIX))
 
+          # Test corpora are excluded from the payload entirely, and both
+          # analyzers are better for it. A scanner's fixture directory is a
+          # deliberate collection of bad examples: reading it as a security
+          # scan reports the corpus as vulnerabilities — true, and useless —
+          # and this repository's own gate did exactly that, 535 findings and
+          # 23 criticals from files that exist to be found. The architecture
+          # map has the same problem from the other side: a fake Express app
+          # under fixtures/ becomes a service that does not exist.
+          #
+          # The server applies the same exclusions on ingest, so a workflow
+          # generated before this change is still protected. This is the
+          # cheaper half — the bytes never leave the runner.
+          TEST_CORPUS = {"fixtures", "fixture", "__fixtures__", "testdata"}
+
+          def is_test_corpus(p):
+              return any(part in TEST_CORPUS for part in p.split("/"))
+
           locks = []
           for p in tracked:
               if os.path.basename(p) in LOCK_NAMES:
@@ -744,7 +773,7 @@ jobs:
                   if c is not None:
                       locks.append({"path": p, "content": c})
 
-          candidates = [p for p in tracked if not is_env(p)]
+          candidates = [p for p in tracked if not is_env(p) and not is_test_corpus(p)]
           # Configs first: they carry the topology. If a budget runs out it
           # should cost import edges, never whole services.
           ordered = ([p for p in candidates if is_config(p)]

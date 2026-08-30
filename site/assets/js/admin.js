@@ -906,7 +906,14 @@
         { label: "State", render: function (c) {
             return c.configured ? pill("configured", "ok") : pill("not configured", "warn");
           } },
-        { label: "Detail", wrap: true, render: function (c) { return c.detail; } },
+        { label: "Detail", wrap: true, render: function (c) {
+            if (!c.note) return c.detail;
+            // A deliberate opt-out still owes the reader what it costs.
+            return el("span", {}, [
+              c.detail,
+              el("span", { style: "display:block;margin-top:2px;color:var(--adm-muted)", text: c.note }),
+            ]);
+          } },
         { label: "Missing", wrap: true, render: function (c) {
             return c.missing.length
               ? el("span", { class: "adm-mono", style: "color:var(--adm-warn)", text: c.missing.join(", ") })
@@ -927,7 +934,11 @@
   function testConnection(c) {
     toast("Testing " + c.name + "…");
     api(c.testEndpoint).then(function (res) {
-      toast(c.name + ": " + (res.ok ? "all checks passed" : (res.summary || "checks failed")), res.ok ? "ok" : "danger");
+      // `summary` is stripe-check's shape, `message` is sandbox-check's. Take
+      // whichever the endpoint actually sent: falling through to "checks
+      // failed" would discard the one sentence that says what to do about it.
+      var detail = res.summary || res.message || (res.ok ? "all checks passed" : "checks failed");
+      toast(c.name + ": " + detail, res.ok ? "ok" : "danger");
     }).catch(function (err) {
       if (blocked) return;
       toast(c.name + ": " + err.message, "danger");

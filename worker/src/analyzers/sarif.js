@@ -9,6 +9,8 @@
 // ingester actually reads, because emitting more of the schema than we can
 // populate honestly produces a file that validates and says nothing.
 
+import { fingerprintOf } from "./sast/schema.js";
+
 const SARIF_VERSION = "2.1.0";
 const SARIF_SCHEMA  = "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json";
 
@@ -42,11 +44,33 @@ const SECURITY_SEVERITY = {
  * `tags` is the field GitHub renders as filter chips, so the CWE and OWASP
  * mappings go there rather than into prose nobody can filter on.
  */
+// GitHub derives an alert's severity from the RULE's `security-severity`, not
+// from the individual result — so one rule cannot carry two severities. Our
+// severities are per-FINDING: the same injection pattern is high in a request
+// handler and capped to medium in a test file, which is the whole point of the
+// cap in sast/schema.js.
+//
+// Emitting both under one rule silently discarded the cap. A capped test
+// finding inherited "High" from whichever product-code sibling happened to be
+// serialized first, and this repository's own pull request showed ten test-file
+// alerts as high-severity security vulnerabilities — the exact noise the cap
+// exists to prevent, reintroduced at the reporting boundary.
+//
+// So a capped finding gets its OWN rule id. Different severity, different rule
+// — that is what GitHub's model requires, and the suffix says why in the id
+// itself. Alert history is keyed on partialFingerprints, which is unchanged.
+export function sarifRuleIdFor(f) {
+  return f && f.evidence && f.evidence.severityCapped
+    ? `${f.ruleId}.test-code`
+    : f.ruleId;
+}
+
 function sourceRuleFor(f) {
+  const capped = !!(f.evidence && f.evidence.severityCapped);
   return {
-    id: f.ruleId,
-    name: String(f.ruleId || "").replace(/[^A-Za-z0-9]+/g, ""),
-    shortDescription: { text: f.title || f.type },
+    id: sarifRuleIdFor(f),
+    name: String(sarifRuleIdFor(f) || "").replace(/[^A-Za-z0-9]+/g, ""),
+    shortDescription: { text: (f.title || f.type) + (capped ? " (in test code)" : "") },
     fullDescription: { text: f.recommendation || f.title || f.type },
     help: {
       text: f.recommendation || "",
@@ -57,7 +81,9 @@ function sourceRuleFor(f) {
           : ""),
     },
     properties: {
-      tags: ["security", f.category].concat(f.cwe || []).concat(f.owasp || []),
+      tags: ["security", f.category]
+        .concat(capped ? ["test-code"] : [])
+        .concat(f.cwe || []).concat(f.owasp || []),
       "security-severity": SECURITY_SEVERITY[f.severity] || "5.0",
       precision: f.confidence === "high" ? "high" : f.confidence === "medium" ? "medium" : "low",
     },
@@ -165,9 +191,21 @@ export function toSarif(result, { runId = null, siteOrigin = "" } = {}) {
     ? result.source.findings : [];
   for (const f of sourceFindings) {
     if (!f || !f.ruleId) continue;
-    if (!rulesById.has(f.ruleId)) rulesById.set(f.ruleId, sourceRuleFor(f));
+    const sarifRuleId = sarifRuleIdFor(f);
+    if (!rulesById.has(sarifRuleId)) {
+      rulesById.set(sarifRuleId, sourceRuleFor(f));
+    } else {
+      // Belt and braces for any OTHER per-finding severity override (a
+      // taint-confirmed sink outranking its registry baseline): a rule keeps
+      // the LOUDEST severity among its findings, so a shared rule can
+      // over-report but never under-report.
+      const existing = rulesById.get(sarifRuleId);
+      const seen = parseFloat(existing.properties["security-severity"]);
+      const mine = parseFloat(SECURITY_SEVERITY[f.severity] || "5.0");
+      if (mine > seen) existing.properties["security-severity"] = String(mine);
+    }
     results.push({
-      ruleId: f.ruleId,
+      ruleId: sarifRuleId,
       level: LEVEL_BY_SEVERITY[f.severity] || "warning",
       message: {
         text: `${f.title || f.type}: ${f.recommendation}` +
@@ -250,4 +288,128 @@ export function toSarif(result, { runId = null, siteOrigin = "" } = {}) {
       },
     }],
   };
+}
+
+
+// ---------------------------------------------------------------------------
+// SARIF IMPORT — external scanners' results as normalized findings
+// ---------------------------------------------------------------------------
+//
+// The reverse direction: a SARIF log produced by ANY scanner becomes findings
+// in the platform's own shape, so external results flow through the same
+// grouping, prioritization and fix pipeline as native ones. Mapping rules:
+//
+//   severity     security-severity when present (the CVSS-ish scale GitHub
+//                sorts on), else the three-level `level` — error→high,
+//                warning→medium, note→low. Never critical from `level` alone:
+//                three levels cannot express critical, and inventing it would
+//                overclaim on every imported error.
+//   ruleId       namespaced as `sarif.<tool>.<originalRuleId>` so imports can
+//                never collide with the native registry, while the original
+//                id survives verbatim in `evidence.importedRuleId` — the
+//                mapping back that interop requires.
+//   fingerprint  the platform's own content-based fingerprint, so an imported
+//                finding dedupes and diffs exactly like a native one.
+//
+// Anything unreadable is skipped and COUNTED, never silently dropped: the
+// return says how many results the log claimed and how many survived.
+
+const IMPORT_SEVERITY_BY_LEVEL = { error: "high", warning: "medium", note: "low", none: "info" };
+const MAX_IMPORT_RESULTS = 2000;
+
+function importSeverity(result, rule) {
+  const props = (rule && rule.properties) || {};
+  const ss = parseFloat(props["security-severity"]);
+  if (Number.isFinite(ss)) {
+    if (ss >= 9) return "critical";
+    if (ss >= 7) return "high";
+    if (ss >= 4) return "medium";
+    if (ss > 0)  return "low";
+  }
+  return IMPORT_SEVERITY_BY_LEVEL[result.level]
+    || IMPORT_SEVERITY_BY_LEVEL[(rule && rule.defaultConfiguration && rule.defaultConfiguration.level)]
+    || "medium";
+}
+
+function extractCwes(rule) {
+  const tags = (rule && rule.properties && rule.properties.tags) || [];
+  return tags
+    .map((t) => /(?:external\/)?cwe(?:\/|-)?(\d+)/i.exec(String(t)))
+    .filter(Boolean)
+    .map((m) => `CWE-${m[1]}`);
+}
+
+/**
+ * Parse a SARIF 2.1 document into normalized findings.
+ *
+ * @returns {{ ok:true, findings, skipped, total, toolNames }
+ *         | { ok:false, error, message }}
+ */
+export function fromSarif(doc) {
+  if (typeof doc === "string") {
+    try { doc = JSON.parse(doc); }
+    catch { return { ok: false, error: "invalid_sarif", message: "the document is not valid JSON" }; }
+  }
+  if (!doc || !Array.isArray(doc.runs)) {
+    return { ok: false, error: "invalid_sarif", message: "a SARIF document has a top-level `runs` array" };
+  }
+
+  const findings = [];
+  const toolNames = [];
+  let skipped = 0, total = 0;
+  const occurrence = new Map();
+
+  for (const run of doc.runs) {
+    const driver = (run && run.tool && run.tool.driver) || {};
+    const toolName = String(driver.name || "unknown-tool");
+    toolNames.push(toolName);
+    const toolSlug = toolName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "tool";
+    const rulesById = new Map((driver.rules || []).map((r) => [r.id, r]));
+
+    for (const result of (run.results || [])) {
+      total++;
+      if (findings.length >= MAX_IMPORT_RESULTS) { skipped++; continue; }
+      if (!result || typeof result !== "object") { skipped++; continue; }
+      const originalRuleId = String(result.ruleId || (result.rule && result.rule.id) || "");
+      const loc = Array.isArray(result.locations) && result.locations[0] && result.locations[0].physicalLocation;
+      const path = loc && loc.artifactLocation && typeof loc.artifactLocation.uri === "string"
+        ? loc.artifactLocation.uri.replace(/^file:\/\/+/, "").replace(/^\.\//, "")
+        : null;
+      if (!originalRuleId || !path) { skipped++; continue; }
+
+      const rule = rulesById.get(originalRuleId);
+      const message = (result.message && (result.message.text || result.message.markdown)) || "";
+      const ruleId = `sarif.${toolSlug}.${originalRuleId}`;
+      const snippet = String(message).slice(0, 200);
+
+      const occKey = `${ruleId}|${path}|${snippet}`;
+      const occ = occurrence.get(occKey) || 0;
+      occurrence.set(occKey, occ + 1);
+
+      findings.push({
+        severity: importSeverity(result, rule),
+        // Imported severities are the FOREIGN tool's claim, relayed — not
+        // re-derived by us — so confidence is capped at medium: we can vouch
+        // for the mapping, not for the finding.
+        confidence: "medium",
+        type: "imported_finding",
+        ruleId,
+        title: (rule && rule.shortDescription && rule.shortDescription.text) || originalRuleId,
+        category: "imported",
+        cwe: extractCwes(rule),
+        owasp: [],
+        path,
+        line: (loc && loc.region && loc.region.startLine) || 1,
+        snippet,
+        recommendation: ((rule && rule.help && (rule.help.text || rule.help.markdown)) || "").slice(0, 500)
+          || `See ${toolName}'s documentation for ${originalRuleId}.`,
+        module: "sarif-import",
+        language: null,
+        evidence: { importedFrom: toolName, importedRuleId: originalRuleId },
+        fingerprint: fingerprintOf({ ruleId, path, snippet }, occ),
+      });
+    }
+  }
+
+  return { ok: true, findings, skipped, total, toolNames };
 }

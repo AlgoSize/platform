@@ -192,6 +192,16 @@ function detectSecrets(file) {
     // one, which is the only case whose severity depends on where it appeared:
     // a credential in a comment is still a leak, but a less urgent one.
     for (const hit of scanLine(text)) {
+      // The generic name-equals-value heuristic is a CODE shape: `apiKey =
+      // "…"` written inside an enclosing string (a test vector, a doc
+      // example) is data. Match start inside a masked literal means exactly
+      // that. Format rules are exempt — their matches (a PEM banner, an AWS
+      // key) live inside quotes by definition and are leaks wherever they
+      // appear.
+      if (hit.severity === null && hit.index !== undefined) {
+        const masked = maskLiterals(text);
+        if (masked[hit.index] !== text[hit.index]) continue;
+      }
       findings.push({
         severity: hit.severity === null ? (isCommentLine(text) ? "low" : "high") : hit.severity,
         type: hit.type,
@@ -205,6 +215,75 @@ function detectSecrets(file) {
   return findings;
 }
 
+
+// ---------------------------------------------------------------------------
+// String and regex literals are data, not code
+// ---------------------------------------------------------------------------
+//
+// A code-shape detector that reads inside quotes reports every mention of the
+// shape: a recommendation string saying "Avoid exec()", a rule regex spelling
+// /dangerouslySetInnerHTML/, a test feeding 'db.query("SELECT …")' as data.
+// This scanner's own source was the proof — five of its rule DEFINITIONS
+// reported themselves as vulnerabilities.
+//
+// The discriminator is where a match STARTS. `createHash("md5")` starts at
+// the function name, outside the string, and only extends into it — real
+// code, keep. A recommendation string mentioning exec() or a rule regex
+// spelling /dangerouslySetInnerHTML/ starts inside a literal — a mention,
+// skip. `maskLiterals` blanks literal INTERIORS with spaces, preserving
+// length, so `masked[i] !== line[i]` answers "is position i inside one".
+//
+// Two rules in the table are exempt via `scanLiterals: true`: a PEM banner
+// and a credentialed connection string ARE string data — that is exactly how
+// they leak — and their matches legitimately start inside quotes.
+//
+// The regex-literal heuristic: a `/` reads as regex, not division, when the
+// previous non-space character opens an expression. That is exactly the
+// context rule definitions appear in (`regex: /…/`), and a mis-read here
+// only masks a division expression's right side — which no code-shape
+// pattern needs to see.
+const REGEX_LITERAL_PRECEDER = /[=:(,[!&|?;{]$|^$|\breturn$/;
+
+/** Is the match at `index` inside a string/regex literal on this line? */
+export function insideLiteral(line, masked, index) {
+  return masked[index] !== line[index];
+}
+
+export function maskLiterals(line) {
+  let out = "";
+  let i = 0;
+  const n = line.length;
+  while (i < n) {
+    const ch = line[i];
+    if (ch === '"' || ch === "'" || ch === "`") {
+      let j = i + 1;
+      while (j < n && line[j] !== ch) j += line[j] === "\\" ? 2 : 1;
+      const closed = j < n;
+      out += ch + " ".repeat(Math.max(0, Math.min(j, n) - i - 1)) + (closed ? ch : "");
+      i = closed ? j + 1 : n;
+      continue;
+    }
+    if (ch === "/" && REGEX_LITERAL_PRECEDER.test(out.trimEnd().slice(-6).trim())) {
+      let j = i + 1;
+      let inClass = false;
+      while (j < n) {
+        if (line[j] === "\\") { j += 2; continue; }
+        if (line[j] === "[") inClass = true;
+        else if (line[j] === "]") inClass = false;
+        else if (line[j] === "/" && !inClass) break;
+        j++;
+      }
+      if (j < n) { // found a closing slash — treat as a regex literal
+        out += "/" + " ".repeat(j - i - 1) + "/";
+        i = j + 1;
+        continue;
+      }
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+}
 
 // ---------------------------------------------------------------------------
 // Detector 2: eval() / exec() / new Function()
@@ -223,9 +302,13 @@ function detectDangerousEval(file) {
 
     const ci = commentStartIndex(text);
     const code = ci >= 0 ? text.slice(0, ci) : text;
+    // An eval() mentioned inside a string or a rule regex is a mention, not
+    // a call — matches that START inside a literal are dropped below.
+    const maskedCode = maskLiterals(code);
+    const outsideLiteral = (m) => m && !insideLiteral(code, maskedCode, m.index) ? m : null;
 
-    const evalMatch    = /\beval\s*\(/.exec(code);
-    const newFuncMatch = /\bnew\s+Function\s*\(/.exec(code);
+    const evalMatch    = outsideLiteral(/\beval\s*\(/.exec(code));
+    const newFuncMatch = outsideLiteral(/\bnew\s+Function\s*\(/.exec(code));
     // `exec` needs a negative lookbehind for `.` — without it, every
     // `SOME_REGEX.exec(str)` in a JavaScript codebase was reported as a
     // high-severity command-execution finding. RegExp.prototype.exec is one
@@ -236,11 +319,11 @@ function detectDangerousEval(file) {
     // destructured `const { exec } = require("child_process")` — plus the
     // explicit child_process/os/subprocess spellings.
     const execMatch =
-      /(?<![.\w$])exec\s*\(/.exec(code) ||
-      /\b(?:child_process|cp)\.execS?y?n?c?\s*\(/.exec(code) ||
-      /\bexecSync\s*\(/.exec(code) ||
-      /\bos\.system\s*\(/.exec(code) ||
-      /\bsubprocess\.(?:run|call|check_output|check_call|Popen)\s*\([^)]*shell\s*=\s*True/.exec(code);
+      outsideLiteral(/(?<![.\w$])exec\s*\(/.exec(code)) ||
+      outsideLiteral(/\b(?:child_process|cp)\.execS?y?n?c?\s*\(/.exec(code)) ||
+      outsideLiteral(/\bexecSync\s*\(/.exec(code)) ||
+      outsideLiteral(/\bos\.system\s*\(/.exec(code)) ||
+      outsideLiteral(/\bsubprocess\.(?:run|call|check_output|check_call|Popen)\s*\([^)]*shell\s*=\s*True/.exec(code));
 
     if (evalMatch || newFuncMatch) {
       findings.push({
@@ -271,7 +354,50 @@ function detectDangerousEval(file) {
 // Detector 3: SQL string concatenation
 // ---------------------------------------------------------------------------
 
-const SQL_KEYWORD = /(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE|VALUES|JOIN|UNION)/i;
+// A lone SQL keyword is not a query.
+//
+// This used to be an unanchored, case-insensitive alternation, which meant
+// `.join(", ")` matched JOIN and `Object.values()` matched VALUES — two of the
+// most common expressions in JavaScript. On this repository alone that rule
+// produced 188 findings across 78 files at HIGH severity, essentially all of
+// them noise, and a gate that reports 371 highs is a gate nobody reads.
+//
+// So detection now requires the SHAPE of a statement: the keyword pairs that
+// only ever co-occur in SQL. `SELECT` near a `FROM`, `INSERT INTO`, an
+// `UPDATE` with its `SET`, a `WHERE` followed by an actual comparison. Prose
+// containing the word "from" no longer qualifies, and neither does an array
+// join.
+//
+// The bounded `{0,400}` gaps keep this linear — an unbounded `[\s\S]*?`
+// between two alternated keywords is how a linter regex becomes a denial of
+// service on a minified file.
+const SQL_STATEMENT = new RegExp([
+  "\\bSELECT\\b[\\s\\S]{0,400}?\\bFROM\\b",
+  "\\bINSERT\\s+(?:OR\\s+\\w+\\s+)?INTO\\b",
+  "\\bREPLACE\\s+INTO\\b",
+  "\\bUPDATE\\b[\\s\\S]{0,200}?\\bSET\\b",
+  "\\bDELETE\\s+FROM\\b",
+  "\\bUNION\\s+(?:ALL\\s+)?SELECT\\b",
+  // A fragment: FROM/JOIN naming a table, or a WHERE with a real comparison.
+  "\\b(?:FROM|JOIN)\\s+[`\"'\\[]?\\w+[`\"'\\]]?\\s*(?:\\bWHERE\\b|\\bJOIN\\b|\\bON\\b|\\bORDER\\b|\\bGROUP\\b|\\bLIMIT\\b|\\bSET\\b)",
+  "\\bWHERE\\b\\s+[\\w`\"'.\\[\\]]+\\s*(?:=|<|>|!=|<>|\\bLIKE\\b|\\bIN\\b|\\bIS\\b)",
+].join("|"), "i");
+
+// The concatenation case, where SQL is split across operands and no single
+// literal holds a whole statement: `"WHERE " + clause`. Such a fragment counts
+// only when the literal is NOTHING BUT a clause keyword — visibly a query
+// being assembled, not a sentence that happens to contain the word.
+//
+// The keyword list here is deliberately shorter than the one above. DELETE,
+// FROM, SET, JOIN, INTO and ON are all ordinary English, and every one of them
+// produced a false positive on this repository's own UI copy: `"Delete " +
+// phrase`, `"from " + price`, `"Remove " + label + " from the organisation?"`.
+// Those verbs only earn a finding as part of a full statement shape, which
+// SQL_STATEMENT already covers. What is left — WHERE, VALUES, ORDER BY and
+// friends — has no plausible reading as prose glued to a variable.
+const SQL_CLAUSE_ONLY = /^\s*(?:WHERE|VALUES|ORDER\s+BY|GROUP\s+BY|HAVING|LIMIT|OFFSET|UNION(?:\s+ALL)?)\s*\(?\s*$/i;
+
+const looksLikeSqlLiteral = (text) => SQL_STATEMENT.test(text) || SQL_CLAUSE_ONLY.test(text);
 
 function detectSqlConcat(file) {
   const findings = [];
@@ -282,11 +408,17 @@ function detectSqlConcat(file) {
     const ci = commentStartIndex(text);
     const code = ci >= 0 ? text.slice(0, ci) : text;
 
-    const left  = /["'][^"']*\b(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE|VALUES)\b[^"']*["']\s*\+\s*[A-Za-z_$][\w$.]*/i;
-    const right = /[A-Za-z_$][\w$.]*\s*\+\s*["'][^"']*\b(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE|VALUES)\b[^"']*["']/i;
-    if (left.test(code) || right.test(code)) {
+    // Pull out the quoted operand next to a `+` and judge the LITERAL, rather
+    // than asking whether a SQL word appears somewhere on the line. The old
+    // form matched `"Scanned " + n + " packages from " + names` — an English
+    // sentence — because "from" is in it.
+    const left  = /(["'])((?:(?!\1)[^\\]|\\.)*)\1\s*\+\s*[A-Za-z_$][\w$.]*/;
+    const right = /[A-Za-z_$][\w$.]*\s*\+\s*(["'])((?:(?!\1)[^\\]|\\.)*)\1/;
+    const l = left.exec(code);
+    const r = right.exec(code);
+    if ((l && looksLikeSqlLiteral(l[2])) || (r && looksLikeSqlLiteral(r[2]))) {
       findings.push({
-        severity: "high",
+        severity: "medium", // shape without taint — see the registry note
         type: "sql_string_concatenation",
         path: file.path,
         line: i + 1,
@@ -319,9 +451,9 @@ function detectSqlTemplateLiteral(file) {
     const tmpl = /`([^`]*)`/.exec(code);
     if (!tmpl) continue;
     const body = tmpl[1];
-    if (SQL_KEYWORD.test(body) && /\$\{[^}]+\}/.test(body)) {
+    if (looksLikeSqlLiteral(body) && /\$\{[^}]+\}/.test(body)) {
       findings.push({
-        severity: "high",
+        severity: "medium", // shape without taint — see the registry note
         type: "sql_template_literal_injection",
         path: file.path,
         line: i + 1,
@@ -392,6 +524,7 @@ function detectInsecureHttp(file) {
 const CODE_PATTERNS = [
   {
     type: "private_key_material",
+    scanLiterals: true, // a PEM banner inside a string IS the leak
     severity: "critical",
     // The PEM banner itself — no ambiguity about what this is.
     regex: /-----BEGIN\s+(?:RSA|DSA|EC|OPENSSH|PGP|ENCRYPTED)?\s*PRIVATE KEY-----/,
@@ -588,6 +721,7 @@ const CODE_PATTERNS = [
   },
   {
     type: "hardcoded_db_connection_string",
+    scanLiterals: true, // a credentialed URI inside a string IS the leak
     severity: "critical",
     // A driver URI carrying inline credentials. The `:pass@` shape is the
     // finding — a URI with no password in it is not one.
@@ -617,9 +751,17 @@ function detectCodePatterns(file) {
     if (isCommentLine(text)) continue;
     const ci = commentStartIndex(text);
     const code = ci >= 0 ? text.slice(0, ci) : text;
+    // See the maskLiterals block: a match STARTING inside a string or regex
+    // literal is a mention of the shape, not the shape — this table is where
+    // the scanner reported five of its own rule definitions as
+    // vulnerabilities. Rules marked scanLiterals (PEM banners, connection
+    // strings) are exempt: string data is exactly where those leak.
+    const maskedCode = maskLiterals(code);
 
     for (const pat of CODE_PATTERNS) {
-      if (!pat.regex.test(code)) continue;
+      const m = pat.regex.exec(code);
+      if (!m) continue;
+      if (!pat.scanLiterals && insideLiteral(code, maskedCode, m.index)) continue;
       if (pat.unless && pat.unless.test(code)) continue;
       if (pat.requires && !pat.requires.test(code)) continue;
       findings.push({

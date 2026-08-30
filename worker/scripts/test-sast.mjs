@@ -53,6 +53,12 @@ const FAKE_AWS    = "AKIA" + "IOSFODNN7" + "EXAMPLE";
 const FAKE_PAT    = "ghp_" + "abcdefghijklmnopqrstuvwxyz" + "0123456789";
 const FAKE_STRIPE = "sk_" + "live_" + "abcdef0123456789ABCDEFGH";
 const FAKE_SLACK  = "xo" + "xb-" + "1234567890-1234567890-" + "abcdef1234567890ABCDEFGH";
+// Same convention for the two vectors that predate it. Split at rest so this
+// file carries no PEM banner and no credentialed URI a scanner would report;
+// joined before scanning, so the bytes under test are unchanged.
+const FAKE_PEM_BANNER = (kind) => "-----" + kind + " RSA PRIVATE KEY-----";
+const FAKE_PEM = FAKE_PEM_BANNER("BEGIN") + "\nMIIEow==\n" + FAKE_PEM_BANNER("END");
+const FAKE_DSN = (user) => "postgres" + "://" + user + ":hunter2hunter2@db.example.com:5432/app";
 
 const VULN = read("vulnerable/app.js");
 const SAFE = read("safe/app.js");
@@ -130,8 +136,8 @@ group("no detector emits a type the registry does not know");
     `const s = "${FAKE_STRIPE}";`,
     `const sl = "${FAKE_SLACK}";`,
     `const apiKey = "abc12345xyzqwerty";`,
-    `-----BEGIN RSA PRIVATE KEY-----`,
-    `const DSN = "postgres://user:hunter2hunter2@db.example.com:5432/app";`,
+    FAKE_PEM_BANNER("BEGIN"),
+    `const DSN = "${FAKE_DSN("user")}";`,
   ].join("\n");
   const misc = [
     `import { get } from "http";`,
@@ -288,11 +294,11 @@ group("secrets are detected and never echoed back");
       `…and the value appears nowhere in the response — not in the snippet, not in the fingerprint`);
   }
 
-  const pem = scan("k.pem", "-----BEGIN RSA PRIVATE KEY-----\nMIIEow==\n-----END RSA PRIVATE KEY-----");
+  const pem = scan("k.pem", FAKE_PEM);
   expect(pem.findings.some((f) => f.ruleId === "secrets.private-key.pem" && f.severity === "critical"),
     "PEM private key → critical");
 
-  const dsn = scan("db.js", 'const DSN = "postgres://appuser:hunter2hunter2@db.example.com:5432/app";');
+  const dsn = scan("db.js", `const DSN = "${FAKE_DSN("appuser")}";`);
   expect(dsn.findings.some((f) => f.ruleId === "secrets.database.connection-string"),
     "database URI with inline credentials is detected");
 
@@ -557,6 +563,57 @@ group("end to end through the handler");
     `…and says the source could not be read rather than showing it clean (got ${body2.source && body2.source.status})`);
   expect(body2.source.findings.length === 0 && /could not be read/i.test(body2.source.message),
     "…with an empty list that is explicitly labelled as unread");
+}
+
+console.log("\nthe test-code severity cap survives the SARIF boundary\n");
+
+// GitHub derives an alert's severity from the RULE's security-severity, not
+// from the result — so one rule cannot carry two severities, and emitting a
+// capped test finding under the same rule as its product-code sibling
+// silently discarded the cap. This repository's own pull request showed ten
+// test-file alerts as HIGH severity because of it.
+{
+  const { toSarif } = await import("../src/analyzers/sarif.js");
+  const finding = (path, severity, capped) => ({
+    ruleId: "sast.sql-injection.string-concat",
+    title: "SQL query built by string concatenation",
+    recommendation: "Use parameterized queries.",
+    category: "injection", confidence: "medium",
+    severity, path, line: 1, fingerprint: "fp-" + path,
+    ...(capped ? { evidence: { inTestCode: true, severityCapped: true } } : {}),
+  });
+
+  // Product-code finding FIRST, so a shared rule would stamp 7.5 on both.
+  const doc = toSarif({ source: { findings: [
+    finding("src/app.js", "high", false),
+    finding("scripts/test-a.mjs", "medium", true),
+  ] } }, {});
+  const rules = doc.runs[0].tool.driver.rules;
+  const byId = Object.fromEntries(rules.map((r) => [r.id, r]));
+
+  expect(byId["sast.sql-injection.string-concat"]
+    && byId["sast.sql-injection.string-concat"].properties["security-severity"] === "7.5",
+    "the product-code finding keeps its high security-severity");
+  const testRule = byId["sast.sql-injection.string-concat.test-code"];
+  expect(!!testRule, "a capped finding gets its own rule id — GitHub's severity is rule-scoped");
+  expect(testRule && testRule.properties["security-severity"] === "5.0",
+    "…carrying the CAPPED severity, which is what the cap exists to say");
+  expect(testRule && testRule.properties.tags.includes("test-code"),
+    "…and a test-code tag, so a reviewer can filter on it");
+  expect(doc.runs[0].results.some((r) =>
+    r.ruleId === "sast.sql-injection.string-concat.test-code" && r.level === "warning"),
+    "the capped result is a warning, not an error");
+
+  // Over-report is survivable; under-report is not. A rule shared by two
+  // uncapped findings takes the loudest of them regardless of emit order.
+  const mixed = toSarif({ source: { findings: [
+    finding("src/a.js", "medium", false),
+    finding("src/b.js", "critical", false),
+  ] } }, {});
+  const shared = mixed.runs[0].tool.driver.rules
+    .find((r) => r.id === "sast.sql-injection.string-concat");
+  expect(shared && shared.properties["security-severity"] === "9.5",
+    "a shared rule takes the loudest severity among its findings, whatever the order");
 }
 
 console.log("");

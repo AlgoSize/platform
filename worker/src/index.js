@@ -109,6 +109,7 @@ import {
   adminUsersCsvHandler,
   adminSchemaCheckHandler,
   adminStripeCheckHandler,
+  adminSandboxCheckHandler,
   requireAdmin,
 } from "./handlers/admin.js";
 import {
@@ -146,7 +147,7 @@ import {
 } from "./mcp/oauth.js";
 import { makeRateLimit, makeApiKeyRateLimit } from "./middleware/rate-limit.js";
 import { captureException } from "./observability.js";
-import { generateFixHandler } from "./handlers/fix.js";
+import { generateFixHandler, proposeFixHandler, validateFixHandler, explainRuleHandler, importSarifHandler } from "./handlers/fix.js";
 import { estimateHandler, estimateProvidersHandler } from "./handlers/estimate.js";
 import { withEstimateHistory } from "./handlers/estimate_history.js";
 export { UsageCounter } from "./usage-counter.js";
@@ -221,6 +222,13 @@ router.post("/api/analyze/profile", analyzeRateLimit, requireAuth, analyzeProfil
 // to a run that was already counted — double-charging it would make the
 // button feel broken on the last run of a free month.
 router.post("/api/fix", analyzeRateLimit, requireAuth, generateFixHandler);
+// The structured pipeline: FixProposal + static validation + patch. Rate
+// limited like every AI-backed route; not quota-metered — a fix is follow-up
+// work on a run already paid for, and validate consumes no AI at all.
+router.post("/api/fix/propose",  analyzeRateLimit, requireAuth, proposeFixHandler);
+router.post("/api/fix/validate", analyzeRateLimit, requireAuth, validateFixHandler);
+router.get("/api/fix/rule", requireAuth, explainRuleHandler);
+router.post("/api/import/sarif", analyzeRateLimit, requireAuth, importSarifHandler);
 
 // ---- Infrastructure Cost Estimator ----------------------------------------
 // No cloud-account connector and no credential storage, ever: the estimate is
@@ -276,6 +284,7 @@ router.get( "/api/admin/schema-check", requireAdmin, adminSchemaCheckHandler);
 // repo — the portal default and the webhook endpoint both live in the Stripe
 // dashboard, and both fail only once a real customer hits them.
 router.get( "/api/admin/stripe-check", requireAdmin, adminStripeCheckHandler);
+router.get( "/api/admin/sandbox-check", requireAdmin, adminSandboxCheckHandler);
 
 // The control panel's own read surface. Everything below is behind the same
 // requireAdmin allowlist; there is no second, weaker gate anywhere on it.

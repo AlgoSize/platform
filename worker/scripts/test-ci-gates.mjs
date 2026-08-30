@@ -462,6 +462,105 @@ console.log("\nthe PR comment speaks for your code, not only your packages\n");
 }
 
 // ---------------------------------------------------------------------------
+console.log("\nthe gate does not scan the repository's own test corpus\n");
+// ---------------------------------------------------------------------------
+//
+// The architecture step globs source broadly on purpose — the X-ray wants
+// every file it can get, fixtures included, because import edges run through
+// them. Reading those same bytes as a SECURITY scan is a different question
+// with a different answer, and the first version did not ask it: the gate
+// reported 533 findings and 23 criticals on a pull request that introduced
+// none of them, every one from this repository's own deliberately-vulnerable
+// corpus under scripts/fixtures/sast/vulnerable/.
+//
+// The exclusions live in ONE place (SOURCE_SKIP_RE in analyze.js) and both
+// paths import it, so a directory added to the repo-scan list is excluded
+// here too without anyone remembering to.
+{
+  const { ciRunHandler } = await import("../src/handlers/ci.js");
+  const { SOURCE_SKIP_RE } = await import("../src/handlers/analyze.js");
+  const { analyzeVuln } = await import("../src/analyzers/vuln.js");
+
+  const VULN_SRC = [
+    "app.get('/u/:id', (req, res) => {",
+    "  db.query('SELECT * FROM users WHERE id = ' + req.params.id, cb);",
+    "});",
+  ].join("\n");
+
+  // Identical bytes at four paths. Only the last is the customer's own code,
+  // so the scan must find exactly one file's worth of findings — proving the
+  // filter is a filter and not an off-switch.
+  const files = [
+    { path: "worker/scripts/fixtures/sast/vulnerable/app.js", content: VULN_SRC },
+    { path: "test/__fixtures__/bad.js", content: VULN_SRC },
+    { path: "internal/testdata/seed.js", content: VULN_SRC },
+    { path: "src/real.js", content: VULN_SRC },
+  ];
+
+  for (const f of files.slice(0, 3)) {
+    expect(SOURCE_SKIP_RE.test(f.path), `${f.path} is excluded by the shared skip list`);
+  }
+  expect(!SOURCE_SKIP_RE.test("src/real.js"), "…and real source is not");
+
+  const req = new Request("https://algosize.test/api/ci/runs", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ repo: "acme/demo", ref: "refs/pull/8/head", commit_sha: "def456", files }),
+  });
+  req.authMethod = "api_key";
+  req.org = { orgId: "org_ci2" };
+
+  const { makeD1 } = await import("./_d1-stub.mjs");
+  const env = { SITE_ORIGIN: ORIGIN, DB: makeD1() };
+  await env.DB.prepare(
+    `INSERT INTO organisations (org_id, name, stripe_customer_id, plan, sub_status, seats_purchased, created_at, updated_at)
+     VALUES ('org_ci2','org_ci2','cus_ci2','paid','active',5,1,1)`).run();
+  const body = await (await ciRunHandler(req, env, null)).json();
+
+  expect(body.source && body.source.status === "ok",
+    `the source scan still runs (got ${JSON.stringify(body.source && body.source.status)})`);
+  const paths = new Set((body.source.top || []).map((t) => t.path));
+  expect(!paths.has("worker/scripts/fixtures/sast/vulnerable/app.js"),
+    "no finding is reported from scripts/fixtures/ — the incident this test exists for");
+  expect(![...paths].some((p) => SOURCE_SKIP_RE.test(p)),
+    `no finding comes from any excluded directory (reported: ${[...paths].join(", ") || "none"})`);
+  expect(paths.has("src/real.js"),
+    "…and the customer's own file is still scanned and still reported");
+
+  // Four copies of one bug filtered to one: the count is the proof that
+  // three files were dropped, not that the scanner got quieter.
+  const oneFile = analyzeVuln({ files: [files[3]] }).findings.length;
+  expect(body.source.findings === oneFile,
+    `exactly one file's worth of findings survives (${body.source.findings} vs ${oneFile} for src/real.js alone)`);
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n…and neither does the workflow that collects the files\n");
+// ---------------------------------------------------------------------------
+//
+// The server-side filter protects every workflow already installed in a
+// repository, which is why it is the primary fix. But it only takes effect
+// once the Worker deploys, and the runner uploads the bytes either way. The
+// collector drops test corpora before the payload is built — cheaper, and it
+// fixes the architecture map too: a fake Express app under fixtures/ was
+// being counted as a service that does not exist.
+//
+// Asserted on the GENERATED YAML, not the generator source. Task #59's lesson:
+// this file builds Python and jq inside a JS template literal, where escapes
+// collapse, and source that reads correctly can generate text that does not.
+{
+  const { buildWorkflow } = await import("../src/handlers/ci.js");
+  const yaml = buildWorkflow({ origin: "https://algosize.com" });
+
+  expect(/TEST_CORPUS = \{"fixtures", "fixture", "__fixtures__", "testdata"\}/.test(yaml),
+    "the generated collector declares the test-corpus directories");
+  expect(/not is_env\(p\) and not is_test_corpus\(p\)/.test(yaml),
+    "…and actually filters the candidate list with it — declaring it is not applying it");
+  expect(/any\(part in TEST_CORPUS for part in p\.split\("\/"\)\)/.test(yaml),
+    "…matching whole path components, so a file named fixtures.js is still scanned");
+}
+
+// ---------------------------------------------------------------------------
 console.log("\nthe generated workflow's jq survives the template literal\n");
 // ---------------------------------------------------------------------------
 //

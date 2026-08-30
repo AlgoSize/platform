@@ -166,7 +166,14 @@ export const RULES = Object.freeze([
     id: "sast.sql-injection.string-concat",
     title: "SQL query built by string concatenation",
     description: "A string literal containing SQL keywords is concatenated with a variable.",
-    category: "injection", severity: "high", confidence: "medium", group: "sql-injection",
+    // Medium, not high, on purpose: this rule has no taint evidence — it
+    // matches the SHAPE of a query, and the canonical safe idiom (literal
+    // fragments with `?` binds joined at runtime) matches identically. The
+    // claim with evidence is sast.sql-injection.tainted-query, and it is
+    // CRITICAL. Grading the shape match the same as the traced flow would
+    // mean confidence carries no information — the exact overclaim the
+    // prioritization engine exists to avoid.
+    category: "injection", severity: "medium", confidence: "medium", group: "sql-injection",
     cwe: ["CWE-89"], owasp: ["A03:2021-Injection"],
     languages: ["javascript", "typescript", "python", "ruby", "php", "java"], module: "pattern-analyzer",
     remediation: "Use parameterized queries — `?` placeholders or `$1` bind parameters. The database driver escapes bound values; string concatenation cannot.",
@@ -176,7 +183,8 @@ export const RULES = Object.freeze([
     id: "sast.sql-injection.template-literal",
     title: "SQL query built by template interpolation",
     description: "A template literal contains both SQL keywords and a `${…}` interpolation.",
-    category: "injection", severity: "high", confidence: "medium", group: "sql-injection",
+    // Medium for the same reason as string-concat above: shape, not taint.
+    category: "injection", severity: "medium", confidence: "medium", group: "sql-injection",
     cwe: ["CWE-89"], owasp: ["A03:2021-Injection"],
     languages: ["javascript", "typescript"], module: "pattern-analyzer",
     remediation: "Use the driver's placeholder syntax instead of interpolation. Tagged templates from a library that parameterizes (`sql\\`…\\``) are safe; a bare template literal is not.",

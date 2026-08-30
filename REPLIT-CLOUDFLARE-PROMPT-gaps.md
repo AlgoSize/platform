@@ -143,7 +143,27 @@ window, it would have run against a Worker with no bindings. If that is what
 happened, the binding is fine now and the monitor is simply showing a stale
 result.
 
-**Run this:**
+**Do this first — it is one request and it settles the question.**
+
+Admin → settings → Connections → **Measurement sandbox** → *Test*. That calls
+`GET /api/admin/sandbox-check`, which sends a trivial function through the real
+service binding and reports which of four states production is in:
+
+| State | Means | Do |
+| --- | --- | --- |
+| `bound_and_working` | The probe compiled, ran, and returned the expected value | Nothing. The old message was stale. |
+| `not_bound` | `env.SANDBOX` is not a service binding here | Deploy `algosize-sandbox`, then redeploy this Worker |
+| `unreachable` | Bound, but the service did not answer | Check the sandbox Worker's own logs |
+| `bad_response` | Answered, but could not execute or returned the wrong value | Redeploy `algosize-sandbox`; it is out of date or is not the sandbox |
+
+This exists because presence is not reachability. The Bindings table below
+already reported whether `env.SANDBOX` is set, and that cannot distinguish
+"bound and working" from "bound to something that is failing" — which have
+different remedies. Before this, the only way to tell them apart was to trigger
+a full monitor sweep and read the optimizer panel: a minutes-long round trip
+through unrelated machinery for a question one request wide.
+
+**If you want to confirm from the CLI as well:**
 
 ```bash
 cd worker
@@ -194,9 +214,25 @@ cd worker
 # paste the DSN from the Sentry project, then re-check Admin → settings
 ```
 
-If you would rather not run Sentry, that is a legitimate choice — but make it
-explicit, because "NOT CONFIGURED" in an admin panel reads as an oversight
-rather than a decision.
+If you would rather not run Sentry, that is a legitimate choice — and it is now
+sayable, which it was not when this was written. Set:
+
+```bash
+cd worker
+./node_modules/.bin/wrangler secret put ERROR_REPORTING --config wrangler.toml --env production
+# value: console
+```
+
+The panel then reads *"console only — set deliberately via
+ERROR_REPORTING=console"*, stops listing `SENTRY_DSN` as missing, and still
+states the cost underneath: Workers logs are not durable, so a production
+exception is unobserved once it scrolls away. Unset it to go back to being
+reminded.
+
+The row has three states rather than two because an absent DSN previously
+meant both "nobody has got to it yet" and "we decided against it", and a panel
+that renders a decision as an oversight is the same class of error as one that
+renders an unmeasured thing as clean.
 
 ---
 
@@ -224,6 +260,23 @@ cd worker
 
 Paste the three printed ids over the placeholders above, commit, push.
 `DEPLOY.md` §7.1 documents the same sequence.
+
+**Until you do, the deploy is blocked rather than silently wrong.** `wrangler
+deploy` has no opinion about whether a D1 or KV id names a resource that
+exists, so a staging deploy used to succeed and produce a Worker whose storage
+pointed at nothing — failing later, at runtime, on a URL that looked live. The
+deploy workflow now runs `node scripts/check-bindings.mjs "$TARGET_ENV"` before
+deploying anything, which exits non-zero and prints the offending bindings plus
+the commands above. Run it yourself any time:
+
+```bash
+cd worker
+node scripts/check-bindings.mjs staging     # exits 1 today
+node scripts/check-bindings.mjs production  # exits 0
+```
+
+It also refuses to pass an environment whose bindings it could not find at all:
+"we did not read it" must not report as "it is clean".
 
 ---
 
