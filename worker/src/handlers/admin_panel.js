@@ -291,6 +291,22 @@ export async function adminOverviewHandler(request, env, ctx) {
       meta: skipped > 0 ? `${skipped} skipped in the last 7 days` : "no sends attempted yet",
     });
   }
+  if (!(env.SANDBOX && typeof env.SANDBOX.fetch === "function")) {
+    // The same failure mode as the email row above, in a different subsystem:
+    // nothing errors, the nightly sweep "runs", and every entry is skipped.
+    // The optimizer monitor then sits on FIRST RUN PENDING forever, which
+    // reads as "not started yet" rather than "cannot start".
+    //
+    // Absence only — a live probe belongs behind the Test button in settings,
+    // not on every load of the overview. Presence is free to check and is the
+    // state that stays broken silently; unreachability announces itself the
+    // moment anyone looks.
+    alerts.push({
+      severity: "config", tone: "warn", to: "settings",
+      text: "The measurement sandbox is not bound — the optimizer cannot grade anything",
+      meta: "no baseline is recorded and no regression alert can fire; Test it in settings",
+    });
+  }
   if (!priceInfo.ok) {
     alerts.push({
       severity: "config", tone: "warn", to: "settings",

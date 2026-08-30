@@ -217,11 +217,16 @@ cd worker
 If you would rather not run Sentry, that is a legitimate choice — and it is now
 sayable, which it was not when this was written. Set:
 
-```bash
-cd worker
-./node_modules/.bin/wrangler secret put ERROR_REPORTING --config wrangler.toml --env production
-# value: console
+Uncomment one line in `worker/wrangler.toml` under `[env.production.vars]`:
+
+```toml
+ERROR_REPORTING = "console"
 ```
+
+then commit and push — the deploy applies it. It is a `[vars]` entry rather
+than a secret on purpose: this is a policy choice, not a credential, and a
+decision belongs where it can be read and reviewed in a diff. (`SENTRY_DSN`
+itself is a real secret and stays in `wrangler secret put`.)
 
 The panel then reads *"console only — set deliberately via
 ERROR_REPORTING=console"*, stops listing `SENTRY_DSN` as missing, and still

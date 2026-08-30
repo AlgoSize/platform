@@ -108,6 +108,83 @@ console.log("\nthe sandbox row is testable from the settings panel\n");
     "…and the binding table still reports presence separately from reachability");
 }
 
+console.log("\nan unbound sandbox announces itself without being asked\n");
+{
+  const { adminOverviewHandler } = await import("../src/handlers/admin_panel.js");
+  const { makeD1 } = await import("./_d1-stub.mjs");
+
+  const overviewAlerts = async (env) => {
+    const res = await adminOverviewHandler({ user: { email: "a@b.c" } },
+      { ADMIN_EMAILS: "a@b.c", DB: makeD1(), ...env });
+    const body = await res.json();
+    return body.alerts || [];
+  };
+
+  const without = await overviewAlerts({});
+  expect(without.some((a) => /measurement sandbox is not bound/i.test(a.text)),
+    "with no binding, the overview raises it unprompted — the button is not the only way to find out");
+  expect(without.some((a) => /measurement sandbox/i.test(a.text) && a.to === "settings"),
+    "…and points at the settings section where the Test button lives");
+
+  const withIt = await overviewAlerts({ SANDBOX: ok });
+  expect(!withIt.some((a) => /measurement sandbox/i.test(a.text)),
+    "with a binding, it says nothing — an alert that is always on is not an alert");
+}
+
+console.log("\nthe binding preflight covers the DEFAULT environment too\n");
+{
+  const { bindingsForEnv, isPlaceholderId, DEFAULT_ENV } =
+    await import("./check-bindings.mjs");
+  const { readFileSync } = await import("node:fs");
+  const toml = readFileSync(new URL("../wrangler.toml", import.meta.url), "utf8");
+
+  // `wrangler deploy` with no --env uses the top-level blocks, and the
+  // default D1 id in this repo IS a placeholder. The first version of the
+  // script only matched [env.<name>.*], so that path was unchecked — the one
+  // case the gate most needed to catch.
+  const dflt = bindingsForEnv(toml, DEFAULT_ENV);
+  expect(dflt.length > 0, `the default environment declares ${dflt.length} binding id(s)`);
+  expect(dflt.some((b) => isPlaceholderId(b.value)),
+    "…and at least one is a placeholder, so a bare `wrangler deploy` is blocked");
+
+  // The default reader must not absorb a named environment's bindings. Note
+  // that default and production DO legitimately share their KV ids — this
+  // repo's production block only overrides D1 — so "no ids in common" would
+  // be a false premise. The D1 id is where they differ, and that difference
+  // is what proves the two sections are read separately rather than merged.
+  const prod = bindingsForEnv(toml, "production");
+  const dbOf = (set) => (set.find((b) => b.binding === "DB") || {}).value;
+  expect(dbOf(dflt) && dbOf(prod) && dbOf(dflt) !== dbOf(prod),
+    `default DB (${dbOf(dflt)}) is read separately from production DB (${dbOf(prod)})`);
+  expect(isPlaceholderId(dbOf(dflt)) && !isPlaceholderId(dbOf(prod)),
+    "…and only the default one is a placeholder, which is the whole point");
+
+  const staging = bindingsForEnv(toml, "staging");
+  expect(dbOf(staging) !== dbOf(dflt) && dbOf(staging) !== dbOf(prod),
+    "staging's DB is a third distinct value — no section bleeds into another");
+}
+
+console.log("\nERROR_REPORTING is documented where a reviewer will see it\n");
+{
+  const { readFileSync } = await import("node:fs");
+  const toml = readFileSync(new URL("../wrangler.toml", import.meta.url), "utf8");
+  // A policy decision belongs in [vars], in the diff — not in the secret
+  // store where the people it informs cannot see it.
+  expect(/#\s*ERROR_REPORTING\s*=\s*"console"/.test(toml),
+    "wrangler.toml carries the commented-out var with its rationale");
+  // Window around the var, not forward-only: the rationale is written above
+  // the commented line, so a forward search misses it.
+  const at = toml.indexOf('# ERROR_REPORTING = "console"');
+  const window = toml.slice(Math.max(0, at - 1200), at + 200);
+  expect(/not durable/.test(window),
+    "…and states the cost of choosing console-only, right beside it");
+  // The rationale wraps across comment lines, so match it with the line
+  // breaks and leading `#` collapsed out rather than as one literal string.
+  const flat = window.replace(/\n\s*#\s*/g, " ");
+  expect(/policy\s+choice, not a credential/.test(flat),
+    "…and says why it is a var rather than a secret");
+}
+
 console.log("");
 if (failures === 0) {
   console.log("\x1b[32m  all ops-check tests passed\x1b[0m\n");
