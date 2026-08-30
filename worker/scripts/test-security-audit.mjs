@@ -24,6 +24,7 @@ import { analyzeVuln } from "../src/analyzers/vuln.js";
 import { buildAuditSummary, countBySeverity, gradeForScore, worstSeverity } from "../src/analyzers/audit.js";
 import { analyzeVulnHandler } from "../src/handlers/analyze.js";
 import { summarize } from "../src/handlers/runs.js";
+import { fakeAwsKeyId, fakePemBanner } from "./_fake-secrets.mjs";
 
 let failures = 0;
 const ok   = (msg) => console.log(`  \x1b[32m✓\x1b[0m ${msg}`);
@@ -267,8 +268,8 @@ console.log("\nvuln.js — new detectors\n");
 // ---------------------------------------------------------------------------
 
 const DETECTOR_CASES = [
-  ["private_key_material", "-----BEGIN RSA PRIVATE KEY-----", "key.pem", "critical"],
-  ["private_key_material", "-----BEGIN OPENSSH PRIVATE KEY-----", "id_ed25519", "critical"],
+  ["private_key_material", fakePemBanner("BEGIN", "RSA"), "key.pem", "critical"],
+  ["private_key_material", fakePemBanner("BEGIN", "OPENSSH"), "id_ed25519", "critical"],
   ["disabled_tls_verification", "const agent = new https.Agent({ rejectUnauthorized: false });", "app.js", "high"],
   ["disabled_tls_verification", "r = requests.get(url, verify=False)", "fetch.py", "high"],
   ["disabled_tls_verification", "tr := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}", "main.go", "high"],
@@ -305,8 +306,8 @@ for (const [content, path, type] of BENIGN) {
 
 {
   // The scanner must still redact secrets from snippets of new findings.
-  const out = scan("const h = crypto.createHash('md5').update('AKIAIOSFODNN7EXAMPLE').digest();");
-  expect(out.every((f) => !f.snippet.includes("AKIAIOSFODNN7EXAMPLE")),
+  const out = scan(`const h = crypto.createHash('md5').update('${fakeAwsKeyId()}').digest();`);
+  expect(out.every((f) => !f.snippet.includes(fakeAwsKeyId())),
          "secrets stay redacted in the new detectors' snippets");
   expect(out.some((f) => f.snippet.includes("***REDACTED***")), "the redaction marker is present");
 }
@@ -382,7 +383,7 @@ const req = (body) => new Request("https://algosize.com/api/analyze/vuln", {
 });
 
 {
-  const res = await analyzeVulnHandler(req({ code: "const k = 'AKIAIOSFODNN7EXAMPLE';" }), {}, null);
+  const res = await analyzeVulnHandler(req({ code: `const k = '${fakeAwsKeyId()}';` }), {}, null);
   const out = await res.json();
   expect(res.status === 200, "source scan returns 200");
   expect(out.summary && out.summary.grade === "F", "source scan carries an audit summary");
