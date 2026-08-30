@@ -62,6 +62,46 @@ org usage in `created_at`-day order, so the first orgs to spend each day draw
 the free pool and the rest price from Neuron 1. `FREE_NEURONS_PER_DAY` holds the
 allocation, flagged `verified: false` until confirmed.
 
+## The platform margin — `worker/src/ai/margin.js`
+
+AlgoSize bills the customer the raw Cloudflare cost **plus a platform margin**,
+25% by default (`margin_config.mc_default_v1`). The split is computed at
+**write time** in `buildUsageRecord`, so a later rate change can never reprice
+history, and every row records the `margin_config.id` it billed at
+(`ai_usage.margin_version`).
+
+Each `ai_usage` row now carries four margin columns beside the raw cost:
+
+- `total_cost` — RAW Cloudflare cost (cost of goods). Unchanged meaning.
+- `margin_rate` — the rate in effect when the row was written (0 for internal orgs).
+- `platform_margin_cost` — `total_cost × margin_rate` (the markup).
+- `algosize_price` — `total_cost + platform_margin_cost` — **what the customer is billed.**
+
+Discipline carried through the margin:
+
+- **Unmeasured stays unmeasured.** If `total_cost` is NULL (unpriced model),
+  margin and `algosize_price` are NULL too — never $0. A 25% markup on an
+  unknown cost is not a knowable price.
+- **Free-tier is a real zero.** `total_cost = 0` (measured) → margin 0,
+  `algosize_price` 0. Correctly free, and distinct from unmeasured.
+- **Internal orgs are exempt.** `organisations.is_internal = 1` forces rate 0;
+  they pay raw cost.
+- **A >100% rate is refused as a typo** (25 vs 0.25) — it falls back to the
+  default rather than billing a 2500% markup.
+
+Which number a surface shows:
+
+- **Customer-facing** views show `algosize_price` only.
+- **Admin** views show raw `total_cost`, `platform_margin_cost`, and
+  `algosize_price` side by side (cost of goods / markup / revenue), which is
+  exactly what the `aggregateBy` rollup returns (`totalCostUsd`,
+  `platformMarginUsd`, `algosizePriceUsd`).
+- **Budgets** gate on the customer-billed `algosizePriceUsd`, not raw cost.
+
+Changing the rate is a **versioned DB operation**, never a code edit: close the
+active `margin_config` row (`effective_to = now`) and insert a new one. Old
+`ai_usage` rows keep the rate they were billed at.
+
 ## Keeping pricing current — the refresh procedure
 
 Pricing lives in ONE file (`pricing.js`), so an update is one reviewed diff:
@@ -87,6 +127,11 @@ an **operator or Replit** task — this code cannot fetch the page itself.
 | --- | --- | --- |
 | Pricing / aggregation / recommendation | repo | none |
 | `ai_usage` table + capture | repo | none |
+| Platform margin layer (25%) | repo | none |
 | Wiring `recordAiUsage` into call sites | repo | none (follow-up) |
 | Pre-billing price reconciliation | Cloudflare docs | operator / Replit |
+| Billable-usage reconciliation | Cloudflare API | operator / Replit |
 | AI Gateway (K3, native analytics) | Cloudflare | operator / Replit |
+
+The three Cloudflare-access jobs have ready-to-run prompts in
+[REPLIT-PROMPTS.md](./REPLIT-PROMPTS.md).
