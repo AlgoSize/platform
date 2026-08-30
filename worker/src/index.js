@@ -110,6 +110,7 @@ import {
   adminSchemaCheckHandler,
   adminStripeCheckHandler,
   adminSandboxCheckHandler,
+  adminAiUsageHandler,
   requireAdmin,
 } from "./handlers/admin.js";
 import {
@@ -297,6 +298,7 @@ router.get( "/api/admin/schema-check", requireAdmin, adminSchemaCheckHandler);
 // dashboard, and both fail only once a real customer hits them.
 router.get( "/api/admin/stripe-check", requireAdmin, adminStripeCheckHandler);
 router.get( "/api/admin/sandbox-check", requireAdmin, adminSandboxCheckHandler);
+router.get( "/api/admin/ai-usage", requireAdmin, adminAiUsageHandler);
 
 // The control panel's own read surface. Everything below is behind the same
 // requireAdmin allowlist; there is no second, weaker gate anywhere on it.

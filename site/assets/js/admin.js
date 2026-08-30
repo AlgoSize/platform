@@ -84,6 +84,19 @@
     }
   }
 
+  function fmtUsd(amount) {
+    if (amount === null || amount === undefined) return null;
+    try {
+      return new Intl.NumberFormat(undefined, {
+        style: "currency", currency: "USD",
+        minimumFractionDigits: amount > 0 && amount < 0.01 ? 4 : 2,
+        maximumFractionDigits: amount > 0 && amount < 0.01 ? 6 : 2,
+      }).format(amount);
+    } catch (e) {
+      return "$" + Number(amount).toFixed(amount > 0 && amount < 0.01 ? 4 : 2);
+    }
+  }
+
   function fmtDate(sec) {
     if (!sec) return null;
     var d = new Date(sec * 1000);
@@ -589,6 +602,170 @@
     }).catch(function (err) {
       if (blocked) return;
       clear(mount); mount.appendChild(errorBox(err, renderBilling));
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // AI spend and margin
+  // -------------------------------------------------------------------------
+
+  var aiUsageChart = null;
+
+  function budgetPill(budget) {
+    if (!budget || budget.state === "unmeasured") return pill("unmeasured", "warn");
+    if (budget.state === "hard") return pill("over budget", "danger");
+    if (budget.state === "soft") return pill("near budget", "warn");
+    return pill(budget.limitUsd === null ? "no cap" : "within budget", "ok");
+  }
+
+  function renderAiUsageChart(points) {
+    var canvas = $("#adm-aiusage-chart");
+    if (aiUsageChart) {
+      aiUsageChart.destroy();
+      aiUsageChart = null;
+    }
+    if (!window.Chart || !points.length) {
+      canvas.hidden = true;
+      return;
+    }
+    canvas.hidden = false;
+    aiUsageChart = new window.Chart(canvas, {
+      type: "bar",
+      data: {
+        labels: points.map(function (p) { return p.date; }),
+        datasets: [
+          {
+            label: "Raw cost",
+            data: points.map(function (p) { return p.totalCostUsd; }),
+            backgroundColor: "rgba(68, 147, 248, .72)",
+            borderColor: "#4493f8",
+            borderWidth: 1,
+            stack: "spend",
+          },
+          {
+            label: "Platform margin",
+            data: points.map(function (p) { return p.platformMarginUsd; }),
+            backgroundColor: "rgba(139, 124, 246, .78)",
+            borderColor: "#8b7cf6",
+            borderWidth: 1,
+            stack: "spend",
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { labels: { color: "#8b95a4", boxWidth: 12, boxHeight: 12 } },
+          tooltip: {
+            callbacks: {
+              footer: function (items) {
+                var point = points[items[0].dataIndex];
+                return point.partial ? "Partial: some requests were unmeasured" : "";
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            stacked: true,
+            grid: { display: false },
+            ticks: { color: "#8b95a4", maxRotation: 0, autoSkip: true },
+          },
+          y: {
+            stacked: true,
+            beginAtZero: true,
+            grid: { color: "rgba(139,149,164,.12)" },
+            ticks: {
+              color: "#8b95a4",
+              callback: function (value) { return "$" + value; },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  function renderAiUsage() {
+    var summary = $("#adm-aiusage-summary");
+    var tableMount = $("#adm-aiusage-table");
+    var topMount = $("#adm-aiusage-top");
+    clear(summary); clear(tableMount); clear(topMount);
+    summary.appendChild(skeleton(3));
+    tableMount.appendChild(skeleton(7));
+    topMount.appendChild(skeleton(6));
+
+    var windowName = $("#adm-aiusage-window").value;
+    var groupBy = $("#adm-aiusage-group").value;
+    return api("/api/admin/ai-usage?window=" + encodeURIComponent(windowName) +
+      "&groupBy=" + encodeURIComponent(groupBy)).then(function (data) {
+      $("#adm-aiusage-stamp").textContent = "as of " + fmtDateTime(data.generatedAt);
+      $("#adm-aiusage-group-meta").textContent =
+        data.groups.length + " group" + (data.groups.length === 1 ? "" : "s");
+      $("#adm-aiusage-budget-note").textContent = data.budget.note;
+
+      clear(summary);
+      var s = data.summary;
+      kpi(summary, "Requests", fmtInt(s.requests), null,
+        s.partial ? "some requests are unmeasured" : "all recorded calls", s.partial ? "warn" : null);
+      kpi(summary, "Raw cost", fmtUsd(s.totalCostUsd),
+        "No request in this window has a measured raw cost.",
+        s.partial ? "lower bound · partial" : "cost of goods", s.partial ? "warn" : null);
+      kpi(summary, "Platform margin", fmtUsd(s.platformMarginUsd),
+        "No request in this window has a measured platform margin.",
+        s.partial ? "lower bound · partial" : "stored at request time", s.partial ? "warn" : null);
+      kpi(summary, "Revenue", fmtUsd(s.algosizePriceUsd),
+        "No request in this window has a measured customer price.",
+        s.partial ? "lower bound · partial" : "raw cost + margin", s.partial ? "warn" : "ok");
+      kpi(summary, "Neurons", fmtInt(s.neurons),
+        "No request in this window has measured Neuron usage.",
+        s.partial ? "partial reconciliation total" : "reconciliation total", s.partial ? "warn" : null);
+
+      clear(tableMount);
+      tableMount.appendChild(table([
+        { label: groupBy === "org" ? "Account" : groupBy === "model" ? "Model" : "Feature",
+          wrap: true, render: function (g) { return el("span", { class: "adm-mono", text: g.label }); } },
+        { label: "Requests", numeric: true, render: function (g) { return fmtInt(g.requests); } },
+        { label: "Neurons", numeric: true, render: function (g) { return fmtInt(g.neurons); },
+          unknownReason: function () { return "No request in this group has measured Neuron usage."; } },
+        { label: "Raw cost", numeric: true, render: function (g) { return fmtUsd(g.totalCostUsd); },
+          unknownReason: function () { return "Every request in this group has unmeasured cost."; } },
+        { label: "Margin", numeric: true, render: function (g) { return fmtUsd(g.platformMarginUsd); },
+          unknownReason: function () { return "Every request in this group has unmeasured margin."; } },
+        { label: "Revenue", numeric: true, render: function (g) { return fmtUsd(g.algosizePriceUsd); },
+          unknownReason: function () { return "Every request in this group has unmeasured customer price."; } },
+        { label: "Coverage", render: function (g) {
+            return g.partial ? pill("partial", "warn") : pill("measured", "ok");
+          } },
+        { label: "Budget", render: function (g) { return budgetPill(g.budget); } },
+      ], data.groups, {
+        emptyTitle: "No AI usage in this window",
+        emptyMessage: "Recorded calls will appear here without prompts or responses.",
+      }));
+
+      clear(topMount);
+      if (!data.topExpensive.length) {
+        topMount.appendChild(stateBox("empty", "No measured requests", "Unpriced requests never appear as $0."));
+      } else {
+        var list = el("div", { class: "adm-aiusage-top" });
+        data.topExpensive.forEach(function (r) {
+          list.appendChild(el("div", { class: "adm-aiusage-top-row" }, [
+            el("span", { class: "adm-aiusage-top-main", text: r.orgName + " · " + (r.feature || "unknown feature") }),
+            el("span", { class: "adm-aiusage-top-meta", text: r.model || "model not known" }),
+            el("span", { class: "adm-aiusage-top-cost", text: fmtUsd(r.totalCostUsd) }),
+          ]));
+        });
+        topMount.appendChild(list);
+      }
+
+      renderAiUsageChart(data.trend);
+      announce("AI spend and margin loaded for " + data.groups.length + " groups");
+    }).catch(function (err) {
+      if (blocked) return;
+      clear(summary);
+      summary.appendChild(errorBox(err, renderAiUsage));
+      clear(tableMount); clear(topMount);
     });
   }
 
@@ -1369,6 +1546,7 @@
     { kind: "section", label: "Accounts", to: "accounts" },
     { kind: "section", label: "Users", to: "users" },
     { kind: "section", label: "Billing", to: "billing" },
+    { kind: "section", label: "AI spend & margin", to: "aiusage" },
     { kind: "section", label: "Automation", to: "automation" },
     { kind: "section", label: "Audit log", to: "audit" },
     { kind: "section", label: "Settings", to: "settings" },
@@ -1445,6 +1623,7 @@
     accounts:   { id: "adm-page-accounts",   load: renderAccounts },
     users:      { id: "adm-page-users",      load: renderUsers },
     billing:    { id: "adm-page-billing",    load: renderBilling },
+    aiusage:    { id: "adm-page-aiusage",    load: renderAiUsage },
     automation: { id: "adm-page-automation", load: renderAutomation },
     audit:      { id: "adm-page-audit",      load: function () { return renderAudit(false); } },
     settings:   { id: "adm-page-settings",   load: renderSettings },
@@ -1528,6 +1707,9 @@
     $("#adm-users-q").addEventListener("input", onFilter(renderUsers));
     $("#adm-users-plan").addEventListener("change", renderUsers);
     $("#adm-users-refresh").addEventListener("click", renderUsers);
+    $("#adm-aiusage-window").addEventListener("change", renderAiUsage);
+    $("#adm-aiusage-group").addEventListener("change", renderAiUsage);
+    $("#adm-aiusage-refresh").addEventListener("click", renderAiUsage);
     $("#adm-audit-actor").addEventListener("input", onFilter(function () { renderAudit(false); }));
     $("#adm-audit-action").addEventListener("change", function () { renderAudit(false); });
     $("#adm-audit-refresh").addEventListener("click", function () { renderAudit(false); });

@@ -13,6 +13,7 @@
 import { requireAuth } from "../auth.js";
 import { stripeFetch, StripeError } from "../stripe.js";
 import { tierForOrg } from "../reports/branding.js";
+import { aggregateBy, costTrend, topExpensive, budgetStatus } from "../ai/aggregate.js";
 
 function jsonResponse(body, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
@@ -163,6 +164,151 @@ export async function adminUsersCsvHandler(request, env) {
     headers: {
       "content-type":        "text/csv; charset=utf-8",
       "content-disposition": `attachment; filename="algosize-users-${today}.csv"`,
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/admin/ai-usage
+// ---------------------------------------------------------------------------
+//
+// Platform-wide reporting still obeys the ai_usage tenant rule: every usage
+// query has an explicit org_id predicate. We first enumerate organisations the
+// admin is allowed to operate, then read each tenant separately. This is more
+// queries than an unscoped SELECT, deliberately — a future change to admin
+// identity must not turn this endpoint into an accidental cross-tenant read.
+const AI_USAGE_WINDOWS = Object.freeze({
+  "7d": 7 * 86_400_000,
+  "30d": 30 * 86_400_000,
+});
+const AI_USAGE_GROUPS = Object.freeze({
+  org: "org_id",
+  model: "model",
+  feature: "feature_name",
+});
+
+function aiUsageRange(windowName, now) {
+  if (windowName === "period") {
+    const d = new Date(now);
+    return {
+      startAt: Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1),
+      endAt: now,
+    };
+  }
+  return { startAt: now - AI_USAGE_WINDOWS[windowName], endAt: now };
+}
+
+function usageTotals(rows) {
+  if (!rows.length) {
+    return {
+      requests: 0, neurons: null, totalCostUsd: null,
+      platformMarginUsd: null, algosizePriceUsd: null, partial: false,
+    };
+  }
+  const [total] = aggregateBy(rows.map((row) => ({ ...row, report_scope: "all" })), "report_scope");
+  return {
+    requests: total.requests,
+    neurons: total.neurons,
+    totalCostUsd: total.totalCostUsd,
+    platformMarginUsd: total.platformMarginUsd,
+    algosizePriceUsd: total.algosizePriceUsd,
+    partial: total.partial,
+  };
+}
+
+function configuredAiBudget(env) {
+  const n = Number(env && env.AI_BUDGET_USD);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+export async function adminAiUsageHandler(request, env) {
+  if (!env || !env.DB) {
+    return jsonResponse({ error: "not_configured", message: "Database is not configured." }, 500);
+  }
+
+  const url = new URL(request.url);
+  const windowName = url.searchParams.get("window") || "30d";
+  const groupBy = url.searchParams.get("groupBy") || "org";
+  if (!Object.prototype.hasOwnProperty.call(AI_USAGE_WINDOWS, windowName) && windowName !== "period") {
+    return jsonResponse({
+      error: "invalid_window",
+      message: "window must be one of: 7d, 30d, period.",
+    }, 400);
+  }
+  if (!Object.prototype.hasOwnProperty.call(AI_USAGE_GROUPS, groupBy)) {
+    return jsonResponse({
+      error: "invalid_group",
+      message: "groupBy must be one of: org, model, feature.",
+    }, 400);
+  }
+
+  const now = Date.now();
+  const range = aiUsageRange(windowName, now);
+  const orgResult = await env.DB.prepare(
+    "SELECT org_id, name FROM organisations ORDER BY org_id"
+  ).all();
+  const orgs = (orgResult && orgResult.results) || [];
+
+  const perOrg = await Promise.all(orgs.map(async (org) => {
+    const result = await env.DB.prepare(
+      `SELECT id, org_id, user_id, repository_id, feature_name, provider, model,
+              request_type, neurons_consumed, total_cost, platform_margin_cost,
+              algosize_price, status, error_code, scan_id, fix_task_id, created_at
+         FROM ai_usage
+        WHERE org_id = ? AND created_at >= ? AND created_at <= ?
+        ORDER BY created_at DESC`
+    ).bind(org.org_id, range.startAt, range.endAt).all();
+    return (result && result.results) || [];
+  }));
+  const rows = perOrg.flat();
+  const dimension = AI_USAGE_GROUPS[groupBy];
+  const orgNames = new Map(orgs.map((org) => [org.org_id, org.name || org.org_id]));
+  const limitUsd = configuredAiBudget(env);
+
+  const groups = aggregateBy(rows, dimension).map((group) => {
+    const key = group[dimension];
+    return {
+      key,
+      label: groupBy === "org" ? (orgNames.get(key) || key) : key,
+      requests: group.requests,
+      neurons: group.neurons,
+      totalCostUsd: group.totalCostUsd,
+      platformMarginUsd: group.platformMarginUsd,
+      algosizePriceUsd: group.algosizePriceUsd,
+      partial: group.partial,
+      errors: group.errors,
+      budget: budgetStatus(group.algosizePriceUsd, limitUsd),
+    };
+  });
+
+  const expensive = topExpensive(rows, 10).map((row) => ({
+    id: row.id,
+    orgId: row.org_id,
+    orgName: orgNames.get(row.org_id) || row.org_id,
+    feature: row.feature_name,
+    model: row.model,
+    provider: row.provider,
+    totalCostUsd: row.total_cost,
+    platformMarginUsd: row.platform_margin_cost,
+    algosizePriceUsd: row.algosize_price,
+    status: row.status,
+    createdAt: row.created_at,
+  }));
+
+  return jsonResponse({
+    generatedAt: Math.floor(now / 1000),
+    window: windowName,
+    groupBy,
+    range,
+    summary: usageTotals(rows),
+    groups,
+    trend: costTrend(rows, "day"),
+    topExpensive: expensive,
+    budget: {
+      limitUsd,
+      note: limitUsd === null
+        ? "No AI_BUDGET_USD limit is configured; spend is tracked but not capped."
+        : "Budget state is based on customer-billed revenue (raw cost plus margin).",
     },
   });
 }

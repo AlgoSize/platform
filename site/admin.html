@@ -75,6 +75,9 @@ sitemap: false
     <button type="button" class="adm-nav-btn" data-nav="billing">
       Billing <span class="adm-nav-badge" data-badge="billing"></span>
     </button>
+    <button type="button" class="adm-nav-btn" data-nav="aiusage">
+      AI spend &amp; margin
+    </button>
     <button type="button" class="adm-nav-btn" data-nav="automation">
       Automation <span class="adm-nav-badge" data-badge="automation"></span>
     </button>
@@ -172,6 +175,51 @@ sitemap: false
       <div id="adm-billing-body"></div>
     </section>
 
+    <section class="adm-page" id="adm-page-aiusage" hidden>
+      <div class="adm-pagehead">
+        <h1>AI spend &amp; margin</h1>
+        <span class="adm-stamp" id="adm-aiusage-stamp"></span>
+      </div>
+      <div class="adm-filters">
+        <select class="adm-select" id="adm-aiusage-window" aria-label="AI usage window">
+          <option value="7d">Last 7 days</option>
+          <option value="30d" selected>Last 30 days</option>
+          <option value="period">Current period</option>
+        </select>
+        <select class="adm-select" id="adm-aiusage-group" aria-label="Group AI usage by">
+          <option value="org">Group by account</option>
+          <option value="model">Group by model</option>
+          <option value="feature">Group by feature</option>
+        </select>
+        <button type="button" class="adm-btn" id="adm-aiusage-refresh">Refresh</button>
+      </div>
+      <div class="adm-kpis" id="adm-aiusage-summary"></div>
+      <div class="adm-aiusage-grid">
+        <div class="adm-region">
+          <div class="adm-region-head">
+            <span class="adm-region-title">Cost and margin trend</span>
+            <span class="adm-region-meta">USD · stacked</span>
+          </div>
+          <div class="adm-chart-wrap"><canvas id="adm-aiusage-chart" aria-label="Daily AI cost and margin trend" role="img"></canvas></div>
+        </div>
+        <div class="adm-region">
+          <div class="adm-region-head">
+            <span class="adm-region-title">Top expensive requests</span>
+            <span class="adm-region-meta">raw cost</span>
+          </div>
+          <div id="adm-aiusage-top"></div>
+        </div>
+      </div>
+      <div class="adm-region">
+        <div class="adm-region-head">
+          <span class="adm-region-title">Usage rollup</span>
+          <span class="adm-region-meta" id="adm-aiusage-group-meta"></span>
+        </div>
+        <div id="adm-aiusage-table"></div>
+        <div class="adm-note" id="adm-aiusage-budget-note"></div>
+      </div>
+    </section>
+
     <section class="adm-page" id="adm-page-automation" hidden>
       <div class="adm-pagehead">
         <h1>Automation</h1>
@@ -215,6 +263,12 @@ sitemap: false
 <div class="adm-toasts" id="adm-toasts" role="status" aria-live="polite"></div>
 <div class="adm-sr" id="adm-live" role="status" aria-live="polite"></div>
 
+<script
+  src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"
+  integrity="sha384-NrKB+u6Ts6AtkIhwPixiKTzgSKNblyhlk0Sohlgar9UHUBzai/sgnNNWWd291xqt"
+  crossorigin="anonymous"
+  referrerpolicy="no-referrer"
+  defer></script>
 <script src="{{ '/assets/js/admin.js' | relative_url }}" defer></script>
 </body>
 </html>
