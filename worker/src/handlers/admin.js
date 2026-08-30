@@ -309,6 +309,11 @@ const MIGRATIONS = Object.freeze([
     // still runs, but an operator's routing overrides are ignored, so the
     // schema check exists to make a missing table visible rather than silent.
     checks: [{ table: "model_routing_config", column: "model_id" }] },
+  { id: "0027", name: "scan_patches",
+    // Agent-applied patch provenance (MCP handoff). Absent, algosize_record_patch
+    // has nowhere to record that an external agent fixed a finding, so the
+    // patch history reads empty when it is merely unstored.
+    checks: [{ table: "scan_patches", column: "patch_hash" }] },
 ]);
 
 /** Plain SQLite identifier — the only shape we will interpolate into a PRAGMA. */

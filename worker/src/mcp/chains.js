@@ -40,6 +40,7 @@ import {
 } from "../handlers/runs.js";
 import { scorecardHandler } from "../handlers/scorecard.js";
 import { proposeFixHandler, validateFixHandler, explainRuleHandler } from "../handlers/fix.js";
+import { handoffFindingsHandler, applyPatchHandler } from "../handlers/handoff.js";
 import {
   listMonitorsHandler, createMonitorHandler, deleteMonitorHandler, pauseMonitorHandler,
   setMonitorAnalyzersHandler, setMonitorScheduleHandler, runMonitorNowHandler,
@@ -111,6 +112,12 @@ export const CHAINS = Object.freeze({
   fixPropose:    { method: "POST", path: "/api/fix/propose",       chain: [proposeFixHandler],         metered: false },
   fixValidate:   { method: "POST", path: "/api/fix/validate",      chain: [validateFixHandler],        metered: false },
   fixRule:       { method: "GET",  path: "/api/fix/rule",          chain: [explainRuleHandler],        metered: false },
+  // MCP agent handoff. handoff returns findings + a paste-ready prompt (a read
+  // of a run the customer already paid for); applyPatch records provenance of a
+  // patch the agent applied in its own checkout. Neither meters Workers AI —
+  // the agent did the token-costing work outside the platform.
+  fixHandoff:    { method: "GET",  path: "/api/fix/handoff",       chain: [handoffFindingsHandler],    metered: false },
+  fixApplyPatch: { method: "POST", path: "/api/fix/patch",         chain: [applyPatchHandler],         metered: false },
   archSnapshots: { method: "GET", path: "/api/arch/snapshots",    chain: [listArchSnapshotsHandler],  metered: false },
   archSnapshot:  { method: "GET", path: "/api/arch/snapshots/:id", chain: [getArchSnapshotHandler],   metered: false },
   archDiff:      { method: "GET", path: "/api/arch/diff",         chain: [archDiffHandler],           metered: false },

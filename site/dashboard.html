@@ -1113,6 +1113,23 @@ permalink: /dashboard/
       <div id="mcp-body"><div class="panel-empty">Loading…</div></div>
     </div>
 
+    <div id="view-pipeline" class="dash-view" hidden>
+      <div class="dash-head">
+        <span class="eyebrow">Fix pipeline</span>
+        <h2 class="dash-view-title">Choose a model for each stage — or hand the fix to your own agent.</h2>
+        <p class="lede">
+          The fix pipeline runs in stages: triage filters false positives on a
+          cheap model, validation reasons about exploitability, a code
+          specialist writes the fix, and a <em>different</em> model verifies it.
+          Pick the model for each stage and watch the per-finding cost update, or
+          toggle a stage to <strong>Route to agent</strong> and let your own
+          Claude Code or Kimi session do the expensive work at zero Workers AI
+          token cost.
+        </p>
+      </div>
+      <div id="pipeline-body"><div class="panel-empty">Loading…</div></div>
+    </div>
+
     <div id="view-account" class="dash-view" hidden>
       <div class="dash-head">
         <span class="eyebrow">Account</span>
@@ -1323,4 +1340,5 @@ permalink: /dashboard/
 <script src="{{ '/assets/js/dash-workspace.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-account.js' | relative_url }}" defer></script>
     <script src="{{ '/assets/js/dash-mcp.js' | relative_url }}" defer></script>
+    <script src="{{ '/assets/js/dash-pipeline.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-router.js' | relative_url }}" defer></script>

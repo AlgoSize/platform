@@ -62,6 +62,10 @@
       glyph: "⇄", route: "#/mcp", analyzer: null,
       answers: "Run every tool on this page from Claude Code, Claude Desktop, Claude.ai or Cursor.",
       cta: "Connect an assistant" },
+    { id: "pipeline",  name: "Fix pipeline",         short: "the pipeline",
+      glyph: "⚙", route: "#/pipeline", analyzer: null,
+      answers: "Pick a model for each fix stage, see the per-finding cost, or route the fix to your own agent.",
+      cta: "Tune the pipeline" },
   ];
 
   // ------------------------------------------------------------------ load

@@ -45,6 +45,7 @@ export const PIPELINE_OUTCOMES = Object.freeze([
   "fix_ready",        // passed static validation AND cross-model verification
   "needs_human",      // reached a stage that requires a person (escalate/reject)
   "fix_queued",       // validated but fix deferred by the budget funnel
+  "waiting_for_agent",// validated, then handed to an external MCP agent (route-to-MCP)
   "suppressed_fp",    // triage judged it a false positive (confidently)
   "not_exploitable",  // deep validation (or ensemble) found it not exploitable
   "budget_blocked",   // over budget: detected only, no AI enrichment
@@ -75,7 +76,15 @@ export async function runFullPipeline({ findings, files, env, meter = {}, budget
     frameworks = [], language = null, provider = null,
     retrieval = true, ensembleSize = 3, voteThreshold = 0.5,
     maxVerifyRetries = 2, budgetSoftPct = 0.8,
+    // Stage ids whose work is handed to an external MCP agent instead of run on
+    // Workers AI. Routing "fix" (the expensive stage) parks validated findings
+    // as waiting_for_agent — Algosize is billed for Stages 1-3 only, and the
+    // customer's own Claude Code / Kimi session does Fix + Verify at zero
+    // Workers AI token cost. This is the lever that cuts the bulk of pipeline
+    // spend, which sits in Stages 4-5.
+    routeToMcp = [],
   } = options;
+  const parkFix = routeToMcp.includes("fix");
 
   const gate = budgetStatus(budget.spendUsd ?? null, budget.limitUsd ?? 0, { softPct: budgetSoftPct });
   // HARD → detection only. SOFT → through validation, queue the fix.
@@ -124,6 +133,17 @@ export async function runFullPipeline({ findings, files, env, meter = {}, budget
       continue;
     }
     // decision === "proceed" → this finding is worth a fix.
+
+    // Route-to-MCP: validated, then handed to the customer's own agent instead
+    // of spending coding-model budget here. The finding is real and worth
+    // fixing — an agent will do it — so this is a distinct outcome from queued
+    // (budget) or needs_human (unresolved), and costs zero Workers AI tokens.
+    if (parkFix) {
+      results.push({ ...base, outcome: "waiting_for_agent", stage: "validation",
+        note: "validated; fix routed to an external MCP agent — use algosize_get_scan_findings to pick it up",
+        triage: slimTriage(triage), validation: slimValidation(validation) });
+      continue;
+    }
 
     // Budget funnel: validated, but defer the expensive coding/verify stages.
     if (queueFixes) {
