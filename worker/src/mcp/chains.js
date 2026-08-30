@@ -30,6 +30,7 @@
 import { enforceQuota } from "../quota.js";
 import {
   analyzeCostHandler, analyzeVulnHandler, analyzeAlgoHandler, analyzeArchitectureHandler,
+  analyzeProfileHandler,
 } from "../handlers/analyze.js";
 import { estimateHandler, estimateProvidersHandler } from "../handlers/estimate.js";
 import { withEstimateHistory } from "../handlers/estimate_history.js";
@@ -101,6 +102,9 @@ export const CHAINS = Object.freeze({
   shareRun:   { method: "POST", path: "/api/runs/:id/share",   chain: [createRunShareHandler], metered: false },
 
   scorecard:     { method: "GET", path: "/api/scorecard",         chain: [scorecardHandler],          metered: false },
+  // Unmetered for the same reason as the HTTP route: one tree listing, no
+  // file reads, and it answers "would a scan cover this?" before one runs.
+  profile:       { method: "POST", path: "/api/analyze/profile",  chain: [analyzeProfileHandler],     metered: false },
   archSnapshots: { method: "GET", path: "/api/arch/snapshots",    chain: [listArchSnapshotsHandler],  metered: false },
   archSnapshot:  { method: "GET", path: "/api/arch/snapshots/:id", chain: [getArchSnapshotHandler],   metered: false },
   archDiff:      { method: "GET", path: "/api/arch/diff",         chain: [archDiffHandler],           metered: false },

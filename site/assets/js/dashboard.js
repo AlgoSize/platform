@@ -471,6 +471,51 @@
 
   var SEV_ORDER = ["critical", "high", "medium", "low", "info"];
 
+  // The repository profile: what the scanner found, how deeply each language
+  // can be analysed, and — the part that stops a clean report being
+  // over-read — what it will not cover.
+  function renderCoverageProfile(wrap, src) {
+    var profile = src.profile;
+    if (!profile || !profile.languages || !profile.languages.length) return;
+
+    var box = el("div", { class: "scan-profile" });
+    if (src.profileSummary) {
+      box.appendChild(el("p", { class: "scan-profile-summary" }, src.profileSummary));
+    }
+
+    var chips = el("div", { class: "scan-profile-langs" });
+    profile.languages.slice(0, 12).forEach(function (l) {
+      var chip = el("span", { class: "scan-profile-lang scan-profile-tier-" + l.supportTier });
+      chip.appendChild(el("span", { class: "scan-profile-lang-name mono" }, l.name));
+      chip.appendChild(el("span", { class: "scan-profile-lang-meta mono" },
+        l.fileCount + (l.fileCount === 1 ? " file" : " files")));
+      // The tier is the claim a reader is most likely to over-read, so it is
+      // spelled out on hover rather than left as a bare number.
+      chip.setAttribute("title", l.name + " — " + l.supportTierLabel +
+        " · analyzers: " + l.analyzers.join(", "));
+      chips.appendChild(chip);
+    });
+    box.appendChild(chips);
+
+    var fws = profile.frameworks || [];
+    var confident = fws.filter(function (f) { return f.confidence !== "low"; });
+    if (confident.length) {
+      var fwLine = el("p", { class: "scan-profile-fw mono" },
+        "Frameworks: " + confident.map(function (f) { return f.name; }).join(", "));
+      fwLine.setAttribute("title", confident.map(function (f) {
+        return f.name + " (" + f.confidence + "): " + (f.evidence || []).join("; ");
+      }).join("\n"));
+      box.appendChild(fwLine);
+    }
+
+    var gaps = (profile.scanPlan && profile.scanPlan.gaps) || [];
+    gaps.forEach(function (g) {
+      box.appendChild(el("p", { class: "scan-profile-gap" }, g.detail));
+    });
+
+    wrap.appendChild(box);
+  }
+
   function renderSourceFindings(wrap, result) {
     var src = result.source;
     // The key is absent on a stored run from before source scanning existed.
@@ -479,6 +524,12 @@
     if (!src) return;
 
     wrap.appendChild(el("h4", { class: "result-section-title" }, "Source code"));
+
+    // Coverage before findings, always — including on the paths where the scan
+    // produced nothing. A reader deciding whether a clean result means
+    // anything needs to know which languages were read and how deeply, and
+    // that question is most urgent exactly when there is nothing to show.
+    renderCoverageProfile(wrap, src);
 
     if (src.status !== "ok") {
       wrap.appendChild(el("p", { class: "result-reason" },
