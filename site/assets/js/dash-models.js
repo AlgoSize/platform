@@ -29,7 +29,29 @@
 
   var core = window.DashCore;
   if (!core) return;
-  var el = core.el;
+  var elBase = core.el;
+
+  /**
+   * el(tag, attrs, textOrChildren) — a superset of DashCore.el.
+   *
+   * DashCore.el's third argument is TEXT: it does `n.textContent = text` and
+   * nothing else. Handing it an array of nodes stringifies them, which puts
+   * "[object HTMLSpanElement]" on the screen — the failure this wrapper exists
+   * to make impossible. Every composite node on this page has element
+   * children, so the wrapper appends them and leaves plain strings to the
+   * shared helper.
+   */
+  function el(tag, attrs, kids) {
+    if (kids == null || typeof kids === "string" || typeof kids === "number") {
+      return elBase(tag, attrs, kids);
+    }
+    var n = elBase(tag, attrs);
+    (Array.isArray(kids) ? kids : [kids]).forEach(function (c) {
+      if (c === null || c === undefined) return;
+      n.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+    });
+    return n;
+  }
 
   var PLOTS = [
     { id: "cost_vs_capability", label: "Cost vs capability" },
