@@ -90,7 +90,17 @@ function makeDom() {
 }
 
 function makeCore(document, routes, calls) {
-  const el = (tag, attrs, children) => {
+  // DashCore.el EXACTLY as site/assets/js/dashboard.js defines it.
+  //
+  // THIS IS THE POINT OF THE FILE. The first version of this stub accepted an
+  // array of child nodes, because that is what I assumed el() did. The real
+  // one does `n.textContent = text` and nothing else, so every composite node
+  // on the page rendered "[object HTMLSpanElement],[object HTMLSpanElement]"
+  // in production while this test passed. A stub written to match an
+  // assumption tests the assumption, not the code — so this one is a
+  // transcription of the real function, and the page is responsible for
+  // building its own trees.
+  const el = (tag, attrs, text) => {
     const n = document.createElement(tag);
     if (attrs) {
       Object.keys(attrs).forEach((k) => {
@@ -100,11 +110,7 @@ function makeCore(document, routes, calls) {
         else n.setAttribute(k, v === true ? "" : v);
       });
     }
-    const kids = Array.isArray(children) ? children : (children === undefined ? [] : [children]);
-    kids.forEach((c) => {
-      if (c === null || c === undefined) return;
-      n.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
-    });
+    if (text !== null && text !== undefined) n.textContent = text;
     return n;
   };
   return {
@@ -215,6 +221,28 @@ function routesFor(over) {
 }
 
 // ---------------------------------------------------------------------------
+
+group("nothing on the page renders as a stringified DOM node");
+
+{
+  // The regression that shipped: passing an array of nodes to DashCore.el put
+  // "[object HTMLSpanElement]" on screen wherever a composite node was built.
+  // One assertion over the whole tree catches every site at once, including
+  // ones added later.
+  for (const view of ["scatter", "matrix", "recommend"]) {
+    const { registry } = boot(routesFor());
+    await flush();
+    const body = registry.get("models-body");
+    if (view !== "scatter") {
+      const label = view === "matrix" ? "Fit matrix" : "Recommend";
+      body.findAll((n) => /mdl-seg/.test(n.className)).find((b) => textOf(b) === label).fire("click");
+      await flush();
+    }
+    const text = textOf(registry.get("models-body"));
+    expect(!/\[object /.test(text),
+      `${view}: no node is stringified into the page — every composite is built with appendChild`);
+  }
+}
 
 group("two models that score alike both stay visible");
 
