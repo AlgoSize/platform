@@ -3,6 +3,12 @@ Shared marketing-site nav. Used by index.html, blog.html, and the
 post layout. The dashboard ships its own nav (dash-nav) because it
 has signed-in-only widgets (quota pill, billing button) that don't
 belong on the public pages.
+
+Two link sets, one source of truth for the destinations: .nav-links is
+the inline row from 768px up, and .nav-menu is a <details> disclosure
+below it. The disclosure is markup rather than script so the sections
+stay reachable on a phone with JavaScript off — before this, narrow
+screens simply lost the links.
 {%- endcomment -%}
 <header class="nav">
   <div class="nav-inner">
@@ -12,12 +18,23 @@ belong on the public pages.
     </a>
     <div class="nav-right">
       <nav class="nav-links" aria-label="Primary">
-        <a href="/#features">Features</a>
-        <a href="/#mcp">MCP</a>
+        <a href="/#features">Analyzers</a>
+        <a href="/#pipeline">How it works</a>
         <a href="/#pricing">Pricing</a>
         <a href="/blog/">Blog</a>
       </nav>
       <a href="/#signup-free-form" class="btn btn-primary btn-sm nav-signin">Sign in →</a>
+      <details class="nav-menu">
+        <summary class="nav-menu-button" aria-label="Menu">
+          <span class="nav-menu-bars" aria-hidden="true"></span>
+        </summary>
+        <nav class="nav-menu-panel" aria-label="Primary">
+          <a href="/#features">Analyzers</a>
+          <a href="/#pipeline">How it works</a>
+          <a href="/#pricing">Pricing</a>
+          <a href="/blog/">Blog</a>
+        </nav>
+      </details>
     </div>
   </div>
 </header>
