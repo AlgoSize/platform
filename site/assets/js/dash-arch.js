@@ -294,8 +294,12 @@
    * target + lens + title (rule), because ids are per-run and would make
    * every finding look new on every sweep.
    */
+  // The separator is written as an ESCAPE, not as a raw NUL. Both produce the
+  // same string, but a raw control byte makes the whole file `data` rather
+  // than text: grep and ripgrep then skip it as binary, so a repo-wide search
+  // silently reports this file as having no matches. Same value, greppable.
   function findingKey(f) {
-    return [f.target || "", f.lens || "", f.rule || f.title || ""].join(" ");
+    return [f.target || "", f.lens || "", f.rule || f.title || ""].join("\u0000");
   }
 
   function isNewFinding(f) {
@@ -2078,7 +2082,7 @@
   // which findings are the new ones. That endpoint never advances a baseline,
   // so looking does not consume the delta tomorrow's email will report.
 
-  var watch = { loaded: false, monitors: [] };
+  var watch = { loaded: false, monitors: [], deepLink: null };
 
   function archShortRepo(url) {
     return String(url || "").replace(/^https?:\/\/(www\.)?github\.com\//, "");
@@ -2113,6 +2117,11 @@
     var body = document.getElementById("arch-watch-body");
     if (!body) return;
     while (body.firstChild) body.removeChild(body.firstChild);
+
+    // From state, not inserted after the fact — the same rule the stale
+    // component note follows, and for the same reason: a later load resolves
+    // and re-renders, taking any node this function did not put there.
+    if (watch.deepLink) body.appendChild(core.deepLinkNote(watch.deepLink));
 
     var watching = watch.monitors.filter(function (m) {
       return (m.analyzers || []).indexOf("arch") !== -1;
@@ -2155,7 +2164,8 @@
                      : "not swept yet")));
 
       var actions = el("div", { class: "night-actions" });
-      var open = el("button", { type: "button", class: "btn btn-primary btn-sm" }, "Draw the map \u2192");
+      var open = el("button", { type: "button", class: "btn btn-primary btn-sm",
+        "data-monitor": m.monitorId }, "Draw the map \u2192");
       open.addEventListener("click", function () { openMonitored(m, open); });
       actions.appendChild(open);
       row.appendChild(actions);
@@ -2266,5 +2276,25 @@
       });
   }
 
-  window.DashArch = { load: loadWatch, openRun: openRun, components: componentIndex };
+  /**
+   * Open one watched repository's map, straight from a scorecard cell.
+   *
+   * The watch list is filtered to monitors running the X-ray, so a repo can
+   * be watched and still have no row here — that is "filtered", and it is a
+   * different sentence from "that monitor is gone".
+   */
+  function openMonitor(monitorId) {
+    return loadWatch().then(function () {
+      watch.deepLink = core.findDeepLink(watch.monitors, monitorId, "arch");
+      renderWatch();
+      if (watch.deepLink) return;
+      if (!core.clickMonitorRow("arch-watch-body", monitorId)) {
+        watch.deepLink = { reason: "unopenable", monitorId: monitorId };
+        renderWatch();
+      }
+    });
+  }
+
+  window.DashArch = { load: loadWatch, openRun: openRun, openMonitor: openMonitor,
+                      components: componentIndex };
 })();

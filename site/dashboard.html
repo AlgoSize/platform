@@ -791,7 +791,7 @@ permalink: /dashboard/
                 <span class="wizard-n" aria-hidden="true">2</span>
                 <h3>Add it as a repository secret</h3>
               </div>
-              <p class="wizard-copy">Name it <code>ALGOSIZE_API_KEY</code> — the workflow reads exactly that name, and skips itself with a notice (never a red build) until the secret exists.</p>
+              <p class="wizard-copy">Name it <code>ALGOSIZE_API_KEY</code> — all five gates read exactly that name, so this is the only secret to add. Each one skips itself with a notice (never a red build) until it exists.</p>
               <div class="snippet-row">
                 <pre class="result-snippet" id="ci-gh-cli">gh secret set ALGOSIZE_API_KEY --body '&lt;paste the key&gt;'</pre>
                 <button type="button" class="btn btn-ghost btn-sm" data-copy-target="ci-gh-cli">Copy</button>

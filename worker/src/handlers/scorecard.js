@@ -87,8 +87,14 @@ export async function scorecardHandler(request, env) {
     // idiom and glyph travel WITH the label. The frontend used to hold its
     // own parallel column list to get them, which is how a renamed column
     // ends up captioned as the one it replaced.
+    // `analyzer` travels too, so a cell can link into the tool that produced
+    // it. Two columns share one analyzer (Dependencies and Code are both the
+    // vuln sweep), which is exactly why the frontend must not infer the tool
+    // from the column id: it would need its own copy of that mapping, and the
+    // day a column moves analyzers the link would point at the old one.
     columns: SCORECARD_COLUMNS.map((c) => ({
       id: c.id, label: c.label, idiom: c.idiom, glyph: c.glyph,
+      analyzer: c.analyzer,
     })),
     rows: monitors.map(scorecardRow),
     // Said out loud so the UI never has to guess why a repo is missing: the

@@ -43,6 +43,23 @@
     // A trailing segment names ONE component inside that run's map, so a
     // reviewer can be sent to the node under discussion rather than to a
     // 17-service graph with a note saying which box to look for.
+    // #/<tool>/watch/<monitorId> — that tool, already showing one watched
+    // repo. Every scorecard cell is one of these: the grid says WHAT a repo
+    // scored and the tool page says why, and a reader who has to land on the
+    // bench and re-pick the repo from a list has been handed the navigation
+    // rather than the answer.
+    //
+    // The literal "watch" segment keeps this from colliding with #/arch/<id>,
+    // which addresses a RUN. One shape for all five tools rather than each
+    // page inventing its own, so the workspace builds the href from the
+    // analyzer the API sends and never from a per-tool special case.
+    // The four analyzers the Worker will re-read for a monitored repo
+    // (INSPECTABLE in monitors/inspect.js). Cloud spend is not one of them,
+    // so #/cost/watch/<id> is not a route rather than a route to nothing.
+    var watch = h.match(/^#\/(scanner|arch|optimizer|estimate)\/watch\/(.+)$/);
+    if (watch) {
+      return { view: watch[1], monitorId: decodeURIComponent(watch[2]) };
+    }
     if (h.indexOf("#/arch/") === 0) {
       var archRest = h.slice("#/arch/".length);
       var slash = archRest.indexOf("/");
@@ -108,16 +125,26 @@
     if (route.view === "team"      && window.DashTeam)      window.DashTeam.load();
     if (route.view === "report"    && window.DashReport)    window.DashReport.open(route.runId);
     if (route.view === "account"   && window.DashAccount)   window.DashAccount.open(route.section);
-    if (route.view === "optimizer" && window.DashOptimizer) window.DashOptimizer.load();
-    if (route.view === "estimate"  && window.DashEstimate)  window.DashEstimate.load();
+    if (route.view === "optimizer" && window.DashOptimizer) {
+      if (route.monitorId) window.DashOptimizer.openMonitor(route.monitorId);
+      else window.DashOptimizer.load();
+    }
+    if (route.view === "estimate"  && window.DashEstimate) {
+      if (route.monitorId) window.DashEstimate.openMonitor(route.monitorId);
+      else window.DashEstimate.load();
+    }
     if (route.view === "workspace" && window.DashWorkspace) window.DashWorkspace.load();
     // The two tool pages whose nightly half arrived later (D-9). Both are
     // idempotent, so re-entering the view costs one cached call.
     if (route.view === "arch"      && window.DashArch) {
-      if (route.runId) window.DashArch.openRun(route.runId, route.componentId);
+      if (route.monitorId) window.DashArch.openMonitor(route.monitorId);
+      else if (route.runId) window.DashArch.openRun(route.runId, route.componentId);
       else window.DashArch.load();
     }
-    if (route.view === "scanner"   && window.DashScanner)   window.DashScanner.load();
+    if (route.view === "scanner"   && window.DashScanner) {
+      if (route.monitorId) window.DashScanner.openMonitor(route.monitorId);
+      else window.DashScanner.load();
+    }
     if (route.view === "mcp"       && window.DashMcp)       window.DashMcp.load();
     if (route.view === "pipeline"  && window.DashPipeline)  window.DashPipeline.load();
     if (route.view === "models"    && window.DashModels)    window.DashModels.load();

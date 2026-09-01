@@ -116,6 +116,17 @@
         textWrap.appendChild(strong);
         textWrap.appendChild(el("p", null,
           "Existing schedules keep firing. To watch another repo, upgrade — or remove a monitor first."));
+        // Only when it is actually the misreading in front of them. Pausing
+        // is the obvious way to make room and it does not: countMonitors has
+        // no `paused_at IS NULL` filter, so a paused monitor still holds its
+        // slot. Someone at the limit with something paused will otherwise
+        // pause another one, watch nothing change, and have no way to tell
+        // whether the limit or the pause is what is broken.
+        if ((data.monitors || []).some(function (m) { return m.paused; })) {
+          textWrap.appendChild(el("p", { class: "banner-fine" },
+            "Pausing stops the emails but keeps the slot \u2014 a paused monitor still counts " +
+            "toward this limit. Remove one to make room."));
+        }
         limitNote.appendChild(textWrap);
         var up = el("a", { class: "btn btn-amber btn-sm", href: "/#pricing" }, "See plans →");
         limitNote.appendChild(up);
