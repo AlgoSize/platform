@@ -1082,13 +1082,46 @@
     ]);
   }
 
+  var DELTA_SEVERITIES = ["critical", "high", "medium", "low", "unknown"];
+
+  /**
+   * The last sweep's delta, as stored in monitors.last_delta_json.
+   *
+   * This read the WRONG SHAPE. It asked for `newCount` and `resolvedCount`,
+   * which belong to the object sweepDueMonitors RETURNS — the one that drives
+   * the alert email and the Slack post. What lands in the column is
+   * {total, counts, baseline, at}, so neither field ever existed here, both
+   * branches were always skipped, and every monitor fell through to the same
+   * final line: "no change". A monitor that had just picked up three new
+   * criticals reported the same words on the operator's screen as one where
+   * nothing had happened for a month, and the screen had no way to be right.
+   *
+   * There is no resolved count to show at all: the stored delta records what
+   * arrived, never what went away. Claiming otherwise was the other half of
+   * the same mistake, so that branch is gone rather than rewired.
+   *
+   * The three states below are the same ones the scorecard and the monitor
+   * list use, deliberately worded the same way — three screens reading one
+   * column have to agree about what it says.
+   */
   function deltaText(delta) {
-    if (!delta) return null;
-    var parts = [];
-    if (delta.newCount) parts.push("+" + delta.newCount + " new");
-    if (delta.resolvedCount) parts.push("−" + delta.resolvedCount + " resolved");
-    if (!parts.length) parts.push("no change");
-    return el("span", { class: "adm-mono", text: parts.join(" · ") });
+    // null — no sweep has completed since the column existed. Returning null
+    // hands the row to the table's unknownReason, which says exactly that.
+    if (!delta || typeof delta.total !== "number") return null;
+    // A first sweep stores a zero because nothing can be new against a set
+    // that did not exist yet. That zero is a starting point, not a
+    // comparison, and "no change" would be a claim about a window one sweep
+    // wide.
+    if (delta.baseline) return el("span", { class: "adm-mono", text: "baseline" });
+    if (delta.total === 0) return el("span", { class: "adm-mono", text: "no change" });
+
+    var counts = delta.counts || {};
+    var mix = DELTA_SEVERITIES
+      .filter(function (sev) { return Number(counts[sev]) > 0; })
+      .map(function (sev) { return counts[sev] + " " + sev; })
+      .join(", ");
+    return el("span", { class: "adm-mono",
+      text: "+" + delta.total + " new" + (mix ? " · " + mix : "") });
   }
 
   // -------------------------------------------------------------------------

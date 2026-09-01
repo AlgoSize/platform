@@ -36,6 +36,7 @@ import { listAuditEvents, writeAudit, AUDIT_ACTIONS } from "../audit.js";
 import { listWebhookDeliveries, listEmailSends, WEBHOOK_OUTCOME, EMAIL_OUTCOME } from "../oplog.js";
 import { listFlags, upsertFlag, FLAG_KEY_RE, listFlagOverrides, setFlagOverride } from "../flags.js";
 import { listUserSessions, revokeUserSession } from "../sessions.js";
+import { parseDelta } from "../monitors/_store.js";
 import { resolveEntitlementForOrg } from "../entitlement.js";
 
 function jsonResponse(body, status = 200, extraHeaders = {}) {
@@ -551,7 +552,7 @@ export async function adminAccountDetailHandler(request, env, ctx) {
     monitors: monitors.map((m) => ({
       monitorId: m.monitor_id, repoUrl: m.repo_url, branch: m.branch,
       schedule: m.schedule, lastRunAt: m.last_run_at, pausedAt: m.paused_at,
-      lastDelta: parseJson(m.last_delta_json),
+      lastDelta: parseDelta(m.last_delta_json),
       overdue: m.paused_at === null && m.last_run_at !== null && now - m.last_run_at > 2 * DAY,
       neverRun: m.last_run_at === null,
     })),
@@ -569,11 +570,6 @@ export async function adminAccountDetailHandler(request, env, ctx) {
     // on this page.
     invoices: { available: false, reason: "fetch_separately", endpoint: `/api/admin/accounts/${orgId}/invoices` },
   });
-}
-
-function parseJson(raw) {
-  if (!raw) return null;
-  try { return JSON.parse(raw); } catch { return null; }
 }
 
 // ---------------------------------------------------------------------------
@@ -826,7 +822,7 @@ export async function adminAutomationHandler(request, env) {
         schedule: m.schedule,
         lastRunAt: m.last_run_at,
         paused: m.paused_at !== null,
-        lastDelta: parseJson(m.last_delta_json),
+        lastDelta: parseDelta(m.last_delta_json),
         neverRun: m.last_run_at === null,
         overdue: m.paused_at === null && m.last_run_at !== null && now - m.last_run_at > 2 * DAY,
       })),

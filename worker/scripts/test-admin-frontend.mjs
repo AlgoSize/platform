@@ -182,6 +182,27 @@ group("the honesty rules survive rendering");
   expect(/data\.checked/.test(js),
     "the calm state lists what was CHECKED rather than asserting a bare all-clear");
 
+  // The "Last delta" cell read `newCount` and `resolvedCount`, which belong to
+  // the object the sweep RETURNS, not to the column it writes. Neither field
+  // ever existed on the parsed blob, so both branches were skipped and every
+  // monitor fell through to the same last line: "no change". A monitor that
+  // had just picked up three criticals said the same words as one where
+  // nothing had happened for a month.
+  expect(!/delta\.newCount|delta\.resolvedCount/.test(js),
+    "the delta cell no longer reads fields no writer produces");
+  expect(/delta\.total/.test(js) && /delta\.counts/.test(js),
+    "…it reads the shape the column actually holds");
+  expect(/if \(!delta \|\| typeof delta\.total !== "number"\) return null;/.test(js),
+    "an absent or malformed delta returns null, so the row falls to its stated unknownReason " +
+    "rather than to the words 'no change'");
+  expect(/delta\.baseline/.test(js) && /text: "baseline"/.test(js),
+    "a first sweep is called a baseline — its zero is a starting point, not a comparison");
+  // There is no resolved count in the column at all. Wiring that half to
+  // something would be inventing it; it is gone rather than rewired.
+  expect(!/resolved/.test(js.slice(js.indexOf("function deltaText"),
+                                   js.indexOf("function deltaText") + 1600)),
+    "and nothing claims a resolved count, which this column has never recorded");
+
   // Duplicates must not be painted as failures.
   const dupLine = js.match(/d\.outcome === "failed" \? "danger" : d\.outcome === "processed" \? "ok" : ""/);
   expect(Boolean(dupLine),
