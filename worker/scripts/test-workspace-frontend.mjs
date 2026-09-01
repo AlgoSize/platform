@@ -371,7 +371,10 @@ group("every tool page has a monitored half, not just a manual bench");
   // links to. Asserted beside the bare route because they share a view name
   // and it would be easy to add the parameterised form while quietly breaking
   // the plain one, or the reverse.
-  expect(/route\.runId\)\s*window\.DashArch\.openRun\(route\.runId\)/.test(router),
+  // The optional trailing argument is the component a link can name
+  // (#/arch/<runId>/<componentId>); the run id stays first and required, so
+  // this still fails if the parameterised route stops opening a run.
+  expect(/route\.runId\)\s*window\.DashArch\.openRun\(route\.runId(?:,\s*route\.componentId)?\)/.test(router),
     "and #/arch/<runId> opens that run in the explorer");
   expect(/window\.DashScanner\)\s+window\.DashScanner\.load\(\)/.test(router),
     "entering #/scanner loads its monitored section");

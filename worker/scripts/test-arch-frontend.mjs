@@ -21,6 +21,10 @@ const js     = readFileSync(join(SITE, "assets", "js", "dash-arch.js"), "utf8");
 const css    = readFileSync(join(SITE, "assets", "css", "main.css"), "utf8");
 const worker = readFileSync(join(__dirname, "..", "src", "index.js"), "utf8");
 const recommendSrc = readFileSync(join(__dirname, "..", "src", "analyzers", "architecture", "recommend.js"), "utf8");
+const graphSrc  = readFileSync(join(__dirname, "..", "src", "analyzers", "architecture", "graph.js"), "utf8");
+const enrichSrc = readFileSync(join(__dirname, "..", "src", "analyzers", "architecture", "enrich.js"), "utf8");
+const router      = readFileSync(join(SITE, "assets", "js", "dash-router.js"), "utf8");
+const dashboardJs = readFileSync(join(SITE, "assets", "js", "dashboard.js"), "utf8");
 
 let failures = 0;
 const ok   = (msg) => console.log(`  \x1b[32m✓\x1b[0m ${msg}`);
@@ -228,6 +232,140 @@ group("structural drift is rendered, and never invents a comparison");
     "the drift load runs on both result paths — a fresh analysis and a stored run");
   expect(/var drift = driftPanel\(\);[\s\S]{0,80}side\.appendChild\(drift\)/.test(js),
     "…and render() actually appends the panel it built");
+}
+
+// ===========================================================================
+group("the map speaks the analyzer's vocabulary, not an invented one");
+// ===========================================================================
+{
+  // The kind table is a mirror of buildGraph's output. A kind the analyzer
+  // emits and the map does not know renders as "?" rather than borrowing
+  // another kind's glyph, but the eleven it emits today must all be named:
+  // an unrecognised kind on a real graph is a bug, not a degradation.
+  const emitted = uniq(matchAll(graphSrc, /kind:\s*"([a-z_]+)"/g)).sort();
+  const known = uniq(matchAll(js, /^\s{4}([a-z_]+):\s*\{ glyph:/gm)).sort();
+  const unknown = emitted.filter((k) => !known.includes(k));
+  expect(unknown.length === 0,
+    `every kind buildGraph emits has a glyph and a description${
+      unknown.length ? " — missing: " + unknown.join(", ") : ` (${emitted.length} kinds)`}`);
+  expect(/KIND_UNKNOWN/.test(js) && /glyph: "\?"/.test(js),
+    "…and a kind this build does not know still draws, marked as unrecognised");
+  expect(/\.xray-sel-kinddesc/.test(css), "the kind description is styled");
+}
+
+// ===========================================================================
+group("origin: whether a line was declared, observed, or both");
+// ===========================================================================
+{
+  // enrich.js documents the three values and what each asserts. The map must
+  // carry all three, because drawing a declaration and an observation the
+  // same way is what let a static graph read as a live topology.
+  ["static", "both", "runtime"].forEach((o) => {
+    expect(new RegExp(`\\b${o}:\\s*\\{[^}]*label:`).test(js),
+      `the map knows the "${o}" origin enrich.js emits`);
+  });
+  expect(/observed, never declared/.test(js) && /shadow/.test(js),
+    "a runtime-only edge is named as a shadow dependency, in words");
+  expect(/alarm: true/.test(js) && /xray-provenance-shadow/.test(css),
+    "…and it is drawn to alarm rather than as one more line weight");
+
+  // The prior question, stated permanently rather than on hover.
+  expect(/A declaration graph, not a live one/.test(js),
+    "the map states that it was read from files, not probed");
+  expect(/provenanceNote\(result\.graph\)/.test(js),
+    "…and render() actually appends that statement");
+
+  // A cluster line stands in for several node lines. If a shadow hides in
+  // that bundle, zooming out must not lose it.
+  expect(/if \(o && o\.alarm\) seen\[key\]\.alarm = true/.test(js),
+    "a shadow dependency survives the cluster-level edge collapse");
+}
+
+// ===========================================================================
+group("confidence: cited by a file, or not");
+// ===========================================================================
+{
+  // The predicate that decides this lives in the analyzer, and it must
+  // understand the shape buildGraph actually emits. It did not: evidence is
+  // a `path:line` STRING, hasEvidence only handled arrays and {file}
+  // objects, and every node in every run came back unconfirmed while
+  // carrying a real citation. Nothing caught it because no surface drew the
+  // field. This pins the shape against the producer.
+  expect(/const evidence = \(path, line\) =>/.test(graphSrc),
+    "buildGraph cites as a `path:line` string");
+  expect(/typeof x\.evidence === "string"/.test(enrichSrc),
+    "…and hasEvidence recognises that form, so a cited fact reads as confirmed");
+
+  expect(/isUnconfirmed/.test(js), "the map reads the confidence field");
+  // Snapshots store the ENRICHED graph, so rows written before the fix above
+  // carry "unconfirmed" forever. The UI must not print "no file cites this"
+  // over a node whose citation is right there in the payload.
+  expect(/hasCitation/.test(js) &&
+         /x\.confidence === "unconfirmed" && !hasCitation\(x\)/.test(js),
+    "a stored run with a stale verdict is not re-asserted against its own evidence");
+  expect(/stroke-dasharray", "6 4"/.test(js) && /fill-opacity", "0\.45"/.test(js),
+    "an unconfirmed node is dashed and washed, never drawn as an attested one");
+  expect(/No file cites this/.test(js),
+    "…and the detail card says why, in plain words");
+  expect(/\.xray-sel-unconfirmed/.test(css), "the unconfirmed badge is styled");
+}
+
+// ===========================================================================
+group("coverage is stated on every run, not only the bad ones");
+// ===========================================================================
+{
+  // The analyzer already counts what it could not read. Reporting it only
+  // when it is partial means a reader never learns the line exists, so they
+  // have no reason to look for it on the run where it matters.
+  expect(/COVERAGE · FULL/.test(js) && /COVERAGE · PARTIAL/.test(js),
+    "coverage renders in both states");
+  expect(/lower bound/.test(js),
+    "a partial map says its counts are a lower bound");
+  expect(/coverageStrip\(result\)/.test(js),
+    "…and render() appends it");
+  // Set in --fs-sm, the same size as the counts it qualifies. A lower-bound
+  // warning in fine print is a way of having said it without it being read.
+  expect(/\.xray-coverage-note \{[^}]*font-size: var\(--fs-sm\)/.test(css),
+    "the lower-bound sentence is not set smaller than what it qualifies");
+  // An old run stored before coverage was recorded is not a complete one.
+  expect(/predates coverage recording/.test(js),
+    "a run with no coverage recorded says so rather than reading as complete");
+  expect(/filesAnalyzed/.test(js) && /truncatedSkippedList/.test(js),
+    "the strip reads the fields the analyzer actually returns");
+}
+
+// ===========================================================================
+group("one component of a run, addressable on its own");
+// ===========================================================================
+{
+  // A 17-service graph plus "look at session-store" is not an answer. The
+  // component has to be reachable directly — from a link, from the runs
+  // feed, and by typing its name.
+  expect(/componentIndex/.test(js) && /focusComponent/.test(js),
+    "the explorer can resolve one component and focus it");
+  expect(/#\/arch\/<runId>/.test(router) || /componentId/.test(router),
+    "the router parses a component segment after the run id");
+  expect(/openRun\(route\.runId, route\.componentId\)/.test(router),
+    "…and passes it to the explorer");
+  // dashboard.js builds the button through el(), so the action is an object
+  // key rather than an HTML attribute — match what the file actually says.
+  expect(/"data-run-action":\s*"archparts"/.test(dashboardJs),
+    "the runs feed offers the components of an ARCH run");
+  expect(/archparts/.test(js),
+    "…and the explorer handles that action");
+  expect(/xray-jump/.test(js) && /\.xray-jump-input/.test(css),
+    "a component can also be reached by name from inside the map");
+  expect(/list: listId/.test(js),
+    "…via a native datalist, so typeahead needs no script of its own");
+
+  // The two failure modes this must not have: a component that is not in
+  // the run, and a run with no stored graph at all.
+  expect(/missingComponent/.test(js) && /is not in this run/.test(js),
+    "a stale component link keeps the map and names what it could not find");
+  expect(/state\.missingComponent = null/.test(js),
+    "…and the note is cleared on the next run, not inherited");
+  expect(/no architecture map stored, so it has no components/.test(js),
+    "a run with no stored graph says so rather than opening an empty picker");
 }
 
 // ===========================================================================

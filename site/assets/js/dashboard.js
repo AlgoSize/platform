@@ -1236,6 +1236,18 @@
           "data-run-action": "viewmap",
           "data-run-id": it.id,
         }, "View map"));
+        // The whole map answers "what does this system look like"; a single
+        // component answers "what does changing THIS touch", which is the
+        // question someone arriving from an alert or a review actually has.
+        // Opening a 17-service graph and hunting for one box is not an
+        // answer to it. Handled in dash-arch.js, which owns the explorer.
+        actions.appendChild(el("button", {
+          type: "button",
+          class: "btn btn-ghost btn-sm",
+          "data-run-action": "archparts",
+          "data-run-id": it.id,
+          "aria-expanded": "false",
+        }, "Components"));
       }
 
       // A CI run's stored input is lockfile PATHS, not content, and a swept
