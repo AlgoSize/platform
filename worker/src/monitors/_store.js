@@ -585,8 +585,13 @@ export async function recordMonitorAttempt(env, monitorId, { status, error = nul
  * Parse the stored delta. Anything malformed reads as null ("unknown"), never
  * as an empty delta — same rule parseIdList follows, and for the same reason:
  * a corrupt value must not be able to assert that nothing changed.
+ *
+ * Exported because it is the ONLY parser for this column. The admin panel used
+ * to JSON.parse the blob itself and read fields off it that no writer produced,
+ * so its "Last delta" cell said "no change" for every monitor ever swept. A
+ * second reader of one column is a second chance to be wrong about it.
  */
-function parseDelta(raw) {
+export function parseDelta(raw) {
   if (typeof raw !== "string" || !raw) return null;
   try {
     const d = JSON.parse(raw);

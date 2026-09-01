@@ -513,6 +513,35 @@ group("automation");
   const { body } = await call(env, "/api/admin/automation", { token });
   expect(body.monitors.items.length === 4, "every monitor is listed");
   expect(body.monitors.summary.outcomesRecorded === false, "with the same honest sweep caveat");
+
+  // --- the last delta ------------------------------------------------------
+  // This column is read by three screens now, and it must reach all three
+  // through ONE parser. The panel used to JSON.parse the blob itself, which
+  // is how its "Last delta" cell came to read fields no writer produces.
+  const sweptAt = Math.floor(Date.now() / 1000);
+  const setDelta = async (id, json) => {
+    await env.DB.prepare("UPDATE monitors SET last_delta_json = ? WHERE monitor_id = ?")
+      .bind(json, id).run();
+  };
+  await setDelta("mon_ok", JSON.stringify(
+    { total: 3, counts: { critical: 2, high: 1, medium: 0, low: 0, unknown: 0 },
+      baseline: false, at: sweptAt - 3600 }));
+  await setDelta("mon_overdue", JSON.stringify({ total: 0, counts: {}, baseline: true, at: sweptAt }));
+  await setDelta("mon_paused", "{not json");
+
+  const { body: withDeltas } = await call(env, "/api/admin/automation", { token });
+  const mon = (id) => withDeltas.monitors.items.find((m) => m.monitorId === id);
+  expect(mon("mon_ok").lastDelta && mon("mon_ok").lastDelta.total === 3 &&
+         mon("mon_ok").lastDelta.counts.critical === 2,
+    "the panel is served the delta's real shape — total and the severity mix");
+  expect(mon("mon_ok").lastDelta.baseline === false,
+    "…including which of the two zeroes a zero would have been");
+  expect(mon("mon_overdue").lastDelta.baseline === true,
+    "a baseline sweep is flagged as one rather than reported as a measured 'no change'");
+  expect(mon("mon_new").lastDelta === null,
+    "a monitor that has never swept is null — the panel renders its stated reason, not a zero");
+  expect(mon("mon_paused").lastDelta === null,
+    "a corrupt value reads as unknown, never as an empty delta that asserts nothing changed");
   expect(body.webhooks.counts.last24h.failed === 1 && body.webhooks.counts.last24h.processed === 1,
     "webhook outcomes are counted by kind");
   expect(body.email.configured === false, "the mailer reports as unconfigured in this environment");
