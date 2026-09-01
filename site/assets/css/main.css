@@ -4523,7 +4523,74 @@ a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
   text-transform: uppercase;
   color: var(--text-dim);
 }
-.scorecard-repo { flex: 1 1 190px; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+/* The repository stays put while the columns scroll. Six columns do not fit
+   a laptop, so the grid scrolls sideways — and a row of numbers with the name
+   scrolled off the left is a row of numbers about nothing. Sticky rather than
+   a second fixed table so there is still exactly one row per repo, which is
+   what keeps the cells and the name from ever drifting out of step. */
+.scorecard-repo {
+  flex: 1 1 190px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  /* Opaque, or the cells scroll THROUGH the name rather than under it. */
+  background: var(--bg-card);
+  padding-right: var(--s-2);
+}
+.scorecard-head .scorecard-repo { background: var(--bg); }
+
+/* A cell that opens the tool behind it. The whole cell is the target — the
+   number is what someone aims at, not a chevron beside it. */
+.scorecard-cell-link { text-decoration: none; color: inherit; border-radius: var(--radius-sm); }
+.scorecard-cell-link:hover { background: var(--bg); }
+.scorecard-cell-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* What the three non-numeric cells mean. Deliberately not a trend key —
+   see the comment on the block that builds it. */
+/* The second line of a banner: still the banner's voice, quieter, for the
+   correction that only some readers need. */
+.banner-fine { font-size: 0.76rem; color: var(--text-dim); }
+
+.scorecard-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  align-items: baseline;
+  margin: 0 0 var(--s-2);
+  padding: 0 var(--s-4);
+  font-size: 0.62rem;
+  color: var(--text-dim);
+}
+.scorecard-key-item { display: inline-flex; gap: var(--s-1); align-items: baseline; }
+.scorecard-key-sep { color: var(--border); }
+.scorecard-key-term { font-weight: 700; }
+.scorecard-key-pending    { color: var(--accent); }
+.scorecard-key-unmeasured { color: var(--sev-medium); }
+.scorecard-key-off        { color: var(--text-muted); }
+.scorecard-key-gloss { color: var(--text-dim); }
+
+/* A scorecard link that could not be followed, on the tool page it landed on.
+   Placed at the top of the watch list because it explains why the list below
+   is not what the reader expected. */
+.deeplink-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  align-items: baseline;
+  margin-bottom: var(--s-3);
+  padding: var(--s-3);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--sev-medium);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  font-size: 0.8rem;
+}
+.deeplink-note p { margin: 0; flex: 1 1 260px; min-width: 0; }
+.deeplink-note-link { flex: 0 0 auto; font-weight: 600; }
 .scorecard-repo-name {
   font-size: 0.78rem;
   font-weight: 600;

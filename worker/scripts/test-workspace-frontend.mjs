@@ -33,6 +33,8 @@ const worker  = readFileSync(join(WORKER, "index.js"), "utf8");
 const scorecard = readFileSync(join(WORKER, "handlers", "scorecard.js"), "utf8");
 const routing   = readFileSync(join(WORKER, "monitors", "routing.js"), "utf8");
 const meJs      = readFileSync(join(WORKER, "handlers", "me.js"), "utf8");
+const inspect   = readFileSync(join(WORKER, "monitors", "inspect.js"), "utf8");
+const scanJs2   = readFileSync(join(SITE, "assets", "js", "dash-scanner.js"), "utf8");
 
 let failures = 0;
 const ok   = (msg) => console.log(`  \x1b[32m✓\x1b[0m ${msg}`);
@@ -235,6 +237,142 @@ group("exactly one column carries a trend, because exactly one stores a delta");
 }
 
 // ===========================================================================
+group("a cell opens the tool behind it, for that repo");
+// ===========================================================================
+{
+  // The grid says WHAT a repo scored; the tool page says why. A reader who
+  // has to land on the bench and re-pick the repo from a list was handed the
+  // navigation instead of the answer.
+  expect(/analyzer: c\.analyzer/.test(scorecard),
+    "the API sends each column's analyzer, so the link is built from server truth");
+  expect(/#\/" \+ view \+ "\/watch\/"/.test(wsJs),
+    "the cell href is #/<tool>/watch/<monitorId>");
+  expect(/monitorId: m\.monitorId/.test(scorecard),
+    "…and the row carries the monitor id that link needs");
+
+  // The set of linkable analyzers is DERIVED from the Worker's own list, not
+  // written out here. A literal would go stale in the unhelpful direction:
+  // making an analyzer inspectable and forgetting to link it would still pass.
+  const inspectable = (inspect.match(/INSPECTABLE = Object\.freeze\(\[([^\]]+)\]/) || [])[1] || "";
+  const analyzers = inspectable.split(",").map((s2) => s2.trim().replace(/"/g, "")).filter(Boolean);
+  const mapped = [...wsJs.matchAll(/(\w+): "(scanner|arch|optimizer|estimate|cost)",?/g)]
+    .map((m) => m[1]);
+  const viewKeys = wsJs.slice(wsJs.indexOf("var ANALYZER_VIEW"), wsJs.indexOf("var ANALYZER_VIEW") + 400);
+  analyzers.forEach((a) => {
+    expect(new RegExp("\\b" + a + ": \"").test(viewKeys),
+      `${a} is inspectable on the Worker, so its column links to a tool page`);
+  });
+  expect(!/\bcost: "/.test(viewKeys),
+    "cloud spend does NOT link — it is not in INSPECTABLE, so there is no monitored result " +
+    "to open and the link would land on a bench that could only say nothing");
+  expect(!/cost\)\\\/watch/.test(router) && !/\|cost\)/.test(router),
+    "…and the router has no #/cost/watch route rather than a route to nothing");
+  expect(mapped.length >= 4, "the analyzer→view map is present");
+
+  // An <a> inside an <a> is invalid and the browser silently unnests it,
+  // which is how the inner link stops working. The off cell already holds
+  // one, so the cell around it must not be a second.
+  expect(/cell\.kind === "off" \? null : cellHref\(r, col\)/.test(wsJs),
+    "an off cell is not a link — its own move is to Monitors, and nesting anchors breaks both");
+
+  // Four tool pages, one entry point each, one route shape for all of them.
+  for (const [mod, src] of [["DashScanner", scanJs2], ["DashArch", archJs],
+                            ["DashOptimizer", optJs], ["DashEstimate", estJs]]) {
+    expect(/openMonitor: openMonitor/.test(src) && /function openMonitor\(monitorId\)/.test(src),
+      `${mod} exposes openMonitor(monitorId)`);
+    expect(/core\.clickMonitorRow\(/.test(src),
+      `…and drives the row's own button rather than a second path to the same result`);
+  }
+  expect(/\(scanner\|arch\|optimizer\|estimate\)\\\/watch/.test(router),
+    "the router parses one watch shape for all four, not a special case per tool");
+  expect(/data-monitor": m\.monitorId/.test(scanJs2) && /data-monitor": m\.monitorId/.test(archJs) &&
+         /data-monitor": m\.monitorId/.test(optJs)  && /data-monitor": m\.monitorId/.test(estJs),
+    "every watch row tags its open button with the monitor it opens");
+}
+
+// ===========================================================================
+group("a link that cannot be followed says which of three things went wrong");
+// ===========================================================================
+{
+  // The scorecard grades from the last SWEEP; these pages re-read the repo
+  // live. So a link can be valid and still land somewhere that cannot show
+  // it, and "gone", "filtered" and "unopenable" have three different answers.
+  for (const reason of ["gone", "filtered", "unopenable"]) {
+    expect(dashJs.includes(`"${reason}"`), `DashCore names the "${reason}" case`);
+  }
+  expect(/function findDeepLink/.test(dashJs) && /function deepLinkNote/.test(dashJs),
+    "one implementation of both, shared by the four pages");
+  expect(/hit\.analyzers \|\| \[\]\)\.indexOf\(analyzer\) === -1/.test(dashJs),
+    "a repo watched by a DIFFERENT analyzer reads as filtered, not as a missing monitor");
+  // The note has to be re-emitted by render(), not inserted after it: a later
+  // load resolves, re-renders, and takes any node render() did not put there.
+  // That exact bug ate the X-ray's stale-component note.
+  for (const [mod, src, field] of [["scanner", scanJs2, "state.deepLink"],
+                                   ["X-ray", archJs, "watch.deepLink"],
+                                   ["optimizer", optJs, "state.deepLink"],
+                                   ["estimator", estJs, "watchDeepLink"]]) {
+    expect(src.includes(field + " = ") && src.includes("if (" + field + ")"),
+      `the ${mod} holds the note in state and re-emits it on render`);
+  }
+  expect(/clickMonitorRow[\s\S]{0,80}return false/.test(dashJs) ||
+         /return false;\n  \}/.test(dashJs.slice(dashJs.indexOf("function clickMonitorRow"))),
+    "a row with no open button returns false rather than a click that does nothing");
+  expect(/\.deeplink-note\b/.test(css), "and the note is styled");
+}
+
+// ===========================================================================
+group("the scorecard says what its non-numeric cells mean, and no more");
+// ===========================================================================
+{
+  expect(/scorecard-key-item/.test(wsJs) && /\.scorecard-key-item\b/.test(css),
+    "a key explains the three cells that carry no number");
+  for (const term of ["first run pending", "not measured", "not watched"]) {
+    expect(wsJs.includes(`"${term}"`), `…including "${term}"`);
+  }
+  // The mockup's fourth row — "↓ improved · ↑ worse · = unchanged, against
+  // the previous nightly run" — is a key for something only ONE of the six
+  // columns can say. Five of them store no previous value, so "= unchanged"
+  // beside them would caption a comparison nothing performed.
+  // Checked against the STRINGS the page can render, not the file: the
+  // comment explaining why there is no trend key necessarily contains the
+  // words it is ruling out, and a test that cannot tell those apart would
+  // force the explanation to be deleted to stay green.
+  const wsStrings = [...wsJs.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1]).join(" | ");
+  expect(!/unchanged/.test(wsStrings),
+    "there is no trend key — five of the six columns have nothing to compare against");
+  expect(!/improved|\bworse\b/.test(wsStrings),
+    "…and no improved/worse legend for columns that store no prior value");
+
+  // Six columns do not fit a laptop, so the grid scrolls sideways. A row of
+  // numbers whose repo name has scrolled off the left is a row about nothing.
+  expect(/\.scorecard-repo\s*\{[^}]*position:\s*sticky/.test(css),
+    "the repository column stays put while the columns scroll");
+  expect(/\.scorecard-repo\s*\{[^}]*background:/.test(css),
+    "…and is opaque, or the cells scroll through it rather than under it");
+}
+
+// ===========================================================================
+group("no shipped script is binary");
+// ===========================================================================
+{
+  // A raw control byte makes a .js file `data` rather than text, and grep
+  // and ripgrep then skip it as binary — a repo-wide search reports it as
+  // having no matches at all. dash-arch.js carried one for months inside a
+  // separator string that should have been written "\u0000".
+  const { readdirSync } = await import("node:fs");
+  const jsDir = join(SITE, "assets", "js");
+  const offenders = readdirSync(jsDir)
+    .filter((f) => f.endsWith(".js"))
+    .filter((f) => {
+      const buf = readFileSync(join(jsDir, f));
+      for (const b of buf) if (b < 9 || (b > 13 && b < 32)) return true;
+      return false;
+    });
+  expect(offenders.length === 0,
+    `every dashboard script is greppable text${offenders.length ? " — binary: " + offenders.join(", ") : ""}`);
+}
+
+// ===========================================================================
 group("monitor health is rendered as four distinct states");
 // ===========================================================================
 {
@@ -308,14 +446,14 @@ group("the schedule hour is offered, sent, and read back");
 group("the new classes are styled, and none are dead");
 // ===========================================================================
 {
-  const PREFIX = /^(ws-pulse|ws-tool|scorecard-|route-|dash-avatar|dash-account|dash-tab-glyph|dash-head-split|dash-head-aside|dash-crumb|monitor-why|panel-empty-rich|ws-tools)/;
+  const PREFIX = /^(ws-pulse|ws-tool|scorecard-|route-|dash-avatar|dash-account|dash-tab-glyph|dash-head-split|dash-head-aside|dash-crumb|monitor-why|panel-empty-rich|ws-tools|deeplink-)/;
   const applied = uniq([
     ...matchAll(wsJs,  /class:\s*"([^"]+)"/g).flatMap((c) => c.split(/\s+/)),
     ...matchAll(monJs, /class:\s*"([^"]+)"/g).flatMap((c) => c.split(/\s+/)),
     ...matchAll(dashJs, /class:\s*"([^"]+)"/g).flatMap((c) => c.split(/\s+/)),
     ...matchAll(html,  /class="([^"]+)"/g).flatMap((c) => c.split(/\s+/)),
   ]).filter((c) => PREFIX.test(c));
-  const styled = new Set(matchAll(css, /\.((?:ws-pulse|ws-tool|scorecard-|route-|dash-avatar|dash-account|dash-tab-glyph|dash-head-split|dash-head-aside|dash-crumb|monitor-why|panel-empty-rich|ws-tools)[a-zA-Z0-9-]*)/g));
+  const styled = new Set(matchAll(css, /\.((?:ws-pulse|ws-tool|scorecard-|route-|dash-avatar|dash-account|dash-tab-glyph|dash-head-split|dash-head-aside|dash-crumb|monitor-why|panel-empty-rich|ws-tools|deeplink-)[a-zA-Z0-9-]*)/g));
   // Two families are composed at runtime — "scorecard-cell-" + cell.kind and
   // "route-row-" + (wired ? "on" : "off"). The extractor sees the stem, so
   // the stem is checked against the variants that actually exist rather than
@@ -442,7 +580,7 @@ group("every tool page has a monitored half, not just a manual bench");
   // this still fails if the parameterised route stops opening a run.
   expect(/route\.runId\)\s*window\.DashArch\.openRun\(route\.runId(?:,\s*route\.componentId)?\)/.test(router),
     "and #/arch/<runId> opens that run in the explorer");
-  expect(/window\.DashScanner\)\s+window\.DashScanner\.load\(\)/.test(router),
+  expect(/window\.DashScanner\)\s*\{?\s*(?:if \(route\.monitorId\)[\s\S]{0,90}?else\s+)?window\.DashScanner\.load\(\)/.test(router),
     "entering #/scanner loads its monitored section");
   expect(/dash-scanner\.js/.test(html), "dash-scanner.js is loaded by the page");
   expect(/window\.DashArch = \{ load/.test(archJs),

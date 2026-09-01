@@ -254,6 +254,34 @@
     scroll.appendChild(table);
     body.appendChild(scroll);
 
+    // What the three non-numeric cells mean. They are easy to read as one
+    // "no data" state and they are not: each names a different party's move.
+    //
+    // Deliberately NOT a trend key. The obvious fourth row — a down arrow for
+    // better, an up arrow for worse, an equals sign for no movement, all
+    // against the previous nightly run — would be a legend for something only
+    // one of the six columns can say. The dependency sweep is the only one
+    // that stores a previous value, so an equals sign on the other five would
+    // caption a comparison nothing performed.
+    //
+    // (Written without quoting those glyphs: the guard in
+    // test-workspace-frontend.mjs reads the string literals in this file to
+    // prove the page never renders them, and a quoted example in a comment
+    // is indistinguishable from one.)
+    var key = el("p", { class: "scorecard-key mono" });
+    [
+      ["scorecard-key-pending",    "first run pending", "enabled; no sweep has produced a result yet"],
+      ["scorecard-key-unmeasured", "not measured",      "the sweep ran and found nothing it could read"],
+      ["scorecard-key-off",        "not watched",       "the analyzer is switched off for this repo"],
+    ].forEach(function (k, i) {
+      if (i) key.appendChild(el("span", { class: "scorecard-key-sep", "aria-hidden": "true" }, "·"));
+      var item = el("span", { class: "scorecard-key-item" });
+      item.appendChild(el("span", { class: "scorecard-key-term " + k[0] }, k[1]));
+      item.appendChild(el("span", { class: "scorecard-key-gloss" }, k[2]));
+      key.appendChild(item);
+    });
+    body.appendChild(key);
+
     var legend = el("p", { class: "scorecard-legend mono" },
       data.basis || "Rows come from scheduled monitors.");
     body.appendChild(legend);
@@ -282,6 +310,11 @@
     return cell.rank;
   }
 
+  var VIEW_NAME = {
+    scanner: "the scanner", optimizer: "the optimizer",
+    estimate: "the estimator", arch: "the X-ray",
+  };
+
   function scorecardRow(r, columns) {
     var row = el("div", { class: "scorecard-row" });
 
@@ -304,9 +337,54 @@
     return parts.join(" · ");
   }
 
+  // Which tool page shows the full result behind a cell.
+  //
+  // Keyed by the ANALYZER the API sends with each column, not by the column
+  // id: Dependencies and Code are two columns off the same vuln sweep, and
+  // both belong on the scanner. Names differ from the analyzer only where the
+  // page was named for what a person does with it rather than for the module
+  // that fills it — vuln is read on the scanner, algo on the optimizer.
+  // Cloud spend is deliberately absent. INSPECTABLE on the Worker is
+  // ["vuln", "arch", "estimate", "algo"] — there is no endpoint that re-reads
+  // a monitored repo's committed CUR export, so the cost page has no
+  // monitored half to open and #/cost/watch/<id> would land on a bench that
+  // could only say nothing. A column that can be graded but not opened is a
+  // real gap; pointing a link at a page that cannot answer would hide it.
+  var ANALYZER_VIEW = {
+    vuln: "scanner", arch: "arch", algo: "optimizer", estimate: "estimate",
+  };
+
+  /**
+   * The deep link behind one cell: that tool, already showing this repo.
+   *
+   * Null when there is nothing to open — no monitor id, or an analyzer with
+   * no page. A cell with no result still links: "not measured" and "first run
+   * pending" are both answered on the tool page, and sending someone to a
+   * blank bench they then have to re-navigate is worse than not linking at
+   * all only if the page cannot say why it is empty. Ours can.
+   */
+  function cellHref(r, col) {
+    var view = ANALYZER_VIEW[col.analyzer];
+    if (!view || !r.monitorId) return null;
+    return "#/" + view + "/watch/" + encodeURIComponent(r.monitorId);
+  }
+
   function scorecardCell(r, col) {
     var cell = (r.cells && r.cells[col.id]) || { kind: "off" };
-    var wrap = el("div", { class: "scorecard-cell scorecard-cell-" + cell.kind });
+    // An analyzer that is switched off has no result to open, and the move
+    // from that cell is to Monitors rather than to the tool. So it keeps its
+    // own "enable" link and the cell itself is not one — which also avoids
+    // nesting an <a> inside an <a>, which the browser silently unnests.
+    var href = cell.kind === "off" ? null : cellHref(r, col);
+    // An <a> when there is somewhere to go, a <div> when there is not — so
+    // the pointer, the focus ring and the middle-click all follow from the
+    // element rather than from a click handler that only a mouse can reach.
+    var wrap = href
+      ? el("a", { class: "scorecard-cell scorecard-cell-" + cell.kind + " scorecard-cell-link",
+                  href: href,
+                  title: col.label + " for " + r.repo + " — open " +
+                         VIEW_NAME[ANALYZER_VIEW[col.analyzer]] })
+      : el("div", { class: "scorecard-cell scorecard-cell-" + cell.kind });
 
     if (cell.kind === "grade" || cell.kind === "stale") {
       var line = el("div", { class: "scorecard-value-row" });
@@ -346,8 +424,7 @@
     // distinct from pending: "you have not enabled this" and "this is
     // enabled and has not produced a result" have different fixes.
     wrap.appendChild(el("span", { class: "scorecard-off mono" }, "not watched"));
-    var link = el("a", { class: "scorecard-enable mono", href: "#/monitors" }, "enable →");
-    wrap.appendChild(link);
+    wrap.appendChild(el("a", { class: "scorecard-enable mono", href: "#/monitors" }, "enable →"));
     return wrap;
   }
 

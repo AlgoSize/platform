@@ -23,7 +23,7 @@
   if (!core) return;
   var el = core.el, callApi = core.callApi, setBusy = core.setBusy;
 
-  var state = { loaded: false, monitors: [] };
+  var state = { loaded: false, monitors: [], deepLink: null };
 
   function shortRepo(url) {
     return String(url || "").replace(/^https?:\/\/(www\.)?github\.com\//, "");
@@ -49,6 +49,11 @@
     var body = document.getElementById("vuln-watch-body");
     if (!body) return;
     while (body.firstChild) body.removeChild(body.firstChild);
+
+    // A scorecard link asked for a repo this list does not have. Said out
+    // loud, and from state rather than inserted after the fact: the note has
+    // to survive the render that follows, which is the bug this shape avoids.
+    if (state.deepLink) body.appendChild(core.deepLinkNote(state.deepLink));
 
     // Every monitor runs the dependency audit — it is what a monitor IS — so
     // there is no per-analyzer filter here, unlike the other tool pages.
@@ -96,8 +101,10 @@
                      : "not swept yet")));
 
       var actions = el("div", { class: "night-actions" });
-      var open = el("button", { type: "button", class: "btn btn-primary btn-sm" },
-        "Show the advisories →");
+      var open = el("button", { type: "button", class: "btn btn-primary btn-sm",
+        // Tagged so a scorecard link can drive this exact button rather than
+        // re-implementing what clicking it does.
+        "data-monitor": m.monitorId }, "Show the advisories →");
       open.addEventListener("click", function () { openMonitored(m, open); });
       actions.appendChild(open);
       row.appendChild(actions);
@@ -133,5 +140,28 @@
       .then(function () { setBusy(btn, false); });
   }
 
-  window.DashScanner = { load: load };
+  /**
+   * Open one watched repository's audit, straight from a scorecard cell.
+   *
+   * Drives the row's own button rather than calling openMonitored directly,
+   * so the busy state, the result slot and the scroll are the ones that
+   * already work — a second path to the same result is a second thing to
+   * keep in step.
+   */
+  function openMonitor(monitorId) {
+    return load().then(function () {
+      // No analyzer filter here: every monitor runs the dependency audit —
+      // it is what a monitor IS — so this list is never filtered and a
+      // watched repo always has a row.
+      state.deepLink = core.findDeepLink(state.monitors, monitorId);
+      render();
+      if (state.deepLink) return;
+      if (!core.clickMonitorRow("vuln-watch-body", monitorId)) {
+        state.deepLink = { reason: "unopenable", monitorId: monitorId };
+        render();
+      }
+    });
+  }
+
+  window.DashScanner = { load: load, openMonitor: openMonitor };
 })();

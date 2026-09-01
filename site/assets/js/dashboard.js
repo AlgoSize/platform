@@ -2001,6 +2001,85 @@
   // order in dashboard.html guarantees this exists before they run.
   // -----------------------------------------------------------------------
 
+  // ---------------------------------------------------------------------
+  // Scorecard deep links — shared by the four tool pages
+  // ---------------------------------------------------------------------
+  //
+  // A scorecard cell links to #/<tool>/watch/<monitorId>. Three things can
+  // go wrong between the grid and the bench, and each of them has to SAY so
+  // rather than leave a page that looks like it simply has nothing:
+  //
+  //   gone        the monitor is not in this page's list at all — removed, or
+  //               belonging to another org after an account switch
+  //   filtered    it is watched, but not by THIS analyzer, so this page's
+  //               list (which filters by analyzer) never had a row for it
+  //   unopenable  the row is there but carries no open button, because the
+  //               page only offers one when there is something to show
+  //
+  // The scorecard graded the repo from the last SWEEP; these pages re-read
+  // the repository live. So a link can be perfectly valid and still land on a
+  // page that cannot show it, and the difference matters to whoever clicked.
+
+  /**
+   * Why a deep link cannot be followed, or null when it can.
+   * `analyzer` is optional: pass it on the pages whose list is filtered.
+   */
+  function findDeepLink(monitors, monitorId, analyzer) {
+    var list = monitors || [];
+    var hit = null;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] && list[i].monitorId === monitorId) { hit = list[i]; break; }
+    }
+    if (!hit) return { reason: "gone", monitorId: monitorId };
+    if (analyzer && (hit.analyzers || []).indexOf(analyzer) === -1) {
+      return { reason: "filtered", monitorId: monitorId, repoUrl: hit.repoUrl, analyzer: analyzer };
+    }
+    return null;
+  }
+
+  function deepLinkNote(info) {
+    var box = el("div", { class: "deeplink-note" });
+    var repo = String(info.repoUrl || "").replace(/^https?:\/\/(www\.)?github\.com\//, "");
+    if (info.reason === "filtered") {
+      box.appendChild(el("p", null,
+        repo + " is watched, but this analyzer is switched off for it, so there is " +
+        "no scheduled result to open here."));
+    } else if (info.reason === "unopenable") {
+      box.appendChild(el("p", null,
+        (repo || "That repository") + " is watched here, but its last sweep left nothing " +
+        "this page can open. The row below says what it knows."));
+    } else {
+      box.appendChild(el("p", null,
+        "That repository is not on this list. The link came from the scorecard, so the " +
+        "monitor has probably been removed since the grid was drawn."));
+    }
+    box.appendChild(el("a", { class: "deeplink-note-link", href: "#/monitors" },
+      "Open Monitors \u2192"));
+    return box;
+  }
+
+  /**
+   * Click the row's own open button, and scroll it into view.
+   *
+   * Returns false when the row has no button — the page renders one only when
+   * there is something to open, so that is a real state and the caller turns
+   * it into an "unopenable" note rather than a click that does nothing.
+   */
+  function clickMonitorRow(bodyId, monitorId) {
+    var body = document.getElementById(bodyId);
+    if (!body) return false;
+    var buttons = body.querySelectorAll("[data-monitor]");
+    for (var i = 0; i < buttons.length; i++) {
+      if (buttons[i].dataset.monitor !== monitorId) continue;
+      buttons[i].click();
+      if (typeof buttons[i].scrollIntoView === "function") {
+        buttons[i].scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+      return true;
+    }
+    return false;
+  }
+
   window.DashCore = {
     apiUrl: apiUrl,
     callApi: callApi,
@@ -2015,6 +2094,9 @@
     startUpgradeCheckout: startUpgradeCheckout,
     showQuotaBanner: showQuotaBanner,
     loadRuns: loadRuns,
+    findDeepLink: findDeepLink,
+    deepLinkNote: deepLinkNote,
+    clickMonitorRow: clickMonitorRow,
     me: function () { return lastMe; },
     refreshMe: hydrateHeader,
     // The three manual renderers, exposed so a result fetched from somewhere

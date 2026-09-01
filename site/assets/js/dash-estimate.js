@@ -799,13 +799,20 @@
 
   var watchLoaded = false;
 
+  var watchMonitors = [];
+  var watchDeepLink = null;
+
   function loadWatch(force) {
     var wrap = $("est-watch-body");
     if (!wrap) return Promise.resolve();
     if (watchLoaded && !force) return Promise.resolve();
     watchLoaded = true;
     return callApi("/api/monitors", null, "GET").then(function (res) {
-      renderWatch((res && res.monitors) || []);
+      // Kept, not just passed through: renderWatch is now called a second
+      // time by openMonitor, and a renderer that only ever sees its list as
+      // an argument cannot be called again.
+      watchMonitors = (res && res.monitors) || [];
+      renderWatch(watchMonitors);
     }).catch(function () {
       clear(wrap);
       wrap.appendChild(el("div", { class: "est-error" }, "Could not load monitors."));
@@ -816,6 +823,8 @@
     var wrap = $("est-watch-body");
     if (!wrap) return;
     clear(wrap);
+
+    if (watchDeepLink) wrap.appendChild(core.deepLinkNote(watchDeepLink));
 
     var watching = monitors.filter(function (m) {
       return (m.analyzers || []).indexOf("estimate") !== -1;
@@ -874,8 +883,8 @@
       // committed compose file worth pricing on demand.
       if (m.lastEstimate === null || totals.length || m.paused) {
         var actions = el("div", { class: "night-actions" });
-        var open = el("button", { type: "button", class: "btn btn-primary btn-sm" },
-          "Price it now \u2192");
+        var open = el("button", { type: "button", class: "btn btn-primary btn-sm",
+          "data-monitor": m.monitorId }, "Price it now \u2192");
         open.addEventListener("click", function () { openMonitored(m, open); });
         actions.appendChild(open);
         row.appendChild(actions);
@@ -925,5 +934,23 @@
 
   // Router hook: the panel wires itself at parse time; entering the view
   // (re)loads the automation card, which is the only part that goes stale.
-  window.DashEstimate = { load: loadWatch };
+  /**
+   * Open one watched repository's estimate, straight from a scorecard cell.
+   *
+   * The button is rendered only for a repo with something to price, so an
+   * absent one is "unopenable" — a real state, not a dead click.
+   */
+  function openMonitor(monitorId) {
+    return loadWatch().then(function () {
+      watchDeepLink = core.findDeepLink(watchMonitors, monitorId, "estimate");
+      renderWatch(watchMonitors);
+      if (watchDeepLink) return;
+      if (!core.clickMonitorRow("est-watch-body", monitorId)) {
+        watchDeepLink = { reason: "unopenable", monitorId: monitorId };
+        renderWatch(watchMonitors);
+      }
+    });
+  }
+
+  window.DashEstimate = { load: loadWatch, openMonitor: openMonitor };
 })();

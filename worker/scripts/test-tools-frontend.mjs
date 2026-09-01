@@ -45,8 +45,13 @@ group("the views exist, are routed, and own their panels");
   expect(/"optimizer", "estimate"/.test(router) &&
          /#\/optimizer/.test(router) && /#\/estimate/.test(router),
     "the router knows both views and both hashes");
-  expect(/window\.DashOptimizer\) window\.DashOptimizer\.load\(\)/.test(router) &&
-         /window\.DashEstimate\)\s+window\.DashEstimate\.load\(\)/.test(router),
+  // Both dispatches now check for a #/<tool>/watch/<monitorId> deep link
+  // before falling back to load(). Widened by exactly that branch and no
+  // more: this still fails if entering the bare view stops calling load().
+  const entersView = (mod) => new RegExp(
+    "window\\.Dash" + mod + "\\)\\s*\\{?\\s*(?:if \\(route\\.monitorId\\)[\\s\\S]{0,90}?else\\s+)?" +
+    "window\\.Dash" + mod + "\\.load\\(\\)").test(router);
+  expect(entersView("Optimizer") && entersView("Estimate"),
     "entering each view calls its module's load()");
   // Neither has a tab any more (D-8): the strip is Workspace + Monitors & CI,
   // and these two are reached from their card on the Workspace grid. The

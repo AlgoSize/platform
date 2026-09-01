@@ -81,6 +81,7 @@
     snippet: null,        // /api/ci/optimizer-snippet response
     hasApiKey: null,      // null = unknown yet; boolean once /api/keys answers
     monitors: null,       // /api/monitors monitors array, or null before load
+    deepLink: null,       // why a scorecard link could not be followed
   };
 
   function loadEntries() {
@@ -330,6 +331,8 @@
     if (!wrap) return;
     while (wrap.firstChild) wrap.removeChild(wrap.firstChild);
 
+    if (state.deepLink) wrap.appendChild(core.deepLinkNote(state.deepLink));
+
     if (state.monitors === null) {
       wrap.appendChild(core.errorState("Could not load monitors."));
       return;
@@ -380,8 +383,8 @@
       // possible outcome is "still no config".
       if (!m.lastAlgo || m.lastAlgo.functions) {
         var actions = el("div", { class: "night-actions" });
-        var open = el("button", { type: "button", class: "btn btn-ghost btn-sm" },
-          "Show the grades \u2192");
+        var open = el("button", { type: "button", class: "btn btn-ghost btn-sm",
+          "data-monitor": m.monitorId }, "Show the grades \u2192");
         var slot = el("div");
         open.addEventListener("click", function () { openMonitored(m, open, slot); });
         actions.appendChild(open);
@@ -524,8 +527,28 @@
     attach();
   }
 
+  /**
+   * Open one watched repository's grades, straight from a scorecard cell.
+   *
+   * This page renders the open button ONLY when the repo has gradeable
+   * entries, so a valid link can land on a row with no button — "unopenable"
+   * rather than a click that quietly does nothing.
+   */
+  function openMonitor(monitorId) {
+    return load().then(function () {
+      state.deepLink = core.findDeepLink(state.monitors, monitorId, "algo");
+      renderNight();
+      if (state.deepLink) return;
+      if (!core.clickMonitorRow("opt-night-body", monitorId)) {
+        state.deepLink = { reason: "unopenable", monitorId: monitorId };
+        renderNight();
+      }
+    });
+  }
+
   window.DashOptimizer = {
     load: load,
+    openMonitor: openMonitor,
     // Called by dashboard.js after every successful bench run, BEFORE it
     // renders, so the verdict can offer the watch handoff.
     onBenchResult: function (bench) { state.bench = bench; },
