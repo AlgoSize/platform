@@ -43,23 +43,29 @@ export const SCORECARD_COLUMNS = Object.freeze([
   // vulnerable dependencies and twelve critical injection findings in its own
   // code graded "A · 0" under the old label, which is the most flattering
   // possible reading of half a scan.
-  { id: "security",     label: "Dependencies", analyzer: "vuln" },
+  { id: "security",     label: "Dependencies", analyzer: "vuln",
+    idiom: "grade · advisories", glyph: "!" },
   // The other half, from the same analyzer and the same sweep. Deliberately
   // its own column rather than folded into the grade above: the two have
   // different owners and opposite fixes — one is `npm audit fix`, the other is
   // a code change — and a single letter blending them could be traced back to
   // neither report.
-  { id: "code",         label: "Code",         analyzer: "vuln" },
+  { id: "code",         label: "Code",         analyzer: "vuln",
+    idiom: "grade · source findings", glyph: "\u2039\u203a" },
   // Two money columns, and the labels have to keep them apart. "Cost" alone
   // sat above the compose-file ESTIMATOR — a projection from list prices for
   // infrastructure that may not exist yet — while the analyzer that reads
   // your actual bill had no column at all. One of those is a forecast and the
   // other is a fact, and a single word for both is how a reader comes away
   // believing the forecast is the bill.
-  { id: "cost",         label: "Infra cost",   analyzer: "estimate" },
-  { id: "spend",        label: "Cloud spend",  analyzer: "cost" },
-  { id: "complexity",   label: "Complexity",   analyzer: "algo" },
-  { id: "architecture", label: "Architecture", analyzer: "arch" },
+  { id: "cost",         label: "Infra cost",   analyzer: "estimate",
+    idiom: "forecast / mo", glyph: "$\u2192" },
+  { id: "spend",        label: "Cloud spend",  analyzer: "cost",
+    idiom: "billed / mo", glyph: "$\u2190" },
+  { id: "complexity",   label: "Complexity",   analyzer: "algo",
+    idiom: "worst vs ceiling", glyph: "\u0192" },
+  { id: "architecture", label: "Architecture", analyzer: "arch",
+    idiom: "findings", glyph: "\u25ab" },
 ]);
 
 function jsonResponse(body, status = 200) {
@@ -78,7 +84,12 @@ export async function scorecardHandler(request, env) {
 
   const monitors = await listMonitors(env, ctxOrg.orgId);
   return jsonResponse({
-    columns: SCORECARD_COLUMNS.map((c) => ({ id: c.id, label: c.label })),
+    // idiom and glyph travel WITH the label. The frontend used to hold its
+    // own parallel column list to get them, which is how a renamed column
+    // ends up captioned as the one it replaced.
+    columns: SCORECARD_COLUMNS.map((c) => ({
+      id: c.id, label: c.label, idiom: c.idiom, glyph: c.glyph,
+    })),
     rows: monitors.map(scorecardRow),
     // Said out loud so the UI never has to guess why a repo is missing: the
     // scorecard grades MONITORED repositories, and a one-off manual scan is
@@ -105,6 +116,9 @@ function scorecardRow(m) {
     attemptedAt: m.lastAttemptAt,
     status:    m.lastStatus,
     error:     m.lastError,
+    // Trend rides on the row rather than inside the cell so it is obvious at
+    // a glance that exactly one column has one, and which.
+    trends: { security: depsTrend(m) },
     cells: {
       security:     securityCell(m, on, stale),
       code:         codeCell(m, on, stale),
@@ -153,6 +167,48 @@ function skipFor(m, analyzer) {
   if (!hit) return null;
   return { note: explainUnavailable(hit.reason), fix: fixUnavailable(hit.reason) };
 }
+/**
+ * The movement since the previous sweep, for the ONE column that stores it.
+ *
+ * `last_delta_json` is written by the sweep itself, because the delta cannot
+ * be recomputed on read: `last_advisory_ids` holds the current set, and the
+ * previous set is gone the moment it is overwritten. It covers dependency
+ * advisories and nothing else.
+ *
+ * The other five columns store no prior value at all, so they get no trend.
+ * Rendering one for them would mean inventing a comparison — and the obvious
+ * placeholder, a flat "=", is the worst available answer: it asserts "no
+ * change" about a question nothing ever asked. Migration 0009 makes the same
+ * point about this column's own NULL, which is why `unknown` is a state here
+ * rather than a zero:
+ *
+ *   null      the monitor has not completed a sweep since the column existed,
+ *             or this analyzer has no delta — UNKNOWN, rendered as nothing
+ *   baseline  the first sweep. It stores a zero because nothing can be "new"
+ *             against a set that did not exist yet, and that zero is NOT a
+ *             comparison: rendering it as "no new" would have the grid report
+ *             stability across a window one sweep wide.
+ *   total 0   a second or later sweep found nothing new — a real "no change"
+ *   total > 0 n new advisories, with the severity mix that makes it readable
+ */
+function depsTrend(m) {
+  const d = m.lastDelta;
+  if (!d || typeof d.total !== "number") return null;
+  if (d.baseline) return null;
+  if (d.total === 0) return { direction: "flat", label: "no new", count: 0 };
+  // Lead with the worst severity that actually moved: "+2 crit" is the
+  // sentence a reader acts on, "+2" is one they have to go and look up.
+  const order = ["critical", "high", "medium", "low", "unknown"];
+  const worst = order.find((k) => Number(d.counts && d.counts[k]) > 0);
+  const short = { critical: "crit", high: "high", medium: "med", low: "low", unknown: "unknown" };
+  const n = worst ? Number(d.counts[worst]) : d.total;
+  return {
+    direction: "up",
+    label: "+" + n + (worst ? " " + short[worst] : ""),
+    count: d.total,
+  };
+}
+
 function graded(value, note, rank, stale) {
   return { kind: stale ? "stale" : "grade", value, note, fix: null, rank };
 }

@@ -101,7 +101,8 @@ function publicMonitor(m) {
     // zero — the dashboard renders the first as no badge and the second as
     // "no change", because "we don't know" must never be shown as "all clear".
     lastDelta: m.lastDelta
-      ? { total: m.lastDelta.total, counts: m.lastDelta.counts, at: m.lastDelta.at }
+      ? { total: m.lastDelta.total, counts: m.lastDelta.counts,
+          baseline: m.lastDelta.baseline, at: m.lastDelta.at }
       : null,
     // Which analyzers this monitor runs (migrations/0016), plus a one-number
     // summary per secondary analyzer so the row can say what the last sweep

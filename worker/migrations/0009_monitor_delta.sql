@@ -15,4 +15,12 @@
 -- monitor has not completed a sweep since this column existed", which the UI
 -- renders as no badge rather than as a zero — an unknown delta and a delta of
 -- zero are different facts and must not look the same.
+--
+-- Later addition to the SHAPE, not to the schema: the object also carries
+-- "baseline":<bool>. A first sweep stores a total of 0 because nothing can be
+-- new against a set that did not exist yet, which made it indistinguishable
+-- from a later sweep that genuinely found nothing — the same conflation this
+-- column was added to avoid, one level down. Rows written before the flag are
+-- read by the shape their writer produced: the baseline branch stored an empty
+-- "counts" object where every real diff stored an all-severity tally.
 ALTER TABLE monitors ADD COLUMN last_delta_json TEXT;

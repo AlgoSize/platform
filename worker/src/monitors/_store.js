@@ -591,9 +591,20 @@ function parseDelta(raw) {
   try {
     const d = JSON.parse(raw);
     if (!d || typeof d.total !== "number" || d.total < 0) return null;
+    const counts = (d.counts && typeof d.counts === "object") ? d.counts : {};
     return {
       total:  d.total,
-      counts: (d.counts && typeof d.counts === "object") ? d.counts : {},
+      counts,
+      // Was this the monitor's FIRST completed sweep? A baseline run stores a
+      // delta of zero on purpose (there was no previous set to be new
+      // against), so without this the two zeroes are indistinguishable and a
+      // repo on day one reports the same "nothing changed" as one swept
+      // nightly for a month. Rows written before the flag existed are read
+      // from the shape their writer produced: the baseline branch stored an
+      // EMPTY counts object, every real diff an all-severity tally.
+      baseline: typeof d.baseline === "boolean"
+        ? d.baseline
+        : d.total === 0 && Object.keys(counts).length === 0,
       at:     typeof d.at === "number" ? d.at : null,
     };
   } catch { return null; }

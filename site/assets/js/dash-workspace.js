@@ -228,8 +228,22 @@
 
     var head = el("div", { class: "scorecard-row scorecard-head" });
     head.appendChild(el("span", { class: "scorecard-repo mono" }, "Repository"));
+    // Each header carries the unit its column is measured in. Six columns of
+    // letters, dollars and Big-O sitting side by side invite a reader to
+    // average them into an overall score; naming the idiom under each one is
+    // how the grid says there is no such number without a paragraph saying so.
     (data.columns || []).forEach(function (c) {
-      head.appendChild(el("span", { class: "scorecard-cell mono" }, c.label));
+      var th = el("span", { class: "scorecard-cell scorecard-th mono" });
+      var top = el("span", { class: "scorecard-th-label" });
+      if (c.glyph) {
+        top.appendChild(el("span", { class: "scorecard-th-glyph", "aria-hidden": "true" }, c.glyph));
+      }
+      top.appendChild(el("span", null, c.label));
+      th.appendChild(top);
+      // The API sends the idiom; an older Worker that does not is a missing
+      // caption, not a broken header.
+      if (c.idiom) th.appendChild(el("span", { class: "scorecard-th-idiom" }, c.idiom));
+      head.appendChild(th);
     });
     table.appendChild(head);
 
@@ -297,6 +311,7 @@
     if (cell.kind === "grade" || cell.kind === "stale") {
       var line = el("div", { class: "scorecard-value-row" });
       line.appendChild(el("span", { class: "scorecard-value mono" }, cell.value));
+      appendTrend(line, r, col);
       if (cell.kind === "stale") {
         // The number is real but old. Saying so beside it is the difference
         // between a stale grade and a wrong one.
@@ -358,6 +373,38 @@
     var attrs = { class: "scorecard-note mono" };
     if (text) attrs.title = text;
     return el("span", attrs, text);
+  }
+
+  var TREND = {
+    up:   { cls: "scorecard-trend-up",   glyph: "\u2191" },
+    flat: { cls: "scorecard-trend-flat", glyph: "\u2013" },
+  };
+
+  /**
+   * Movement since the previous sweep, on the one column that has any.
+   *
+   * The Worker sends `trends` keyed by column id and it holds exactly one
+   * entry, because the dependency sweep is the only one that stores its own
+   * delta — the rest keep a current baseline and nothing to compare it with.
+   * So five of the six columns show no trend at all, and that is the correct
+   * rendering rather than a gap to fill: a flat "=" beside a number nobody
+   * compared would be the grid asserting stability it never measured.
+   *
+   * A null trend on the deps column itself is the same statement — either the
+   * monitor has not completed a sweep since the delta column existed, or the
+   * analyzer is off. Unknown, not zero.
+   */
+  function appendTrend(line, r, col) {
+    var t = r.trends && r.trends[col.id];
+    if (!t) return;
+    var tone = TREND[t.direction];
+    if (!tone) return;
+    var chip = el("span", { class: "scorecard-trend mono " + tone.cls });
+    // The arrow is decoration on a label that already reads as a direction,
+    // so a screen reader gets "+2 crit" and not "up arrow plus two crit".
+    chip.appendChild(el("span", { "aria-hidden": "true" }, tone.glyph));
+    chip.appendChild(el("span", null, t.label));
+    line.appendChild(chip);
   }
 
   function appendFix(wrap, cell) {
