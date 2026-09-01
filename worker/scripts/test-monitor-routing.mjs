@@ -378,6 +378,106 @@ group("the scorecard grades only what was measured");
 }
 
 // ===========================================================================
+group("every column says what it is measured in, and only one has a trend");
+// ===========================================================================
+{
+  const env = makeEnv();
+  await seedOrg(env, "org_t", [{ userId: "u_t", email: "t@acme.test", role: "owner" }]);
+
+  // Six columns of letters, dollars and Big-O side by side read as one score
+  // unless each says what it counts. The caption has to travel WITH the label
+  // from here — a parallel list in the frontend is how a renamed column ends
+  // up captioned as the one it replaced.
+  expect(SCORECARD_COLUMNS.every((c) => c.idiom && c.glyph),
+    `every column carries an idiom and a glyph (${SCORECARD_COLUMNS.length} columns)`);
+  expect(new Set(SCORECARD_COLUMNS.map((c) => c.idiom)).size === SCORECARD_COLUMNS.length,
+    "…and no two share one — two columns with the same caption is the conflation the split was for");
+  // The two money columns are the pair that used to be one word. Their
+  // captions have to disagree, because one is a projection and one is a bill.
+  const idiom = (id) => SCORECARD_COLUMNS.find((c) => c.id === id).idiom;
+  expect(/forecast/.test(idiom("cost")) && /billed/.test(idiom("spend")),
+    "the forecast column says forecast and the bill column says billed");
+
+  const monitorOf = async (repo, opts) => {
+    const m = await createMonitor(env, {
+      orgId: "org_t", repoUrl: `https://github.com/acme/${repo}`, branch: "main",
+      createdBy: "u_t", analyzers: ["vuln"],
+    });
+    if (opts) await recordMonitorRun(env, m.monitorId, opts);
+    return m;
+  };
+
+  // Four monitors, one per trend state.
+  await monitorOf("never", null);
+  await monitorOf("first", {
+    ranAt: NOW, resultHash: "h", advisoryIds: ["A/npm/x", "B/npm/y"],
+    severities: { critical: 0, high: 1, medium: 0, low: 1, unknown: 0 },
+    // What run.js writes for a BASELINE sweep: a zero, flagged as a starting
+    // point rather than a comparison.
+    delta: { total: 0, counts: {}, baseline: true, at: NOW },
+  });
+  await monitorOf("quiet", {
+    ranAt: NOW, resultHash: "h", advisoryIds: ["A/npm/x"],
+    severities: { critical: 0, high: 0, medium: 0, low: 1, unknown: 0 },
+    delta: { total: 0, counts: { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 },
+             baseline: false, at: NOW },
+  });
+  await monitorOf("worse", {
+    ranAt: NOW, resultHash: "h", advisoryIds: ["A/npm/x", "C/npm/z"],
+    severities: { critical: 2, high: 1, medium: 0, low: 0, unknown: 0 },
+    delta: { total: 3, counts: { critical: 2, high: 1, medium: 0, low: 0, unknown: 0 },
+             baseline: false, at: NOW },
+  });
+
+  const data = await (await scorecardHandler(authed("u_t"), env)).json();
+  const served = data.columns.find((c) => c.id === "security");
+  expect(served && served.idiom === idiom("security") && served.glyph,
+    "the endpoint serves the idiom and glyph, so the frontend needs no column list of its own");
+
+  const trendOf = (repo) => (data.rows.find((r) => r.repo === `acme/${repo}`) || {}).trends;
+  expect(trendOf("never").security === null,
+    "a monitor that has never swept reports no trend — unknown, not 'no change'");
+  expect(trendOf("first").security === null,
+    "…and neither does a BASELINE sweep: its zero is a starting point, not a comparison");
+  expect(trendOf("quiet").security && trendOf("quiet").security.direction === "flat",
+    "a second sweep that found nothing new reports a real flat — that one IS a measurement");
+  const worse = trendOf("worse").security;
+  expect(worse && worse.direction === "up" && worse.count === 3 && /crit/.test(worse.label),
+    `new advisories lead with the worst severity that actually moved (got ${worse && worse.label})`);
+
+  // The other five columns store no prior value at all, so a trend for them
+  // could only be invented — and the obvious placeholder, a flat "no change",
+  // is the worst available answer: it asserts stability about a question
+  // nothing ever asked.
+  const other = SCORECARD_COLUMNS.filter((c) => c.id !== "security").map((c) => c.id);
+  expect(data.rows.every((r) => other.every((id) => r.trends[id] === undefined)),
+    `no trend is invented for the columns that store no delta (${other.join(", ")})`);
+
+  // Rows written before the flag existed still have to land on the right side
+  // of the line, and they can: the baseline branch stored an EMPTY counts
+  // object where every real diff stored an all-severity tally, so the shape
+  // its writer produced is the flag. Written as raw JSON rather than through
+  // recordMonitorRun, because that is exactly what is already in the table.
+  const legacy = await createMonitor(env, {
+    orgId: "org_t", repoUrl: "https://github.com/acme/legacy", branch: "main",
+    createdBy: "u_t", analyzers: ["vuln"],
+  });
+  const setDelta = async (json) => {
+    await env.DB.prepare(
+      "UPDATE monitors SET last_run_at = ?, last_status = 'ok', last_advisory_ids = '[]', last_delta_json = ? WHERE monitor_id = ?",
+    ).bind(NOW, json, legacy.monitorId).run();
+    const rows = await (await scorecardHandler(authed("u_t"), env)).json();
+    return rows.rows.find((r) => r.repo === "acme/legacy").trends.security;
+  };
+  expect(await setDelta(JSON.stringify({ total: 0, counts: {}, at: NOW })) === null,
+    "a pre-flag baseline row is read as a baseline, not as a measured 'no change'");
+  const legacyFlat = await setDelta(JSON.stringify(
+    { total: 0, counts: { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 }, at: NOW }));
+  expect(legacyFlat && legacyFlat.direction === "flat",
+    "…and a pre-flag zero-diff row keeps its real flat");
+}
+
+// ===========================================================================
 group("running a monitor on demand");
 // ===========================================================================
 {

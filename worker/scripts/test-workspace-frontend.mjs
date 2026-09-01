@@ -169,6 +169,72 @@ group("the scorecard never turns 'not measured' into a pass");
 }
 
 // ===========================================================================
+group("the header says what each column is measured in");
+// ===========================================================================
+{
+  // The caption travels with the label from the Worker. A parallel list in
+  // the frontend would be a second place to rename a column, and the two
+  // would disagree the first time only one of them was edited.
+  expect(/idiom: c\.idiom/.test(scorecard) && /glyph: c\.glyph/.test(scorecard),
+    "the endpoint serves idiom and glyph alongside the label");
+  expect(/c\.idiom/.test(wsJs) && /c\.glyph/.test(wsJs),
+    "…and dash-workspace.js renders the API's values, not its own");
+  expect(!/"Infra cost"|"Cloud spend"|"Dependencies"/.test(wsJs),
+    "no column label is hardcoded in the frontend");
+  // Every column needs one, or the ones without a caption read as the units
+  // of the column beside them.
+  const idioms = matchAll(scorecard, /idiom:\s*"([^"]+)"/g);
+  const glyphs = matchAll(scorecard, /glyph:\s*"((?:[^"\\]|\\.)+)"/g);
+  const cols   = matchAll(scorecard, /\{ id: "([a-z]+)",/g);
+  expect(idioms.length === cols.length && glyphs.length === cols.length,
+    `all ${cols.length} columns carry both (idioms: ${idioms.length}, glyphs: ${glyphs.length})`);
+  // The head row is uppercase and tracked out; the caption must not be, or
+  // the header reads as two labels stacked rather than a label and its unit.
+  expect(/\.scorecard-th-idiom\s*\{[^}]*text-transform:\s*none/.test(css),
+    "the caption is set apart from the label, not styled as a second one");
+  expect(/aria-hidden": "true"[^}]*\}, c\.glyph/.test(wsJs) ||
+         /class: "scorecard-th-glyph", "aria-hidden": "true" \}, c\.glyph/.test(wsJs),
+    "the glyph is decoration — hidden from a screen reader, which gets the label");
+}
+
+// ===========================================================================
+group("exactly one column carries a trend, because exactly one stores a delta");
+// ===========================================================================
+{
+  // last_delta_json is written BY the sweep because it cannot be recomputed
+  // on read — the previous advisory set is gone the moment the current one
+  // overwrites it. The other five analyzers keep a current baseline and
+  // nothing to compare it against, so a trend for them could only be made up.
+  expect(/trends: \{ security: depsTrend\(m\) \}/.test(scorecard),
+    "the row carries a trend for the dependency column and no other");
+  expect(/function depsTrend/.test(scorecard) && /m\.lastDelta/.test(scorecard),
+    "…and it comes from the stored delta rather than from a diff computed on read");
+  expect(/if \(d\.baseline\) return null;/.test(scorecard),
+    "a baseline sweep reports NO trend — its zero is a starting point, not a comparison");
+  expect(/if \(!t\) return;/.test(wsJs),
+    "a null or absent trend renders nothing, never a flat placeholder");
+  // "=" beside a number nobody compared is the grid asserting stability it
+  // never measured. There is no such glyph anywhere in the renderer.
+  expect(!/"=" *\)/.test(wsJs) && !/scorecard-trend-same/.test(wsJs + css),
+    "there is no 'unchanged' marker for the columns that were never compared");
+  // Composed class names are the one thing the styled-class guard below
+  // cannot see, so the two directions are pinned by name here.
+  for (const dir of ["up", "flat"]) {
+    expect(wsJs.includes(`scorecard-trend-${dir}`) &&
+           new RegExp(`\\.scorecard-trend-${dir}\\b`).test(css),
+      `the "${dir}" trend has a class in the renderer and a rule in the stylesheet`);
+  }
+  expect(/color: var\(--sev-critical\)/.test(
+    css.slice(css.indexOf(".scorecard-trend-up"), css.indexOf(".scorecard-trend-flat"))),
+    "…and 'up' is styled as bad news — this column counts new advisories, and there are no good ones");
+  // The same zero on the Monitors screen. Two screens reading one column have
+  // to agree about what it says, or the scorecard and the monitor row report
+  // different things about the same sweep.
+  expect(/d\.baseline/.test(monJs) && /"baseline"/.test(monJs),
+    "the monitor row calls a baseline a baseline rather than 'no change'");
+}
+
+// ===========================================================================
 group("monitor health is rendered as four distinct states");
 // ===========================================================================
 {

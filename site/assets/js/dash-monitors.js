@@ -305,19 +305,24 @@
    *   null      no sweep has completed since the column existed. Renders
    *             NOTHING — an unknown delta must never be shown as "no change",
    *             which would assert a clean bill of health nobody measured.
-   *   total 0   swept, nothing new. Renders "no change", which is a real
-   *             result and worth saying.
+   *   baseline  the first sweep. Stored as zero by the Worker rather than as
+   *             the size of the whole list, because nothing can be "new"
+   *             against a set that did not exist yet. Says "baseline" — the
+   *             zero it holds is a starting point, not a comparison, and
+   *             "no change" would be a claim about a window one sweep wide.
+   *   total 0   a later sweep found nothing new. Renders "no change", which
+   *             is a real result and worth saying.
    *   total > 0 one chip per severity present, worst first.
-   *
-   * A baseline sweep is stored as zero by the Worker rather than as the size
-   * of the whole list, so a first run reads "no change" rather than claiming
-   * every advisory it discovered is new.
    */
   function deltaBadges(m) {
     var d = m.lastDelta;
     if (!d || typeof d.total !== "number") return null;
 
     var box = el("span", { class: "monitor-delta" });
+    if (d.baseline) {
+      box.appendChild(el("span", { class: "chip chip-muted" }, "baseline"));
+      return box;
+    }
     if (d.total === 0) {
       box.appendChild(el("span", { class: "chip chip-muted" }, "no change"));
       return box;

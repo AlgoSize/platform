@@ -456,10 +456,16 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
     // whole list: the first sweep of a repo "discovers" every advisory, and
     // calling that "+14 new since last run" would be false — there was no
     // last run. diff.isBaseline is exactly that distinction.
+    // ...and say WHICH of the two zeroes this is. A baseline zero and a
+    // swept-and-found-nothing zero are the same number and opposite claims,
+    // and until this flag existed a reader could only tell them apart by
+    // noticing that `counts` was empty rather than all-zero. The scorecard
+    // shows the second as "no new" and the first as nothing at all.
     delta: {
-      total:  diff.isBaseline ? 0 : diff.newAdvisories.length,
-      counts: diff.isBaseline ? {} : countBySeverityOrdered(diff.newAdvisories),
-      at:     nowSec,
+      total:    diff.isBaseline ? 0 : diff.newAdvisories.length,
+      counts:   diff.isBaseline ? {} : countBySeverityOrdered(diff.newAdvisories),
+      baseline: !!diff.isBaseline,
+      at:       nowSec,
     },
   });
 

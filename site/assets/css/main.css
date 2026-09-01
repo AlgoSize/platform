@@ -4540,6 +4540,50 @@ a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
 }
 .scorecard-cell { flex: 1 1 128px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .scorecard-value-row { display: flex; gap: var(--s-2); align-items: baseline; flex-wrap: wrap; }
+
+/* Column header: the label, and under it the unit that column is measured in.
+   The head row is uppercase and tracked-out; the idiom deliberately is not —
+   it is a caption, and setting it in the same treatment as the label would
+   make the header read as two labels. */
+.scorecard-th { gap: 3px; }
+.scorecard-th-label { display: flex; gap: var(--s-1); align-items: baseline; min-width: 0; }
+.scorecard-th-glyph { color: var(--text-muted); font-weight: 700; }
+.scorecard-th-idiom {
+  font-size: 0.58rem;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Movement since the previous sweep. Only the Dependencies column has one —
+   see appendTrend() for why the other five show nothing rather than a flat
+   marker. "up" is always the wrong direction here: this column counts new
+   advisories, and there is no such thing as a good one. */
+.scorecard-trend {
+  display: inline-flex;
+  gap: 3px;
+  align-items: baseline;
+  flex: 0 0 auto;
+  font-size: 0.62rem;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.scorecard-trend-up {
+  color: var(--sev-critical);
+  border: 1px solid color-mix(in srgb, var(--sev-critical) 40%, transparent);
+  background: color-mix(in srgb, var(--sev-critical) 12%, transparent);
+}
+/* A measured "nothing new" is a real result and reads as calm, not as absence
+   — absence is the five columns that render no chip at all. */
+.scorecard-trend-flat {
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
 .scorecard-value {
   font-size: 0.86rem;
   font-weight: 700;
