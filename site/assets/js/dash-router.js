@@ -40,8 +40,20 @@
     // architecture comment links to. An arch run's artefact is the map, not
     // the report viewer, so it needs its own addressable route rather than
     // borrowing #/report/. Bare #/arch still opens the live explorer.
+    // A trailing segment names ONE component inside that run's map, so a
+    // reviewer can be sent to the node under discussion rather than to a
+    // 17-service graph with a note saying which box to look for.
     if (h.indexOf("#/arch/") === 0) {
-      return { view: "arch", runId: decodeURIComponent(h.slice("#/arch/".length)) };
+      var archRest = h.slice("#/arch/".length);
+      var slash = archRest.indexOf("/");
+      if (slash >= 0) {
+        return {
+          view: "arch",
+          runId: decodeURIComponent(archRest.slice(0, slash)),
+          componentId: decodeURIComponent(archRest.slice(slash + 1)),
+        };
+      }
+      return { view: "arch", runId: decodeURIComponent(archRest) };
     }
     // Account sub-routes. Every section is a real link, so someone can be
     // sent straight to Billing and the back button walks back through the
@@ -102,7 +114,7 @@
     // The two tool pages whose nightly half arrived later (D-9). Both are
     // idempotent, so re-entering the view costs one cached call.
     if (route.view === "arch"      && window.DashArch) {
-      if (route.runId) window.DashArch.openRun(route.runId);
+      if (route.runId) window.DashArch.openRun(route.runId, route.componentId);
       else window.DashArch.load();
     }
     if (route.view === "scanner"   && window.DashScanner)   window.DashScanner.load();

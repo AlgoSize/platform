@@ -161,10 +161,16 @@ function edgeMeta(edge) {
  * dropped into that pipeline without the rules engine ever seeing it.
  *
  * `confidence` is 'confirmed' when the parser cited a file for the fact and
- * 'unconfirmed' otherwise. Today buildGraph cites everything it emits, so in
+ * 'unconfirmed' otherwise. buildGraph cites everything it emits, so in
  * practice every node and edge is confirmed — the field exists because Phase 2
  * introduces edges that were observed at runtime but never declared, and those
  * genuinely are unconfirmed until someone reconciles them.
+ *
+ * That "in practice every node is confirmed" was written as a description of
+ * intent and was false in fact for as long as this file has existed: the
+ * evidence predicate below did not recognise the string form buildGraph
+ * actually emits, so every graph came back wholly unconfirmed. It went
+ * unseen because the X-ray never drew the field. See hasEvidence().
  */
 export function enrichGraph(graph) {
   if (!graph || typeof graph !== "object") return graph;
@@ -198,6 +204,13 @@ export function enrichGraph(graph) {
 function hasEvidence(x) {
   if (!x || !x.evidence) return false;
   if (Array.isArray(x.evidence)) return x.evidence.length > 0;
+  // buildGraph cites as a STRING — `evidence(path, line)` returns
+  // `path:line` — and this predicate only understood arrays and {file}
+  // objects. Every node and edge therefore came back `unconfirmed` while
+  // carrying a perfectly good citation, and nothing noticed because no
+  // surface rendered the field. Marking an attested fact unattested is the
+  // same class of lie as the reverse, so the string form is handled first.
+  if (typeof x.evidence === "string") return x.evidence.trim() !== "";
   return typeof x.evidence === "object" && !!x.evidence.file;
 }
 

@@ -79,6 +79,78 @@
 
   var SEV_HATCH = { critical: 6, high: 7, medium: 9 };   // low: no fill at all
 
+  // ---------------------------------------------------------------------
+  // The analyzer's own vocabularies
+  // ---------------------------------------------------------------------
+  //
+  // These three tables mirror what worker/src/analyzers/architecture emits.
+  // They are not presentation choices we are free to extend: a kind, an
+  // origin or a confidence the analyzer never produces must not appear on
+  // this map, and one it DOES produce must never render blank.
+
+  // buildGraph's eleven node kinds. The glyph is the grayscale channel —
+  // kind has to survive a PNG export and a colour-blind reader, so it is
+  // never carried by colour.
+  var KIND = {
+    service:         { glyph: "▣", desc: "long-running HTTP/RPC process" },
+    worker:          { glyph: "⟳", desc: "edge or queue worker" },
+    database:        { glyph: "▤", desc: "relational or document store" },
+    queue:           { glyph: "≣", desc: "message queue or topic" },
+    kv:              { glyph: "⌗", desc: "key-value / cache namespace" },
+    bucket:          { glyph: "▥", desc: "object storage" },
+    cron:            { glyph: "◷", desc: "scheduled trigger" },
+    durable_object:  { glyph: "◈", desc: "single-instance stateful actor" },
+    external_api:    { glyph: "↗", desc: "third-party endpoint — the boundary" },
+    static_site:     { glyph: "▭", desc: "built assets served as-is" },
+    compose_service: { glyph: "⧉", desc: "container from docker-compose" },
+  };
+  // A kind the analyzer grows before this table does must still draw, and
+  // must not silently borrow another kind's glyph. "?" says "unrecognised"
+  // rather than asserting a category.
+  var KIND_UNKNOWN = { glyph: "?", desc: "kind not recognised by this build" };
+  function kindOf(n) { return (n && KIND[n.kind]) || KIND_UNKNOWN; }
+  function kindLabel(n) { return (n && n.kind ? String(n.kind) : "node").toUpperCase(); }
+
+  // enrichGraph's edge origin. This is the one thing on the map that says
+  // whether a line is a declaration or an observation, and the difference
+  // matters more than any finding: an edge nobody declared is a shadow
+  // dependency, and it is drawn to alarm.
+  //
+  // `dash: null` means "leave the existing severity dashing alone". Every
+  // edge the static parsers emit is `static` by construction, so today that
+  // branch is the only one taken and nothing about the current map moves.
+  var ORIGIN = {
+    static:  { label: "static",  gloss: "declared, never observed", dash: null,    width: null, stroke: null,     alarm: false },
+    both:    { label: "both",    gloss: "declared and observed",    dash: "none",  width: 2.4,  stroke: "#4a5568", alarm: false },
+    runtime: { label: "runtime", gloss: "observed, never declared — shadow dependency",
+               dash: "2 3", width: 2.8, stroke: "#fb7185", alarm: true },
+  };
+  function originOf(e) { return (e && ORIGIN[e.origin]) || null; }
+
+  // enrichGraph's confidence. `confirmed` means the parser cited a file for
+  // the fact; `unconfirmed` means it did not. Only `unconfirmed` is drawn —
+  // marking the confirmed majority would make the exception invisible.
+  //
+  // The evidence check is not a second opinion on the analyzer, it is a
+  // refusal to state something the data in hand contradicts. Snapshots and
+  // runs store the ENRICHED graph, so every row written before the
+  // hasEvidence fix (it did not recognise the `path:line` string form and
+  // so marked everything unconfirmed) carries that verdict permanently. The
+  // claim this flag drives is the words "no file cites this"; printing it
+  // over a node that visibly cites a file would be a fresh false statement
+  // made on the strength of an old one. A node with no citation and an
+  // unconfirmed verdict is the real case, and it still draws.
+  function hasCitation(x) {
+    if (!x) return false;
+    if (Array.isArray(x.files) && x.files.length) return true;
+    if (Array.isArray(x.evidence)) return x.evidence.length > 0;
+    if (typeof x.evidence === "string") return x.evidence.trim() !== "";
+    return !!(x.evidence && typeof x.evidence === "object" && x.evidence.file);
+  }
+  function isUnconfirmed(x) {
+    return !!x && x.confidence === "unconfirmed" && !hasCitation(x);
+  }
+
   var SVG_NS = "http://www.w3.org/2000/svg";
 
   function svgEl(tag, attrs) {
@@ -128,6 +200,11 @@
     cluster: null,
     selected: null,    // node id (level 1) or cluster id (level 0)
     pinned: null,      // node id at level 2
+    // A component named by a link or a picker that this run's map does not
+    // contain. Held in state rather than poked into the DOM once, because
+    // loadDiff and loadDrift both re-render when they settle and a one-shot
+    // insertion was silently wiped a few hundred milliseconds later.
+    missingComponent: null,
     // Diff state. newKeys/resolvedItems null = no comparison was possible,
     // which renders as no diff affordance at all rather than "nothing
     // changed" — an unmeasured diff is not an empty one.
@@ -514,10 +591,19 @@
 
     var stroke = opts.selected ? C.accent
       : (opts.severity ? SEV_EDGE[opts.severity] : C.border);
-    g.appendChild(svgEl("rect", {
+    // An unconfirmed node is one the parser could not cite a file for. It
+    // gets a dashed border and a washed fill so it never reads as an
+    // attested part of the system — drawing it identically to a confirmed
+    // node is the "render unmeasured as clean" failure, in map form.
+    var box = svgEl("rect", {
       width: w, height: h, rx: 12,
       fill: C.panel, stroke: stroke, "stroke-width": opts.selected ? 2.5 : 1.4,
-    }));
+    });
+    if (opts.unconfirmed) {
+      box.setAttribute("stroke-dasharray", "6 4");
+      box.setAttribute("fill-opacity", "0.45");
+    }
+    g.appendChild(box);
     // Hatch overlay — the colour-independent half of the severity encoding.
     if (opts.severity && SEV_HATCH[opts.severity]) {
       g.appendChild(svgEl("rect", {
@@ -592,13 +678,23 @@
     // Hot edges — carrying a high or critical finding under the active lens —
     // go solid and coloured; the rest stay thin and dashed, so the hot path
     // reads before any label does.
-    g.appendChild(svgEl("line", {
+    // Origin overrides severity styling, because it answers a prior
+    // question: severity says how bad a declared thing is, origin says
+    // whether the thing was declared at all. A shadow dependency stays loud
+    // even under a lens that finds nothing wrong with it.
+    var o = opts.origin || null;
+    var line = svgEl("line", {
       x1: t.x1, y1: t.y1, x2: t.x2, y2: t.y2,
-      stroke: opts.stroke || C.borderSoft,
-      "stroke-width": opts.width || 1.4,
-      "stroke-dasharray": opts.hot || opts.lit || opts.solid ? "none" : "5 4",
+      stroke: (o && o.stroke) || opts.stroke || C.borderSoft,
+      "stroke-width": (o && o.width) || opts.width || 1.4,
+      "stroke-dasharray": o && o.dash !== null ? o.dash
+        : (opts.hot || opts.lit || opts.solid ? "none" : "5 4"),
       "marker-end": "url(#arch-arrow)",
-    }));
+    });
+    // Unconfirmed edges go dotted regardless of origin — a fine dot pattern
+    // reads as "not attested" without competing with the shadow dash.
+    if (opts.unconfirmed) line.setAttribute("stroke-dasharray", "1 4");
+    g.appendChild(line);
     if (label && !opts.faded) {
       var txt = svgEl("text", {
         x: (t.x1 + t.x2) / 2, y: (t.y1 + t.y2) / 2 - 6,
@@ -686,17 +782,32 @@
       var idx = {}; groups.forEach(function (g, i) { idx[g.id] = i; });
       var nodeCluster = {};
       (graph.nodes || []).forEach(function (n) { nodeCluster[n.id] = n.cluster || "__shared__"; });
+      // One line per cluster PAIR, so several node-level edges collapse into
+      // it. A shadow dependency inside that bundle has to survive the
+      // collapse: if any underlying edge was observed but never declared,
+      // the cluster line carries the shadow treatment, otherwise zooming out
+      // would hide the loudest thing on the map.
       var seen = {};
       (graph.edges || []).forEach(function (e) {
         var a = nodeCluster[e.from], b = nodeCluster[e.to];
         if (!a || !b || a === b || idx[a] === undefined || idx[b] === undefined) return;
         var key = a + "→" + b;
-        if (seen[key]) return;
-        seen[key] = true;
-        var t = trimEdge(positions[idx[a]], positions[idx[b]]);
+        var o = originOf(e);
+        if (seen[key]) {
+          if (o && o.alarm) seen[key].alarm = true;
+          return;
+        }
+        seen[key] = { label: edgeLabelFor(e), a: a, b: b, alarm: !!(o && o.alarm) };
+      });
+      Object.keys(seen).forEach(function (key) {
+        var bundle = seen[key];
+        var t = trimEdge(positions[idx[bundle.a]], positions[idx[bundle.b]]);
         // Solid at L0: the cluster level has no hot/cold distinction to draw,
         // and dashing every edge would imply one.
-        svg.appendChild(edgeLine(t, edgeLabelFor(e), { solid: true, width: 1.5 }));
+        svg.appendChild(edgeLine(t, bundle.label, {
+          solid: true, width: 1.5,
+          origin: bundle.alarm ? ORIGIN.runtime : null,
+        }));
       });
 
       boxes = groups.map(function (g, i) {
@@ -749,6 +860,8 @@
           faded: !!(pinnedId && !touches),
           lit: !!(pinnedId && touches),
           hot: hot,
+          origin: originOf(e),
+          unconfirmed: isUnconfirmed(e),
           stroke: pinnedId && touches ? (hot ? SEV_EDGE[endSev] : C.accent)
             : (hot ? SEV_EDGE[endSev] : C.borderSoft),
           width: pinnedId && touches ? 2.6 : (hot ? 2 : 1.4),
@@ -768,7 +881,8 @@
         return boxGroup(pos[n.id].x, pos[n.id].y, boxW2, boxH2, {
           id: n.id, act: "select",
           title: n.name || n.id,
-          sub: (n.kind || "node").toUpperCase() + (flags.length ? " · " + flags.join(" · ") : ""),
+          sub: kindOf(n).glyph + " " + kindLabel(n) + (flags.length ? " · " + flags.join(" · ") : ""),
+          unconfirmed: isUnconfirmed(n),
           // Nodes carry the word only at high or above — below that the
           // stripe, hatch and chips already say it without shouting.
           badgeText: (SEV_RANK[worst] || 0) >= 3
@@ -780,6 +894,7 @@
           selected: state.selected === n.id || n.id === pinnedId,
           pressed: n.id === pinnedId,
           aria: (n.name || n.id) + ", " + (n.kind || "node").toLowerCase() + ", " +
+                (isUnconfirmed(n) ? "unconfirmed, no file cites this, " : "") +
                 LENS_LABEL[state.lens].toLowerCase() + " worst severity " + (worst || "none") +
                 ", " + all.length + " findings" +
                 (nNew ? ", " + nNew + " new since the last run" : "") +
@@ -812,8 +927,8 @@
     if (state.level === 2 && state.pinned) {
       var pn = (graph.nodes || []).find(function (n) { return n.id === state.pinned; });
       return {
-        ids: [state.pinned], nodeId: state.pinned,
-        kind: pn ? (pn.kind || "node").toUpperCase() : "NODE",
+        ids: [state.pinned], nodeId: state.pinned, node: pn || null,
+        kind: pn ? kindOf(pn).glyph + " " + kindLabel(pn) : "NODE",
         name: (pn && pn.name) || state.pinned,
         summary: "Pinned. Its edges are highlighted and everything else is dimmed, so the blast radius of a change here is what you can see.",
       };
@@ -821,8 +936,8 @@
     if (state.level === 1 && state.selected) {
       var sn = (graph.nodes || []).find(function (n) { return n.id === state.selected; });
       return {
-        ids: [state.selected], nodeId: state.selected,
-        kind: sn ? (sn.kind || "node").toUpperCase() : "NODE",
+        ids: [state.selected], nodeId: state.selected, node: sn || null,
+        kind: sn ? kindOf(sn).glyph + " " + kindLabel(sn) : "NODE",
         name: (sn && sn.name) || state.selected,
         summary: "Selected. Activate it on the map to pin it and see what a change here touches.",
       };
@@ -867,6 +982,32 @@
     card.appendChild(head);
     card.appendChild(el("h3", { class: "xray-sel-name" }, scope.name));
     card.appendChild(el("p", { class: "xray-sel-summary" }, scope.summary));
+
+    // What this kind of thing IS, and what the parser can say about it.
+    // A reader who does not already know the analyzer's vocabulary should
+    // not have to infer "kv" or "durable_object" from a glyph.
+    if (scope.node) {
+      var n = scope.node;
+      card.appendChild(el("p", { class: "xray-sel-kinddesc" }, kindOf(n).desc));
+
+      var prov = el("div", { class: "xray-sel-prov" });
+      if (isUnconfirmed(n)) {
+        // Say it in the words the map's legend uses, and say why.
+        prov.appendChild(el("span", { class: "mono xray-sel-unconfirmed" }, "UNCONFIRMED"));
+        prov.appendChild(el("span", { class: "xray-sel-provtext" },
+          "No file cites this — it is drawn because something referenced it, " +
+          "not because the parser read a declaration for it."));
+      } else {
+        prov.appendChild(el("span", { class: "mono xray-sel-confirmed" }, "CONFIRMED"));
+        var cites = (n.files || []).length ? n.files : (n.evidence ? [].concat(n.evidence) : []);
+        prov.appendChild(el("span", { class: "xray-sel-provtext" },
+          cites.length
+            ? "Cited by " + cites.slice(0, 3).join(", ") +
+              (cites.length > 3 ? " and " + (cites.length - 3) + " more" : "") + "."
+            : "The parser cited a file for this."));
+      }
+      card.appendChild(prov);
+    }
 
     var chips = el("div", { class: "xray-sel-chips" });
     ["speed", "cost", "security"].forEach(function (ln) {
@@ -1249,11 +1390,77 @@
     }
     barHead.appendChild(crumb);
 
+    barHead.appendChild(componentJump());
+
     barHead.appendChild(el("span", { class: "mono xray-hint" },
       state.level === 0 ? "Click a cluster · Tab then Enter · arrows move"
         : state.level === 2 ? "Pinned · Esc unpins · arrows move"
         : "Click a node to pin · Esc goes up"));
     return barHead;
+  }
+
+  /**
+   * Jump straight to one component.
+   *
+   * Clicking through three zoom levels is fine when you are exploring and
+   * useless when you already know the name — which is the case every time
+   * someone arrives from an alert, a CI comment, or a review saying "look at
+   * session-store". A native <datalist> gives typeahead over every cluster
+   * and node with no JavaScript of its own, and the input stays usable if
+   * the list is ignored entirely.
+   */
+  function componentJump() {
+    var graph = state.result && state.result.graph;
+    var items = componentIndex(graph);
+    var wrap = el("span", { class: "xray-jump" });
+    if (items.length < 2) return wrap;   // nothing to choose between
+
+    var listId = "xray-jump-list";
+    var input = el("input", {
+      type: "text", class: "xray-jump-input mono", id: "xray-jump",
+      list: listId, placeholder: "Jump to component…",
+      "aria-label": "Jump to a cluster or node by name",
+      autocomplete: "off",
+    });
+    var list = el("datalist", { id: listId });
+    items.forEach(function (it) {
+      // The option's VALUE is the display name, because that is what a
+      // person types; the id is resolved on submit, and a name that is
+      // ambiguous falls back to the id match.
+      list.appendChild(el("option", { value: it.name }, it.detail));
+    });
+
+    function jump() {
+      var typed = (input.value || "").trim();
+      if (!typed) return;
+      var lower = typed.toLowerCase();
+      var hit = items.find(function (it) { return it.id === typed; }) ||
+                items.find(function (it) { return it.name.toLowerCase() === lower; }) ||
+                items.find(function (it) { return it.name.toLowerCase().indexOf(lower) === 0; });
+      if (!hit) {
+        // Say so on the control rather than doing nothing: a jump that
+        // silently no-ops reads as a broken input.
+        input.setAttribute("aria-invalid", "true");
+        input.title = "No cluster or node here is called “" + typed + "”.";
+        return;
+      }
+      input.removeAttribute("aria-invalid");
+      focusComponent(hit.id);
+      render();
+      var canvas = document.getElementById("xray-canvas");
+      if (canvas) {
+        var pinned = canvas.querySelector('[data-arch-id="' + hit.id + '"]');
+        if (pinned && typeof pinned.focus === "function") pinned.focus();
+      }
+    }
+
+    input.addEventListener("change", jump);
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); jump(); }
+    });
+    wrap.appendChild(input);
+    wrap.appendChild(list);
+    return wrap;
   }
 
   /**
@@ -1284,6 +1491,158 @@
     return foot;
   }
 
+  /**
+   * The origin legend, and the sentence that keeps this map honest.
+   *
+   * Severity says how bad a declared thing is. Origin says whether it was
+   * declared at all, and that is the prior question: a line the parser read
+   * out of a config file is not evidence that traffic flows along it. The
+   * map used to draw a declaration and an observation identically, which
+   * let a static graph read as a live topology.
+   *
+   * Only the origins present in THIS graph get a legend row. Teaching a
+   * reader to look for a shadow dependency on a map that has none would be
+   * the mirror of the problem — a legend is a key to what is drawn, not a
+   * catalogue of what the format can express.
+   */
+  function originRow(graph) {
+    var edges = (graph && graph.edges) || [];
+    var present = {};
+    edges.forEach(function (e) { if (e && e.origin && ORIGIN[e.origin]) present[e.origin] = true; });
+    var keys = ["static", "both", "runtime"].filter(function (k) { return present[k]; });
+    var anyUnconfirmed = edges.some(isUnconfirmed) ||
+      ((graph && graph.nodes) || []).some(isUnconfirmed);
+    if (!keys.length && !anyUnconfirmed) return null;
+
+    var foot = el("div", { class: "xray-canvas-foot" });
+    foot.appendChild(el("span", { class: "mono xray-controls-label" }, "Origin"));
+    keys.forEach(function (k) {
+      var o = ORIGIN[k];
+      var item = el("span", { class: "xray-legend-item" });
+      var rule = el("span", { class: "xray-legend-rule", "aria-hidden": "true" });
+      rule.style.borderTopColor = o.stroke || C.borderSoft;
+      rule.style.borderTopWidth = (o.width || 1.4) + "px";
+      rule.style.borderTopStyle = k === "both" ? "solid" : "dashed";
+      item.appendChild(rule);
+      item.appendChild(el("span", { class: "mono" }, o.label));
+      item.appendChild(el("span", { class: "xray-legend-gloss" }, o.gloss));
+      foot.appendChild(item);
+    });
+    if (anyUnconfirmed) {
+      var u = el("span", { class: "xray-legend-item" });
+      var ur = el("span", { class: "xray-legend-rule", "aria-hidden": "true" });
+      ur.style.borderTopStyle = "dotted";
+      ur.style.borderTopColor = C.muted;
+      u.appendChild(ur);
+      u.appendChild(el("span", { class: "mono" }, "unconfirmed"));
+      u.appendChild(el("span", { class: "xray-legend-gloss" }, "no file cites this"));
+      foot.appendChild(u);
+    }
+    return foot;
+  }
+
+  /**
+   * "A declaration graph, not a live one" — stated once, permanently, above
+   * the map rather than in a tooltip.
+   *
+   * Every edge the static parsers emit is `origin: "static"` by
+   * construction. enrich.js is explicit that defaulting to `both` "would
+   * assert an observation nobody made"; the same reasoning applies to a UI
+   * that draws a declaration and lets a reader assume it was watched.
+   */
+  function provenanceNote(graph) {
+    var edges = (graph && graph.edges) || [];
+    var observed = edges.filter(function (e) {
+      return e && (e.origin === "runtime" || e.origin === "both");
+    }).length;
+    var shadow = edges.filter(function (e) { return e && e.origin === "runtime"; }).length;
+
+    var box = el("div", { class: "xray-provenance" });
+    box.appendChild(el("span", { class: "mono xray-provenance-tag" }, "READ FROM FILES"));
+    var text = observed === 0
+      ? "A declaration graph, not a live one — every edge here was read from committed " +
+        "config or source. Nothing was probed at runtime, so an edge means \"declared\", " +
+        "not \"carrying traffic\"."
+      : observed + " of " + edges.length + " edges were also observed running; the rest " +
+        "were read from committed files and never watched.";
+    box.appendChild(el("span", { class: "xray-provenance-text" }, text));
+    if (shadow > 0) {
+      // A shadow dependency outranks everything else this strip could say.
+      box.appendChild(el("span", { class: "mono xray-provenance-shadow" },
+        shadow + " shadow " + (shadow === 1 ? "dependency" : "dependencies") +
+        " — observed running, never declared"));
+    }
+    return box;
+  }
+
+  /**
+   * The coverage statement, under the map.
+   *
+   * A map with no coverage line reads as the whole system. The analyzer
+   * already counts what it could not read (graph.coverage → result.limits)
+   * and already computes `summary.complete`, which is true only when every
+   * submitted file was understood and no cap bit. All this does is refuse to
+   * keep that to itself.
+   *
+   * The lower-bound sentence is deliberately the same size as the finding
+   * counts above it. Setting it in small print would be a way of having said
+   * it without a reader reading it.
+   */
+  function coverageStrip(result) {
+    var limits = result.limits || {};
+    var summary = result.summary || {};
+    var analyzed = limits.filesAnalyzed;
+    var skipped  = limits.filesSkipped;
+    // Old runs stored before coverage was recorded have neither number. That
+    // is not the same as "nothing was skipped", and must not render as it.
+    if (analyzed == null && skipped == null) {
+      var unknown = el("div", { class: "xray-coverage xray-coverage-unknown" });
+      unknown.appendChild(el("span", { class: "mono xray-coverage-tag" }, "COVERAGE"));
+      unknown.appendChild(el("span", { class: "xray-coverage-note" },
+        "This run predates coverage recording, so what it skipped is not known. " +
+        "Treat the counts above as a lower bound."));
+      return unknown;
+    }
+
+    var oversized = (limits.oversized || []).length;
+    var complete = summary.complete === true;
+    var box = el("div", { class: "xray-coverage" + (complete ? "" : " xray-coverage-partial") });
+    box.appendChild(el("span", { class: "mono xray-coverage-tag" },
+      complete ? "COVERAGE · FULL" : "COVERAGE · PARTIAL"));
+
+    var counts = el("span", { class: "mono xray-coverage-counts" },
+      (analyzed != null ? analyzed : "—") + " files read · " +
+      (skipped != null ? skipped : "—") + " skipped" +
+      (oversized ? " · " + oversized + " too large to read" : ""));
+    box.appendChild(counts);
+
+    box.appendChild(el("span", { class: "xray-coverage-note" }, complete
+      ? "Every file the manifests reference was read."
+      : "These counts are a lower bound — what was not read cannot appear on this map."));
+
+    // Name the skipped files rather than only counting them: a count tells a
+    // reader that something is missing, the names tell them whether it
+    // mattered. The analyzer caps its own list at 50 and says when it did.
+    var skippedList = limits.skipped || [];
+    if (skippedList.length) {
+      var det = el("details", { class: "xray-coverage-details" });
+      det.appendChild(el("summary", { class: "mono" },
+        "What was skipped (" + skippedList.length +
+        (limits.truncatedSkippedList ? " of more" : "") + ")"));
+      var ul = el("ul", { class: "xray-coverage-list" });
+      skippedList.forEach(function (p) {
+        ul.appendChild(el("li", { class: "mono" }, String(p)));
+      });
+      det.appendChild(ul);
+      if (limits.truncatedSkippedList) {
+        det.appendChild(el("p", { class: "xray-coverage-note" },
+          "The analyzer caps this list at 50 — more files were skipped than are named here."));
+      }
+      box.appendChild(det);
+    }
+    return box;
+  }
+
   function render() {
     var out = document.getElementById("output-arch");
     if (!out || !state.result) return;
@@ -1304,16 +1663,18 @@
     });
     wrap.appendChild(stats);
 
-    if (summary.complete === false) {
-      var limits = result.limits || {};
-      var caveat = el("p", { class: "field-msg field-msg-error" },
-        "Partial map: " + (limits.filesSkipped || 0) + " file" +
-        ((limits.filesSkipped || 0) === 1 ? "" : "s") + " couldn't be read" +
-        (limits.skipped && limits.skipped.length ? " (" + limits.skipped.slice(0, 3).join(", ") +
-          (limits.skipped.length > 3 ? ", …" : "") + ")" : "") +
-        ". What's drawn is real; what's missing is named, not guessed.");
-      caveat.hidden = false;
-      wrap.appendChild(caveat);
+    // Coverage used to appear only when it was partial, above the controls.
+    // Silence on a complete run is not the same statement as "complete", and
+    // a reader who never sees the line on a good run has no reason to look
+    // for it on a bad one. It now renders in both states, and it sits under
+    // the map it qualifies — see coverageStrip().
+
+    if (state.missingComponent) {
+      var miss = el("p", { class: "field-msg field-msg-error" },
+        "\u201C" + state.missingComponent + "\u201D is not in this run\u2019s map, so the " +
+        "whole map is shown instead. It may have been renamed or added after this run.");
+      miss.hidden = false;
+      wrap.appendChild(miss);
     }
 
     wrap.appendChild(controlsRow());
@@ -1326,10 +1687,16 @@
 
     var canvasCard = el("div", { class: "xray-canvas-card" });
     canvasCard.appendChild(crumbBar());
+    // Stated above the map, not inside a tooltip: what this graph is read
+    // from, and whether anything in it was ever observed running.
+    canvasCard.appendChild(provenanceNote(result.graph));
     var canvasWrap = el("div", { class: "xray-canvas", id: "xray-canvas" });
     canvasWrap.appendChild(buildCanvas());
     canvasCard.appendChild(canvasWrap);
     canvasCard.appendChild(legendRow());
+    var originLegend = originRow(result.graph);
+    if (originLegend) canvasCard.appendChild(originLegend);
+    canvasCard.appendChild(coverageStrip(result));
     layoutRow.appendChild(canvasCard);
 
     var side = el("aside", { class: "xray-side", "aria-label": "Selection detail" });
@@ -1366,6 +1733,62 @@
     // the system map would silently dim a cluster the reader had not pinned.
     if (level < 2) state.pinned = null;
     render();
+  }
+
+  /**
+   * Every addressable component in a graph: clusters first, then nodes.
+   *
+   * Shared by the "jump to component" control and by the runs feed's picker,
+   * so the two cannot disagree about what is addressable. Takes a graph
+   * rather than reading state, because the runs feed asks about a run that
+   * is not loaded into the explorer yet.
+   */
+  function componentIndex(graph) {
+    if (!graph) return [];
+    var out = [];
+    (graph.clusters || []).forEach(function (c) {
+      out.push({
+        id: c.id, type: "cluster", name: c.name || c.id,
+        detail: (c.nodes || []).length + " node" + ((c.nodes || []).length === 1 ? "" : "s"),
+      });
+    });
+    (graph.nodes || []).forEach(function (n) {
+      out.push({
+        id: n.id, type: "node", name: n.name || n.id,
+        detail: kindOf(n).glyph + " " + kindLabel(n) +
+          (isUnconfirmed(n) ? " · unconfirmed" : ""),
+      });
+    });
+    return out;
+  }
+
+  /**
+   * Point the view at one component. Returns false when the id is not in
+   * this graph, so the caller can say so instead of rendering a map that
+   * silently ignored the request.
+   */
+  function focusComponent(componentId) {
+    if (!componentId || !state.result || !state.result.graph) return false;
+    var graph = state.result.graph;
+    var node = (graph.nodes || []).find(function (n) { return n.id === componentId; });
+    if (node) {
+      // Level 2 pins it: its edges light and everything else dims, which is
+      // the whole point of asking for one component rather than the map.
+      state.level = 2;
+      state.cluster = node.cluster || "__shared__";
+      state.pinned = node.id;
+      state.selected = node.id;
+      return true;
+    }
+    var cluster = (graph.clusters || []).find(function (c) { return c.id === componentId; });
+    if (cluster || componentId === "__shared__") {
+      state.level = 1;
+      state.cluster = componentId;
+      state.pinned = null;
+      state.selected = null;
+      return true;
+    }
+    return false;
   }
 
   function onCanvasActivate(target) {
@@ -1468,6 +1891,7 @@
   }
 
   function resetView() {
+    state.missingComponent = null;
     state.level = 0; state.cluster = null; state.selected = null;
     state.pinned = null; state.lens = "all"; state.diff = true;
     state.pulsed = {};
@@ -1576,7 +2000,57 @@
       var btn = event.target.closest && event.target.closest('button[data-run-action="viewmap"]');
       if (!btn) return;
       setBusy(btn, true, "Loading…");
-      openRun(btn.dataset.runId)
+      openRun(btn.dataset.runId, btn.dataset.archComponent || null)
+        .catch(function (e) { window.alert(e.message || "Could not load the run"); })
+        .then(function () { setBusy(btn, false); });
+    });
+
+    // "Components" beside View map: the same run, opened on one part of it.
+    // The list is built from the run's OWN stored graph rather than from
+    // whatever is currently in the explorer, so it can never offer a
+    // component that run does not contain.
+    document.addEventListener("click", function (event) {
+      var btn = event.target.closest && event.target.closest('button[data-run-action="archparts"]');
+      if (!btn) return;
+      var runId = btn.dataset.runId;
+      var holder = btn.closest("li") || btn.parentNode;
+      var existing = holder && holder.querySelector(".xray-parts");
+      if (existing) { existing.parentNode.removeChild(existing); btn.setAttribute("aria-expanded", "false"); return; }
+
+      setBusy(btn, true, "Loading…");
+      callApi("/api/runs/" + encodeURIComponent(runId), null, "GET")
+        .then(function (run) {
+          var graph = run && run.result && run.result.graph;
+          var items = componentIndex(graph);
+          var box = el("div", { class: "xray-parts" });
+          if (!items.length) {
+            // Same honesty as openRun's empty branch: a run with no stored
+            // graph has no components, and saying nothing would make the
+            // button look broken.
+            box.appendChild(el("p", { class: "xray-parts-empty" },
+              "This run has no architecture map stored, so it has no components to open."));
+          } else {
+            box.appendChild(el("p", { class: "mono xray-parts-label" },
+              "Open one component of this run"));
+            var ul = el("ul", { class: "xray-parts-list" });
+            items.forEach(function (it) {
+              var li = el("li", null);
+              var a = el("a", {
+                class: "xray-parts-link",
+                href: "#/arch/" + encodeURIComponent(runId) + "/" + encodeURIComponent(it.id),
+              });
+              a.appendChild(el("span", { class: "mono xray-parts-type" },
+                it.type === "cluster" ? "CLUSTER" : "NODE"));
+              a.appendChild(el("span", { class: "xray-parts-name" }, it.name));
+              a.appendChild(el("span", { class: "mono xray-parts-detail" }, it.detail));
+              li.appendChild(a);
+              ul.appendChild(li);
+            });
+            box.appendChild(ul);
+          }
+          if (holder) holder.appendChild(box);
+          btn.setAttribute("aria-expanded", "true");
+        })
         .catch(function (e) { window.alert(e.message || "Could not load the run"); })
         .then(function () { setBusy(btn, false); });
     });
@@ -1752,7 +2226,7 @@
    * went back to normal, and nothing happened, so a broken button and a run
    * with nothing to draw looked identical.
    */
-  function openRun(runId) {
+  function openRun(runId, componentId) {
     if (!runId) return Promise.resolve();
     return callApi("/api/runs/" + encodeURIComponent(runId), null, "GET")
       .then(function (run) {
@@ -1766,6 +2240,13 @@
           state.result = run.result;
           state.runId = run.id || runId || null;
           resetView();
+          // A component named in the route or picked in the runs feed opens
+          // the map already focused on it. Resolving it AFTER the result is
+          // in state means the id is checked against the graph that was
+          // actually stored, so a stale link degrades to the whole map with
+          // a note rather than to an empty selection.
+          state.missingComponent =
+            componentId && !focusComponent(componentId) ? componentId : null;
           render();
           loadDiff(state.runId);
           loadDrift();
@@ -1785,5 +2266,5 @@
       });
   }
 
-  window.DashArch = { load: loadWatch, openRun: openRun };
+  window.DashArch = { load: loadWatch, openRun: openRun, components: componentIndex };
 })();
