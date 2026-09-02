@@ -1996,19 +1996,6 @@
       }
     });
 
-    // "View map" from the runs feed: reload the stored run's result into
-    // the explorer and scroll it into view. Shares openRun with the
-    // #/arch/<runId> route, so the button and a link pasted into a pull
-    // request cannot drift into rendering the same run two different ways.
-    document.addEventListener("click", function (event) {
-      var btn = event.target.closest && event.target.closest('button[data-run-action="viewmap"]');
-      if (!btn) return;
-      setBusy(btn, true, "Loading…");
-      openRun(btn.dataset.runId, btn.dataset.archComponent || null)
-        .catch(function (e) { window.alert(e.message || "Could not load the run"); })
-        .then(function () { setBusy(btn, false); });
-    });
-
     // "Components" beside View map: the same run, opened on one part of it.
     // The list is built from the run's OWN stored graph rather than from
     // whatever is currently in the explorer, so it can never offer a

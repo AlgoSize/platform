@@ -347,6 +347,10 @@ group("one component of a run, addressable on its own");
     "the router parses a component segment after the run id");
   expect(/openRun\(route\.runId, route\.componentId\)/.test(router),
     "…and passes it to the explorer");
+  expect(/href:\s*"#\/arch\/" \+ encodeURIComponent\(it\.id\)/.test(dashboardJs),
+    "View map in the runs feed routes through #/arch/<runId> so the explorer view is shown");
+  expect(!/"data-run-action":\s*"viewmap"/.test(dashboardJs),
+    "…and is not a button that loads into the hidden arch view");
   // dashboard.js builds the button through el(), so the action is an object
   // key rather than an HTML attribute — match what the file actually says.
   expect(/"data-run-action":\s*"archparts"/.test(dashboardJs),

@@ -1319,11 +1319,12 @@
         }, "View report"));
       }
       if (it.analyzer === "arch") {
-        actions.appendChild(el("button", {
-          type: "button",
+        // Routed through #/arch/<runId> so the explorer view is shown. Loading
+        // the run in place looked broken from Workspace — the map rendered
+        // into a hidden #view-arch while the user stayed on #/.
+        actions.appendChild(el("a", {
           class: "btn btn-ghost btn-sm",
-          "data-run-action": "viewmap",
-          "data-run-id": it.id,
+          href: "#/arch/" + encodeURIComponent(it.id),
         }, "View map"));
         // The whole map answers "what does this system look like"; a single
         // component answers "what does changing THIS touch", which is the
