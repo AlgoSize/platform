@@ -7,7 +7,11 @@
 // run times are too small to be informative (< 0.1 ms each, dominated by
 // measurement noise).
 
-const NOISE_FLOOR_MS = 0.1;
+// Exported because the dashboard has to draw it. Before this it was private,
+// so the chart plotted a 0.02 ms probe as a real point when the fit had
+// already replaced it with the floor — the picture disagreed with the number
+// it was supposed to explain, and nothing said so.
+export const NOISE_FLOOR_MS = 0.1;
 
 /**
  * @param {Array<{n:number, ms:number}>} points  At least 2 points; sizes must be > 0.
@@ -15,12 +19,12 @@ const NOISE_FLOOR_MS = 0.1;
  */
 export function inferBigO(points) {
   if (!Array.isArray(points) || points.length < 2) {
-    return { label: "unknown", exponent: null, points: points || [], reason: "need ≥ 2 measurements" };
+    return { label: "unknown", exponent: null, points: points || [], noiseFloorMs: NOISE_FLOOR_MS, reason: "need ≥ 2 measurements" };
   }
 
   const usable = points.filter((p) => Number.isFinite(p.n) && p.n > 0 && Number.isFinite(p.ms) && p.ms >= 0);
   if (usable.length < 2) {
-    return { label: "unknown", exponent: null, points, reason: "no valid measurements" };
+    return { label: "unknown", exponent: null, points, noiseFloorMs: NOISE_FLOOR_MS, reason: "no valid measurements" };
   }
 
   // If every measurement is below the noise floor we can't say anything
@@ -30,9 +34,9 @@ export function inferBigO(points) {
   if (allBelowNoise) {
     const maxN = Math.max(...usable.map((p) => p.n));
     if (maxN >= 10000) {
-      return { label: "O(1)", exponent: 0, points, reason: "all runs below noise floor at large n" };
+      return { label: "O(1)", exponent: 0, points, noiseFloorMs: NOISE_FLOOR_MS, reason: "all runs below noise floor at large n" };
     }
-    return { label: "unknown", exponent: null, points, reason: "all run times below noise floor" };
+    return { label: "unknown", exponent: null, points, noiseFloorMs: NOISE_FLOOR_MS, reason: "all run times below noise floor" };
   }
 
   // Replace zeros with the noise floor so log() is finite.
@@ -48,7 +52,7 @@ export function inferBigO(points) {
   }
   const k = den === 0 ? 0 : num / den;
 
-  return { label: bucketize(k), exponent: round(k, 2), points };
+  return { label: bucketize(k), exponent: round(k, 2), points, noiseFloorMs: NOISE_FLOOR_MS };
 }
 
 function bucketize(k) {

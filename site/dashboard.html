@@ -788,6 +788,35 @@ permalink: /dashboard/
         </div>
       </section>
 
+      <!-- ============= CI GATES — the overview =============
+           Five gates shipped as five full-height setup wizards, all expanded,
+           all the time. A reader who had already wired one still scrolled
+           past its three steps to reach the next, and nothing on the page
+           said which gates were live. So the wizards are now behind their own
+           disclosure and this strip carries the part worth reading at a
+           glance: what each gate enforces, and what it last did.
+
+           "Last result" is read from stored runs, never asserted. Three of
+           the five gates file a run tagged source="ci" (vuln, arch, algo —
+           handlers/ci.js); the estimate and cloud-spend workflows post to
+           /api/estimate and /api/analyze/cost with an API key, which stores a
+           run with a NULL source. So those two can be wired up and working
+           and still have nothing to show here — and the strip says exactly
+           that rather than rendering them as "not set up", which would be a
+           guess about the customer's repository. -->
+      <section class="panel" id="panel-ci-gates">
+        <header class="panel-head">
+          <div class="panel-heading">
+            <span class="panel-tag">CI</span>
+            <h2>CI gates</h2>
+            <p class="panel-desc">One <code class="mono">ALGOSIZE_API_KEY</code> secret serves all five. Each gate's setup is folded away below — open the one you are wiring up.</p>
+          </div>
+        </header>
+        <div class="panel-body">
+          <div id="ci-gates-body"><div class="panel-empty">Reading the gates…</div></div>
+        </div>
+      </section>
+
       <section class="panel" id="panel-ci">
         <header class="panel-head">
           <div class="panel-heading">
@@ -797,6 +826,8 @@ permalink: /dashboard/
           </div>
         </header>
         <div class="panel-body">
+          <details class="gate-setup">
+            <summary class="gate-setup-summary">Set up the dependency audit gate</summary>
           <ol class="wizard" id="ci-wizard">
             <li class="wizard-step">
               <div class="wizard-step-head">
@@ -828,13 +859,7 @@ permalink: /dashboard/
               </div>
             </li>
           </ol>
-
-          <!-- Waiting / connected row: flips in place when a CI run exists. -->
-          <div class="ci-status" id="ci-status">
-            <span class="ci-status-dot" id="ci-status-dot" aria-hidden="true"></span>
-            <span class="ci-status-text" id="ci-status-text">Checking for a first CI run…</span>
-            <button type="button" class="btn btn-ghost btn-sm" id="ci-status-refresh">Check again</button>
-          </div>
+          </details>
         </div>
       </section>
 
@@ -852,6 +877,8 @@ permalink: /dashboard/
           </div>
         </header>
         <div class="panel-body">
+          <details class="gate-setup">
+            <summary class="gate-setup-summary">Set up the cost estimate gate</summary>
           <ol class="wizard" id="ci-est-wizard">
             <li class="wizard-step">
               <div class="wizard-step-head">
@@ -883,6 +910,7 @@ permalink: /dashboard/
               </div>
             </li>
           </ol>
+          </details>
         </div>
       </section>
 
@@ -901,6 +929,8 @@ permalink: /dashboard/
           </div>
         </header>
         <div class="panel-body">
+          <details class="gate-setup">
+            <summary class="gate-setup-summary">Set up the cloud cost gate</summary>
           <ol class="wizard" id="ci-cost-wizard">
             <li class="wizard-step">
               <div class="wizard-step-head">
@@ -932,6 +962,7 @@ permalink: /dashboard/
               </div>
             </li>
           </ol>
+          </details>
         </div>
       </section>
 
@@ -948,6 +979,8 @@ permalink: /dashboard/
           </div>
         </header>
         <div class="panel-body">
+          <details class="gate-setup">
+            <summary class="gate-setup-summary">Set up the architecture gate</summary>
           <ol class="wizard" id="ci-arch-wizard">
             <li class="wizard-step">
               <div class="wizard-step-head">
@@ -968,6 +1001,7 @@ permalink: /dashboard/
               </div>
             </li>
           </ol>
+          </details>
         </div>
       </section>
 
@@ -980,6 +1014,8 @@ permalink: /dashboard/
           </div>
         </header>
         <div class="panel-body">
+          <details class="gate-setup">
+            <summary class="gate-setup-summary">Set up the optimizer gate</summary>
           <ol class="wizard" id="ci-opt-wizard">
             <li class="wizard-step">
               <div class="wizard-step-head">
@@ -1011,6 +1047,27 @@ permalink: /dashboard/
               </div>
             </li>
           </ol>
+          </details>
+        </div>
+      </section>
+
+      <!-- ============= RECENT CI RUNS =============
+           Every row is a stored run, filed by a gate that authenticated with
+           the org's key. Optimizer rows carry measuredBy: "ci_runner" because
+           the Big-O grade was timed on the customer's runner rather than on
+           ours, and two runs on different runner sizes can legitimately
+           disagree — the one number in this feed whose provenance changes how
+           much it is worth. -->
+      <section class="panel" id="panel-ci-runs">
+        <header class="panel-head">
+          <div class="panel-heading">
+            <span class="panel-tag">Feed</span>
+            <h2>Recent CI runs</h2>
+            <p class="panel-desc">What the gates actually did, newest first — the same stored runs the reports are rendered from.</p>
+          </div>
+        </header>
+        <div class="panel-body">
+          <div id="ci-runs-body"><div class="panel-empty">Reading the CI feed…</div></div>
         </div>
       </section>
     </div><!-- /view-monitors -->

@@ -138,9 +138,11 @@
       if (entries.length > NIGHTLY_CAP) {
         while (cap.firstChild) cap.removeChild(cap.firstChild);
         var capText = el("div", { class: "banner-text" });
+        var over = entries.length - NIGHTLY_CAP;
         capText.appendChild(el("p", null,
-          "The nightly watch grades the first " + NIGHTLY_CAP + " entries. The rest stay in the file and " +
-          "still gate every pull request — only the scheduled sweep stops at the cap."));
+          "The nightly watch grades the first " + NIGHTLY_CAP + " entries. The other " + over +
+          (over === 1 ? " entry stays" : " stay") + " in the file and still gate" +
+          (over === 1 ? "s" : "") + " every pull request — only the scheduled sweep stops at the cap."));
         cap.appendChild(capText);
         cap.hidden = false;
       } else {

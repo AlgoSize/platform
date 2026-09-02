@@ -679,6 +679,154 @@ group("every tool page has a monitored half, not just a manual bench");
     "the X-ray translates the Worker's finding keys rather than assuming they match its own");
 }
 
+// ===========================================================================
+group("a monitor row can show the baseline its deltas are measured from");
+// ===========================================================================
+{
+  // Every "+2 new" badge on the Monitors page is a subtraction. The thing
+  // being subtracted FROM is already stored and already served — this panel
+  // is the first place the product renders it.
+  expect(/function baselinePanel/.test(monJs),
+    "dash-monitors renders a baseline panel");
+  expect(/Baseline the sweep diffs against/.test(monJs),
+    "…labelled as what the sweep diffs against, not as a result");
+  expect(/var base = baselinePanel\(m\);/.test(monJs),
+    "…and every monitor row gets one");
+
+  // The panel must read the stored fields, not re-derive them. Each of these
+  // is a column the sweep writes and GET /api/monitors already returns.
+  for (const field of ["knownAdvisoryCount", "lastSource", "archFindingCount",
+                       "lastEstimate", "lastAlgo", "lastCost"]) {
+    expect(new RegExp(`m\\.${field}`).test(monJs),
+      `the baseline panel reads the stored ${field}`);
+  }
+
+  // The rule this panel exists to keep. A baseline that was never recorded is
+  // a sentence; rendering it as 0 would say the sweep looked and found
+  // nothing, which is the opposite claim.
+  expect(/not recorded yet/.test(monJs),
+    "an unrecorded baseline says so rather than showing a zero");
+  expect(/function noBaseline/.test(monJs),
+    "…through an explicit helper, so the null path cannot be reached by accident");
+
+  // Cloud spend is the one row that is recorded and compared against nothing.
+  // monitors/run.js builds diffAdvisories, sourceDiff, archDiff, estDiff and
+  // algoDiff — and no costDiff. If a costDiff ever lands, this assertion is
+  // the reminder that the panel now owes the reader a different sentence.
+  expect(!/costDiff/.test(readFileSync(join(WORKER, "monitors", "run.js"), "utf8")),
+    "the sweep still computes no cost diff");
+  expect(/diffed: false/.test(monJs),
+    "…so the cloud-spend row is marked as recorded-but-not-compared");
+  expect(/Recorded, not compared/.test(monJs),
+    "…and says so in words, not only by omission");
+
+  // Collapsed by default: six rows per monitor, open, on a page listing
+  // twenty of them would bury the states that need daily attention.
+  expect(/el\("details", \{ class: "monitor-baseline" \}\)/.test(monJs),
+    "the panel is a <details>, so it starts collapsed");
+  expect(/\.monitor-baseline-summary/.test(css),
+    "the disclosure is styled rather than falling back to the UA marker");
+  expect(/\.monitor-baseline-nodiff/.test(css),
+    "the not-compared row is visually distinct from the five that are");
+}
+
+// ===========================================================================
+group("the five CI gates read as five gates, not five wizards");
+// ===========================================================================
+{
+  // Before: five always-expanded setup wizards, all of them, always — and
+  // nothing on the page saying which gates were actually live.
+  expect(html.includes('id="panel-ci-gates"'),
+    "the Monitors page has a CI gates overview");
+  expect((html.match(/details class="gate-setup"/g) || []).length === 5,
+    "…and all five setup wizards are behind their own disclosure");
+  expect(/One <code class="mono">ALGOSIZE_API_KEY<\/code> secret serves all five/.test(html),
+    "…under the fact that makes five gates one setup: they share a secret");
+
+  // The gate cards are read from stored runs. Whether the secret exists on
+  // somebody's repository is their repository's business — the only evidence
+  // we hold is a run that arrived.
+  expect(/\/api\/runs\?source=ci/.test(monJs),
+    "gate state is read from stored CI runs");
+  expect(/function newestByAnalyzer/.test(monJs),
+    "…the newest run per analyzer, from one request rather than five");
+
+  // The honest half. handlers/ci.js persists exactly three analyzers with
+  // source "ci"; the estimate and cost workflows post to the analyzer
+  // endpoints with an API key, which stores a run with a NULL source.
+  const ci = readFileSync(join(WORKER, "handlers", "ci.js"), "utf8");
+  const ciAnalyzers = [...ci.matchAll(/analyzer: "(\w+)",\n\s*source: "ci"|source: "ci",\n\s*analyzer: "(\w+)"/g)];
+  expect(/source: "ci"/.test(ci), "the CI ingest endpoint tags its runs as CI");
+  expect((ci.match(/source: "ci"/g) || []).length === 3,
+    "…for exactly three analyzers, which is why two gates cannot appear in the feed");
+  expect(/not reported/.test(monJs),
+    "a gate that files no CI-tagged run reads as not reported, never as not set up");
+  expect(/can be\s*\n?\s*"?\s*wired up and passing and still show nothing here/.test(monJs) ||
+         /wired up and passing and still show nothing here/.test(monJs),
+    "…and the card says why, rather than implying the customer has not set it up");
+}
+
+// ===========================================================================
+group("Recent CI runs is a feed of stored runs, with its provenance intact");
+// ===========================================================================
+{
+  expect(html.includes('id="ci-runs-body"'),
+    "the Monitors page has a recent-CI-runs feed");
+  expect(/function renderCiRuns/.test(monJs), "…with a renderer behind it");
+  // A read that FAILED and a feed that is genuinely empty are different
+  // facts, and only one of them means "no CI yet". state.ciRuns is set to
+  // null on the failure path and the renderer branches on it.
+  expect(/state\.ciRuns = null/.test(monJs),
+    "a failed CI read stores null rather than an empty list");
+  expect(/items === null/.test(monJs),
+    "…and the renderer shows an error for it, not the empty state");
+
+  // The one number in this feed whose provenance changes what it is worth.
+  // Stored by handlers/ci.js since the optimizer gate shipped.
+  expect(/r\.measuredBy === "ci_runner"/.test(monJs),
+    "optimizer rows say the grade was measured on the customer's runner");
+  expect(/measured in your runner/.test(monJs),
+    "…in those words, matching the runs feed on the Workspace");
+
+  // A run's createdAt is milliseconds (handlers/runs.js stores Date.now()),
+  // unlike a monitor's second-based timestamps. Multiplying it would date
+  // every CI row somewhere in the year 57000.
+  expect(!/createdAt \* 1000/.test(monJs),
+    "run timestamps are not re-scaled — they are already milliseconds");
+}
+
+// ===========================================================================
+group("the Big-O chart is drawn in the space the grade is fitted in");
+// ===========================================================================
+{
+  // analyzers/bigo.js fits log(t) against log(n) and reads the slope. The
+  // chart plotted log10(n) against a LINEAR millisecond axis, so the picture
+  // could not be used to check the letter beside it — an O(n log n) and an
+  // O(n²) curve are the same hockey stick on a linear axis.
+  const bigo = readFileSync(join(WORKER, "analyzers", "bigo.js"), "utf8");
+  expect(/export const NOISE_FLOOR_MS/.test(bigo),
+    "the analyzer exports its noise floor rather than keeping it private");
+  expect((bigo.match(/noiseFloorMs: NOISE_FLOOR_MS/g) || []).length === 5,
+    "…and every inferBigO return carries it, so no result path leaves the chart guessing");
+
+  expect(/renderBigOChart\(result\.bigO\.points, result\.bigO\.noiseFloorMs\)/.test(dashJs),
+    "the chart is handed the floor the fit actually used");
+  expect(!/renderBigOChart\(result\.bigO\.points\)\s*\)/.test(dashJs),
+    "…and never falls back to a hardcoded copy of it");
+  expect(/Timing curve · log\\u2013log/.test(dashJs),
+    "the chart says both axes are logarithmic");
+  expect(/Math\.log10\(Math\.max\(p\.ms, lift\)\)/.test(dashJs),
+    "…because the y-axis genuinely is, not only in the title");
+
+  // A probe under the floor was replaced by the floor BEFORE the slope was
+  // taken. Drawing it where the clock landed would show the grade a
+  // measurement it never used.
+  expect(/noise floor/.test(dashJs),
+    "the floor is drawn on the chart, not left as a footnote");
+  expect(/clamped \?/.test(dashJs),
+    "a clamped probe is marked as clamped rather than plotted as a reading");
+}
+
 console.log("");
 if (failures) {
   console.log(`\x1b[31m  ${failures} workspace-frontend test(s) failed\x1b[0m`);
