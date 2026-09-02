@@ -153,6 +153,8 @@ const SCHEMA_RUNS = `
     result_json TEXT,
     ms          REAL,
     headline    TEXT,
+    credential_kind TEXT,
+    credential_id   TEXT,
     created_at  INTEGER NOT NULL
   )
 `;
@@ -171,6 +173,9 @@ const SCHEMA_RUNS_ORG_INDEX = `
 const RUNS_BACKFILL_COLUMNS = [
   "ALTER TABLE runs ADD COLUMN org_id TEXT",
   "ALTER TABLE runs ADD COLUMN source TEXT",
+  // migrations/0019 — listRuns selects these; absent, /api/runs 500s in e2e.
+  "ALTER TABLE runs ADD COLUMN credential_kind TEXT",
+  "ALTER TABLE runs ADD COLUMN credential_id TEXT",
 ];
 
 // migrations/0010 and 0012-0014 — the tables the admin panel reads. All four
