@@ -335,67 +335,195 @@ permalink: /dashboard/
          The Workspace card for this tool links here; the hash route is
          unchanged, so existing deep links still resolve. -->
     <div id="view-arch" class="dash-view" hidden>
-      <div class="dash-head">
-        <a href="#/" class="dash-crumb">← Workspace</a>
-        <span class="eyebrow">Architecture X-ray</span>
-        <h1>The shape of the codebase, drawn.</h1>
-        <p class="lede">Modules, clusters and the edges between them — with the couplings that will hurt first called out by name.</p>
-      </div>
-      <!-- ============= ARCHITECTURE X-RAY (P-10 → D-5) ============= -->
-      <section class="panel" id="panel-arch">
-        <header class="panel-head">
-          <div class="panel-heading">
-            <span class="panel-tag">Arch</span>
-            <h2>Architecture X-ray</h2>
-            <p class="panel-desc">Submit your manifests and configs (docker-compose, wrangler.toml, package.json, source entry points). We build the service graph and score it through speed, cost and security lenses — every finding cites the file and line it came from.</p>
-          </div>
-          <div class="panel-actions">
-            <button type="button" class="btn btn-ghost btn-sm" id="arch-sample-btn">Load sample</button>
-            <button type="button" class="btn btn-primary btn-sm" id="arch-run-btn">Analyze →</button>
-          </div>
-        </header>
-        <div class="panel-body">
-          <label class="panel-input-label" for="input-arch-files">Input · manifests, configs and source</label>
-          <div class="file-picker">
-            <input type="file" id="input-arch-files" multiple hidden>
-            <button type="button" class="btn btn-ghost" id="input-arch-btn">Choose files…</button>
-            <span class="file-picker-name mono" id="input-arch-names">No files selected.</span>
-          </div>
-          <p class="panel-input-help">
-            Manifests and configs carry most of the signal — compose files,
-            IaC, lockfile-adjacent package manifests. Skip build output and
-            vendored dependencies.
-          </p>
+      <div class="xr-page">
 
-          <label class="panel-input-label" for="output-arch">System map</label>
-          <div id="output-arch" class="panel-output">
-            <div class="panel-empty">Choose files (or click <em>Load sample</em>) and run the analysis, or draw a monitored repository below.</div>
-          </div>
-        </div>
-      </section>
-
-      <!-- ============= UNDER WATCH (D-9) =============
-           The nightly half. The bench above answers "what does this pile of
-           files look like"; this answers "what does the repo you are already
-           watching look like right now" — the question an alert email leaves
-           you holding. Drawing one re-reads its COMMITTED files through
-           GET /api/monitors/:id/result/arch and renders through the same
-           explorer, so a nightly result and a hand-run result cannot disagree
-           about what a finding looks like. -->
-      <section class="panel" id="panel-arch-watch">
-        <header class="panel-head">
-          <div class="panel-heading">
-            <span class="panel-tag">Nightly</span>
-            <h2>Repositories under watch</h2>
-            <p class="panel-desc">Drawn from the repository's committed files, as it stands now — with the findings that are new since the last sweep marked. Looking does not consume tomorrow's alert.</p>
-          </div>
+        <header class="xr-page-head">
+          <a href="#/" class="dash-crumb">← Workspace</a>
+          <span class="xr-eyebrow">Architecture X-ray · /dashboard/</span>
+          <h1 class="xr-page-title">Where the architecture loses speed, burns money, or opens surface.</h1>
+          <p class="xr-page-lede">Three zoom levels over one graph. A lens recolours by the worst finding under it, the panel explains the selection, and every recommendation carries the evidence that argues for it. This is a declaration graph: every box and arrow was read from a committed file, and the map says so — what it could not read, what nobody cited, and what was observed but never declared each get their own treatment.</p>
         </header>
-        <div class="panel-body">
-          <div id="arch-watch-body">
-            <div class="panel-empty">Loading your monitors…</div>
+
+        <!-- Bench + explorer mount. dash-arch.js renders the zoomable map into
+             #output-arch once files are analyzed or a stored run is opened. -->
+        <section class="xr-bench" id="panel-arch">
+          <div class="xr-bench-head">
+            <div class="xr-bench-intro">
+              <span class="xr-bench-tag">Bench</span>
+              <h2 class="xr-bench-title">Run by hand</h2>
+              <p class="xr-bench-desc">Submit manifests and configs (docker-compose, wrangler.toml, package.json, source entry points). We build the service graph and score it through speed, cost and security lenses — every finding cites the file and line it came from.</p>
+            </div>
+            <div class="xr-bench-actions">
+              <button type="button" class="btn btn-ghost btn-sm" id="arch-sample-btn">Load sample</button>
+              <button type="button" class="btn btn-primary btn-sm" id="arch-run-btn">Analyze →</button>
+            </div>
           </div>
-        </div>
-      </section>
+          <div class="xr-bench-body">
+            <label class="panel-input-label" for="input-arch-files">Input · manifests, configs and source</label>
+            <div class="file-picker">
+              <input type="file" id="input-arch-files" multiple hidden>
+              <button type="button" class="btn btn-ghost" id="input-arch-btn">Choose files…</button>
+              <span class="file-picker-name mono" id="input-arch-names">No files selected.</span>
+            </div>
+            <p class="panel-input-help">Manifests and configs carry most of the signal — compose files, IaC, lockfile-adjacent package manifests. Skip build output and vendored dependencies.</p>
+            <div id="output-arch" class="xr-output">
+              <div class="panel-empty">Choose files (or click <em>Load sample</em>) and run the analysis, or draw a monitored repository below.</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Nightly half — same explorer renderer as the bench. -->
+        <section class="xr-section" id="panel-arch-watch">
+          <div class="xr-section-head">
+            <div>
+              <span class="xr-section-tag">Nightly</span>
+              <h2 class="xr-section-title">Repositories under watch</h2>
+              <p class="xr-section-note">Drawn from the repository's committed files, as it stands now — with the findings that are new since the last sweep marked. Looking does not consume tomorrow's alert.</p>
+            </div>
+          </div>
+          <div class="xr-section-body">
+            <div id="arch-watch-body">
+              <div class="panel-empty">Loading your monitors…</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="xr-edu" aria-labelledby="xr-edu-decl-title">
+          <div class="xr-edu-head">
+            <h2 class="xr-edu-title" id="xr-edu-decl-title">A declaration graph, not a live one</h2>
+            <p class="xr-edu-sub">Five places the old map implied more than the analyzer knows.</p>
+          </div>
+          <div class="xr-edu-grid xr-edu-grid-3">
+            <div class="xr-edu-card xr-edu-card-accent">
+              <strong class="xr-edu-card-label">1 · Origin is a per-edge fact</strong>
+              <p class="xr-edu-card-text">Every edge carries <span class="mono">static</span> (declared in config or source, never seen running), <span class="mono">runtime</span> (seen running, never declared) or <span class="mono">both</span>. Line weight is that channel — hairline for declared-only, solid for agreed, and a loud rose dash for a shadow dependency.</p>
+            </div>
+            <div class="xr-edu-card">
+              <strong class="xr-edu-card-label">2 · Confidence on every node and edge</strong>
+              <p class="xr-edu-card-text"><span class="mono">confirmed</span> means the parser cited a file for the fact; <span class="mono">unconfirmed</span> means it did not. Unconfirmed nodes get a dashed border and a washed fill; the detail card says why in plain words.</p>
+            </div>
+            <div class="xr-edu-card">
+              <strong class="xr-edu-card-label">3 · Coverage sits under the map</strong>
+              <p class="xr-edu-card-text">A map with no coverage line reads as the whole system. The strip names how many files were read or skipped, and — when partial — says these counts are a lower bound in the same size as the counts themselves.</p>
+            </div>
+          </div>
+          <div class="xr-edu-grid">
+            <div class="xr-edu-card xr-edu-card-wide">
+              <strong class="xr-edu-card-label">4 · The eleven kinds the analyzer emits</strong>
+              <p class="xr-edu-card-text">Each node kind carries a glyph so kind survives grayscale. <span class="mono">external_api</span> is the system boundary — the one node kind that is not yours.</p>
+              <div class="xr-kind-grid">
+                <span class="xr-kind-item"><span class="xr-kind-glyph mono" aria-hidden="true">▣</span><span class="xr-kind-meta"><span class="xr-kind-name mono">service</span><span class="xr-kind-desc">long-running HTTP/RPC process</span></span></span>
+                <span class="xr-kind-item"><span class="xr-kind-glyph mono" aria-hidden="true">⟳</span><span class="xr-kind-meta"><span class="xr-kind-name mono">worker</span><span class="xr-kind-desc">edge or queue worker</span></span></span>
+                <span class="xr-kind-item"><span class="xr-kind-glyph mono" aria-hidden="true">▤</span><span class="xr-kind-meta"><span class="xr-kind-name mono">database</span><span class="xr-kind-desc">relational or document store</span></span></span>
+                <span class="xr-kind-item"><span class="xr-kind-glyph mono" aria-hidden="true">≣</span><span class="xr-kind-meta"><span class="xr-kind-name mono">queue</span><span class="xr-kind-desc">message queue or topic</span></span></span>
+                <span class="xr-kind-item"><span class="xr-kind-glyph mono" aria-hidden="true">⌗</span><span class="xr-kind-meta"><span class="xr-kind-name mono">kv</span><span class="xr-kind-desc">key-value / cache namespace</span></span></span>
+                <span class="xr-kind-item"><span class="xr-kind-glyph mono" aria-hidden="true">▥</span><span class="xr-kind-meta"><span class="xr-kind-name mono">bucket</span><span class="xr-kind-desc">object storage</span></span></span>
+                <span class="xr-kind-item"><span class="xr-kind-glyph mono" aria-hidden="true">◷</span><span class="xr-kind-meta"><span class="xr-kind-name mono">cron</span><span class="xr-kind-desc">scheduled trigger</span></span></span>
+                <span class="xr-kind-item"><span class="xr-kind-glyph mono" aria-hidden="true">◈</span><span class="xr-kind-meta"><span class="xr-kind-name mono">durable_object</span><span class="xr-kind-desc">single-instance stateful actor</span></span></span>
+                <span class="xr-kind-item"><span class="xr-kind-glyph mono" aria-hidden="true">↗</span><span class="xr-kind-meta"><span class="xr-kind-name mono">external_api</span><span class="xr-kind-desc">third-party endpoint — the boundary</span></span></span>
+                <span class="xr-kind-item"><span class="xr-kind-glyph mono" aria-hidden="true">▭</span><span class="xr-kind-meta"><span class="xr-kind-name mono">static_site</span><span class="xr-kind-desc">built assets served as-is</span></span></span>
+                <span class="xr-kind-item"><span class="xr-kind-glyph mono" aria-hidden="true">⧉</span><span class="xr-kind-meta"><span class="xr-kind-name mono">compose_service</span><span class="xr-kind-desc">container from docker-compose</span></span></span>
+              </div>
+            </div>
+            <div class="xr-edu-card">
+              <strong class="xr-edu-card-label">5 · A finding may have no recommendation</strong>
+              <p class="xr-edu-card-text">Recommendations are deliberately absent for rules where the finding says enough on its own. The panel shows it under "No recommended change" instead of an empty card or a generated suggestion.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="xr-edu" aria-labelledby="xr-edu-levels-title">
+          <div class="xr-edu-head">
+            <h2 class="xr-edu-title" id="xr-edu-levels-title">How the three levels differ</h2>
+            <p class="xr-edu-sub">Each level answers one question and hides everything that would compete with the answer.</p>
+          </div>
+          <div class="xr-edu-grid xr-edu-grid-3">
+            <div class="xr-edu-card xr-edu-level">
+              <span class="xr-level-tag">L0</span>
+              <strong class="xr-edu-level-title">Which cluster is the problem?</strong>
+              <p class="xr-edu-card-text">Three boxes, three health chips each. All three lenses are visible at once here — the chips are how you decide which lens to switch to.</p>
+            </div>
+            <div class="xr-edu-card xr-edu-level">
+              <span class="xr-level-tag">L1</span>
+              <strong class="xr-edu-level-title">Which node inside it?</strong>
+              <p class="xr-edu-card-text">Nodes and intra-cluster edges only. Edges carrying a high or critical finding under the active lens take the severity colour; line weight encodes where the edge came from.</p>
+            </div>
+            <div class="xr-edu-card xr-edu-level">
+              <span class="xr-level-tag">L2</span>
+              <strong class="xr-edu-level-title">What does changing it touch?</strong>
+              <p class="xr-edu-card-text">One node pinned, its edges highlighted, everything else at 20% opacity. Dimming rather than hiding keeps the shape of the cluster visible.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="xr-edu" aria-labelledby="xr-edu-sev-title">
+          <div class="xr-edu-head">
+            <h2 class="xr-edu-title" id="xr-edu-sev-title">Severity without colour</h2>
+            <p class="xr-edu-sub">Three redundant channels, so grayscale print and colour-blind reading both survive.</p>
+          </div>
+          <div class="xr-edu-grid xr-edu-grid-3">
+            <div class="xr-edu-card">
+              <strong class="xr-edu-level-title">1 · Hatch density</strong>
+              <p class="xr-edu-card-text">Critical fills at a 6px pitch, high at 7px, medium at 9px, low not at all. Density survives any colour transform.</p>
+            </div>
+            <div class="xr-edu-card">
+              <strong class="xr-edu-level-title">2 · Glyph count</strong>
+              <p class="xr-edu-card-text">Two triangles for critical, one for high, a filled dot for medium, a mid-dot for low. Counting beats hue discrimination at chip size.</p>
+            </div>
+            <div class="xr-edu-card">
+              <strong class="xr-edu-level-title">3 · The word</strong>
+              <p class="xr-edu-card-text">Nodes at high or above carry a text badge naming the severity. The 5px left stripe is the fourth channel — position, not hue.</p>
+            </div>
+          </div>
+          <div class="xr-edu-card xr-edu-card-keyboard">
+            <strong class="xr-edu-level-title">Keyboard model</strong>
+            <p class="xr-edu-card-text">Every box is a real focusable control: <span class="mono">Tab</span> reaches it, <span class="mono">Enter</span> or <span class="mono">Space</span> zooms in, arrow keys move to the next sibling at the same level, and <span class="mono">Esc</span> goes up one level. Pinning is a toggle. Each box carries an <span class="mono">aria-label</span> and <span class="mono">aria-pressed</span> reports the pin state.</p>
+          </div>
+        </section>
+
+        <section class="xr-edu" aria-labelledby="xr-edu-legs-title">
+          <div class="xr-edu-head">
+            <h2 class="xr-edu-title" id="xr-edu-legs-title">Why extraction cards show three legs</h2>
+            <p class="xr-edu-sub">Any one of them alone is an argument for leaving things where they are.</p>
+          </div>
+          <div class="xr-edu-grid xr-edu-grid-3">
+            <div class="xr-edu-card xr-edu-card-accent">
+              <strong class="xr-edu-card-label">The legs are the recommendation</strong>
+              <p class="xr-edu-card-text">"Extract a microservice" is the most expensive advice this tool can give. Only all three legs together mean a boundary already exists and the code has not caught up.</p>
+            </div>
+            <div class="xr-edu-card">
+              <strong class="xr-edu-card-label">Two cards qualify, seven do not</strong>
+              <p class="xr-edu-card-text">Only nodes with all three evidence legs get the teal border. Configuration or single-file changes get a card without legs — the absence is a decision, not a gap.</p>
+            </div>
+            <div class="xr-edu-card">
+              <strong class="xr-edu-card-label">Effort × impact, not a score</strong>
+              <p class="xr-edu-card-text">S/M/L against High/Medium/Low, shown as two separate chips with their own glyphs. Collapsing them would hide the only comparison that matters when picking this sprint's work.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="xr-edu" aria-labelledby="xr-edu-diff-title">
+          <div class="xr-edu-head">
+            <h2 class="xr-edu-title" id="xr-edu-diff-title">Diff mode and export</h2>
+            <p class="xr-edu-sub">One pulse, then stillness.</p>
+          </div>
+          <div class="xr-edu-grid xr-edu-grid-3">
+            <div class="xr-edu-card">
+              <strong class="xr-edu-level-title">New findings pulse exactly once</strong>
+              <p class="xr-edu-card-text">A single stroke-width pulse on the node outline and one background fade on the panel card, both with <span class="mono">animation-iteration-count: 1</span>. After it settles, the "New" badge is the permanent signal.</p>
+            </div>
+            <div class="xr-edu-card">
+              <strong class="xr-edu-level-title">Resolved items stay visible</strong>
+              <p class="xr-edu-card-text">Struck through, with what they were, in their own block below the live findings. Deleting them silently would lose the only proof that last sprint's work landed.</p>
+            </div>
+            <div class="xr-edu-card">
+              <strong class="xr-edu-level-title">Reduced motion disables it</strong>
+              <p class="xr-edu-card-text">A <span class="mono">prefers-reduced-motion</span> block sets <span class="mono">animation: none</span> on both. The badge, teal outline and struck-through list carry the whole diff without the pulse.</p>
+            </div>
+          </div>
+        </section>
+
+      </div><!-- /.xr-page -->
     </div><!-- /view-arch -->
 
 

@@ -597,7 +597,7 @@ group("no class is applied without a rule, and no rule is applied to nothing");
   // looking like a layout bug for as long as nobody looked closely.
   const applied = uniq(matchAll(html, /class="([^"]+)"/g)
     .flatMap((c) => c.split(/\s+/))
-    .filter((c) => /^(panel|dash|ws|acct|scorecard|route|monitor)-/.test(c)));
+    .filter((c) => /^(panel|dash|ws|acct|scorecard|route|monitor|xr)-/.test(c)));
   const styled = new Set(matchAll(css, /\.([a-zA-Z][a-zA-Z0-9_-]*)/g));
   const unstyled = applied.filter((c) => !styled.has(c));
   expect(unstyled.length === 0,
