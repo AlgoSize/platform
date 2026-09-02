@@ -36,7 +36,9 @@ on:
       - "worker/**"
       - "mcp/**"
       - ".mcp.json"
+      - ".cursor/mcp.json"
       - ".github/workflows/mcp.yml"
+      - ".github/workflows/mcp-publish.yml"
   push:
     branches: [main]
     paths:

@@ -38,6 +38,7 @@ claude mcp add algosize --env ALGOSIZE_API_KEY=ask_live_your_key_here \
 
 Working inside this repository, `.mcp.json` at the repo root already declares
 the server; export `ALGOSIZE_API_KEY` in your shell and Claude Code picks it up.
+The same local bridge is wired for Cursor in `.cursor/mcp.json`.
 
 ## Claude Desktop
 
@@ -57,7 +58,7 @@ the server; export `ALGOSIZE_API_KEY` in your shell and Claude Code picks it up.
 
 ## Cursor
 
-`.cursor/mcp.json`:
+Published package (any project):
 
 ```json
 {
@@ -70,6 +71,10 @@ the server; export `ALGOSIZE_API_KEY` in your shell and Claude Code picks it up.
   }
 }
 ```
+
+Working inside this repository, `.cursor/mcp.json` already points at the local
+bridge (`node ./mcp/bin/algosize-mcp.mjs`); export `ALGOSIZE_API_KEY` in your
+shell the same way as for Claude Code.
 
 ## Configuration
 

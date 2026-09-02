@@ -8,6 +8,12 @@
   "files": ["bin", "src", "README.md"],
   "engines": { "node": ">=20" },
   "scripts": { "test": "node test/smoke.test.mjs" },
-  "license": "SEE LICENSE IN ../LICENSE",
-  "keywords": ["mcp", "model-context-protocol", "algosize", "claude", "security", "cost"]
+  "license": "UNLICENSED",
+  "publishConfig": { "access": "public" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/algosize/algosize.git",
+    "directory": "mcp"
+  },
+  "keywords": ["mcp", "model-context-protocol", "algosize", "claude", "cursor", "security", "cost"]
 }

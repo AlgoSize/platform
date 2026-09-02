@@ -1,0 +1,73 @@
+name: Publish @algosize/mcp
+
+# Ships the zero-dependency stdio bridge to npm so Cursor, Claude Desktop and
+# other hosts can `npx -y @algosize/mcp` without cloning this repo.
+#
+# Requires an npm access token with publish rights on the @algosize scope,
+# stored as the NPM_TOKEN Actions secret. When the secret is absent the job
+# still runs bridge tests and exits with a notice — same pattern as
+# algosize-audit.yml and its ALGOSIZE_API_KEY guard.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "mcp/**"
+      - ".github/workflows/mcp-publish.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: https://registry.npmjs.org
+
+      - name: Bridge declares no runtime dependencies
+        run: |
+          node -e '
+            const pkg = require("./package.json");
+            const deps = Object.keys(pkg.dependencies || {});
+            if (deps.length) {
+              console.error("The bridge must stay dependency-free; found: " + deps.join(", "));
+              process.exit(1);
+            }
+          '
+
+      - name: stdio bridge tests
+        run: node test/smoke.test.mjs
+
+      - name: Check for NPM_TOKEN
+        id: token
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "$NPM_TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::NPM_TOKEN is not set — skipping npm publish. Add an npm access token with publish rights on @algosize as the NPM_TOKEN secret."
+          fi
+
+      - name: Publish when the version is new
+        if: steps.token.outputs.present == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "@algosize/mcp@${VERSION}" version 2>/dev/null; then
+            echo "::notice::@algosize/mcp@${VERSION} is already on npm — skipping publish."
+          else
+            npm publish --access public
+            echo "Published @algosize/mcp@${VERSION}"
+          fi
