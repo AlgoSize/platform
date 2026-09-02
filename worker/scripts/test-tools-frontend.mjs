@@ -117,7 +117,7 @@ group("every endpoint the pages call is a route the Worker declares");
 group("the new classes are styled, and none are dead");
 // ===========================================================================
 {
-  const PREFIX = /^(flow-|opt-|watch-|night-|rewrite-|est-grid|est-col|panel-hub)/;
+  const PREFIX = /^(flow-|opt-|watch-|night-|rewrite-|est-grid|est-col|opt-card-hub)/;
   const applied = uniq([
     ...matchAll(optJs, /class:\s*"([^"]+)"/g).flatMap((c) => c.split(/\s+/)),
     ...matchAll(estJs, /class:\s*"([^"]+)"/g).flatMap((c) => c.split(/\s+/)),
@@ -125,7 +125,7 @@ group("the new classes are styled, and none are dead");
     ...matchAll(html, /class="([^"]+)"/g).flatMap((c) => c.split(/\s+/)),
   ]).filter((c) => PREFIX.test(c));
   const styled = new Set(matchAll(css,
-    /\.((?:flow-|opt-|watch-|night-|rewrite-|est-grid|est-col|panel-hub)[a-zA-Z0-9-]*)/g));
+    /\.((?:flow-|opt-|watch-|night-|rewrite-|est-grid|est-col|opt-card-hub)[a-zA-Z0-9-]*)/g));
   // Dynamic tone suffix: "rewrite-" + tone assembled at runtime is matched
   // by its literal variants below; the concatenation base is not a class.
   const unstyled = applied.filter((c) => !styled.has(c));

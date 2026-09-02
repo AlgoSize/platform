@@ -126,13 +126,24 @@
     if (jsonPre) jsonPre.textContent = configJson();
     if (actions) actions.hidden = entries.length === 0;
 
+    var invalid = entries.filter(function (e) {
+      return e.sampleInput !== undefined && e.sampleInput !== null &&
+        typeof e.sampleInput === "object" && !Array.isArray(e.sampleInput);
+    }).length;
+
     if (count) {
-      var over = entries.filter(function (e) { return e.measured && rank(e.measured) > rank(e.baseline); }).length;
-      count.textContent = entries.length
-        ? entries.length + (entries.length === 1 ? " entry" : " entries") +
-          (over ? " · " + over + " over ceiling" : "") + " · optimizer.config.json"
-        : "optimizer.config.json · fed by the bench, read by both automations";
+      if (!entries.length) {
+        count.textContent = "Nothing watched yet";
+      } else {
+        var over = entries.filter(function (e) {
+          return e.measured && rank(e.measured) > rank(e.baseline);
+        }).length;
+        count.textContent = entries.length + (entries.length === 1 ? " entry" : " entries") +
+          (over ? " · " + over + " over ceiling" : "") +
+          (invalid ? " · " + invalid + " invalid" : "");
+      }
     }
+    updateGateStatus();
 
     if (cap) {
       if (entries.length > NIGHTLY_CAP) {
@@ -160,13 +171,20 @@
     entries.forEach(function (entry, idx) {
       var row = el("div", { class: "watch-row" });
 
-      var head = el("div", { class: "watch-row-top" });
-      head.appendChild(el("strong", { class: "mono watch-fn" }, entry.functionName));
+      var top = el("div", { class: "watch-row-top" });
+      var meta = el("div", { class: "watch-row-meta" });
+      meta.appendChild(el("strong", { class: "mono watch-fn" }, entry.functionName));
+      if (entry.file) {
+        meta.appendChild(el("span", { class: "mono watch-file-hint" }, entry.file));
+      }
+      top.appendChild(meta);
 
       var pills = el("span", { class: "watch-pills" });
-      var ceil = el("select", { class: "panel-input watch-ceiling", "aria-label": "Complexity ceiling for " + entry.functionName });
+      var ceilWrap = el("span", { class: "watch-ceiling-wrap" });
+      ceilWrap.appendChild(el("span", { class: "watch-ceiling-label" }, "under"));
+      var ceil = el("select", { class: "watch-ceiling", "aria-label": "Complexity ceiling for " + entry.functionName });
       BUCKETS.forEach(function (b) {
-        var opt = el("option", { value: b }, "under " + pretty(b));
+        var opt = el("option", { value: b }, pretty(b));
         if (b === entry.baseline) opt.selected = true;
         ceil.appendChild(opt);
       });
@@ -175,15 +193,22 @@
         saveEntries();
         renderWatchlist();
       });
-      pills.appendChild(ceil);
+      ceilWrap.appendChild(ceil);
+      pills.appendChild(ceilWrap);
 
       if (entry.measured) {
         var overCeil = rank(entry.measured) > rank(entry.baseline);
-        pills.appendChild(el("span",
-          { class: "chip " + (overCeil ? "chip-danger" : "chip-ok") },
-          (overCeil ? "↑ " : "✓ ") + pretty(entry.measured)));
+        var gradePill = el("span", {
+          class: "watch-grade-pill " + (overCeil ? "watch-grade-over" : "watch-grade-ok"),
+        });
+        gradePill.appendChild(el("span", { "aria-hidden": "true" }, overCeil ? "↑" : "✓"));
+        gradePill.appendChild(document.createTextNode(" " + pretty(entry.measured)));
+        pills.appendChild(gradePill);
       } else {
-        pills.appendChild(el("span", { class: "chip chip-muted" }, "not yet measured"));
+        var muted = el("span", { class: "watch-grade-pill watch-grade-muted" });
+        muted.appendChild(el("span", { "aria-hidden": "true" }, "?"));
+        muted.appendChild(document.createTextNode(" unknown"));
+        pills.appendChild(muted);
       }
 
       var rm = el("button", { type: "button", class: "btn btn-ghost btn-sm btn-danger-ghost" }, "Remove");
@@ -194,8 +219,8 @@
         renderGate();
       });
       pills.appendChild(rm);
-      head.appendChild(pills);
-      row.appendChild(head);
+      top.appendChild(pills);
+      row.appendChild(top);
 
       var fileWrap = el("div", { class: "watch-file" });
       var file = el("input", {
@@ -246,6 +271,41 @@
     renderGate();
     var panel = document.getElementById("panel-watchlist");
     if (panel && panel.scrollIntoView) panel.scrollIntoView({ block: "nearest" });
+  }
+
+  // -----------------------------------------------------------------------
+  // Status pills on the gate and nightly cards
+  // -----------------------------------------------------------------------
+
+  function updateGateStatus() {
+    var status = document.getElementById("opt-gate-status");
+    if (!status) return;
+    var n = state.entries.length;
+    if (!n || state.hasApiKey !== true) {
+      status.textContent = "NOT SET UP";
+      status.className = "opt-status-pill opt-status-muted";
+    } else {
+      status.textContent = "GATING " + n + " FUNCTION" + (n === 1 ? "" : "S");
+      status.className = "opt-status-pill opt-status-ok";
+    }
+  }
+
+  function updateNightStatus(watching) {
+    var status = document.getElementById("opt-night-status");
+    if (!status) return;
+    if (!watching || !watching.length) {
+      status.hidden = true;
+      return;
+    }
+    status.hidden = false;
+    var anyPaused = watching.every(function (m) { return m.paused; });
+    if (anyPaused) {
+      status.textContent = "PAUSED";
+      status.className = "opt-status-pill opt-status-warn";
+    } else {
+      status.textContent = "ON";
+      status.className = "opt-status-pill opt-status-ok";
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -316,6 +376,7 @@
 
     wrap.appendChild(el("p", { class: "opt-safety mono" },
       "Until the secret exists the workflow skips itself with a notice — your builds never go red from setup."));
+    updateGateStatus();
   }
 
   // -----------------------------------------------------------------------
@@ -345,6 +406,7 @@
     });
 
     if (!watching.length) {
+      updateNightStatus([]);
       var off = el("div", { class: "night-off" });
       off.appendChild(el("p", null,
         "The repo monitor re-grades the watched functions every night and emails only regressions — " +
@@ -353,6 +415,8 @@
       wrap.appendChild(off);
       return;
     }
+
+    updateNightStatus(watching);
 
     watching.forEach(function (m) {
       var row = el("div", { class: "night-row" });
