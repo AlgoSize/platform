@@ -53,10 +53,10 @@
     // which addresses a RUN. One shape for all five tools rather than each
     // page inventing its own, so the workspace builds the href from the
     // analyzer the API sends and never from a per-tool special case.
-    // The four analyzers the Worker will re-read for a monitored repo
-    // (INSPECTABLE in monitors/inspect.js). Cloud spend is not one of them,
-    // so #/cost/watch/<id> is not a route rather than a route to nothing.
-    var watch = h.match(/^#\/(scanner|arch|optimizer|estimate)\/watch\/(.+)$/);
+    // The analyzers the Worker will re-read for a monitored repo
+    // (INSPECTABLE in monitors/inspect.js). All five now, cloud spend
+    // included — it was the last column that could be graded and not opened.
+    var watch = h.match(/^#\/(scanner|arch|optimizer|estimate|cost)\/watch\/(.+)$/);
     if (watch) {
       return { view: watch[1], monitorId: decodeURIComponent(watch[2]) };
     }
@@ -140,6 +140,10 @@
       if (route.monitorId) window.DashArch.openMonitor(route.monitorId);
       else if (route.runId) window.DashArch.openRun(route.runId, route.componentId);
       else window.DashArch.load();
+    }
+    if (route.view === "cost"      && window.DashCost) {
+      if (route.monitorId) window.DashCost.openMonitor(route.monitorId);
+      else window.DashCost.load();
     }
     if (route.view === "scanner"   && window.DashScanner) {
       if (route.monitorId) window.DashScanner.openMonitor(route.monitorId);

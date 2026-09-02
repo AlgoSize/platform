@@ -21,7 +21,7 @@
 
 import { inspectMonitor, INSPECTABLE } from "../src/monitors/inspect.js";
 import { monitorResultHandler } from "../src/handlers/monitors.js";
-import { createMonitor, getMonitorById, recordMonitorRun } from "../src/monitors/_store.js";
+import { createMonitor, getMonitorById, recordMonitorRun, MONITOR_ANALYZERS } from "../src/monitors/_store.js";
 import { makeD1 } from "./_d1-stub.mjs";
 
 let failures = 0;
@@ -99,9 +99,17 @@ const COMPOSE = [
 group("the analyzer set is closed");
 // ===========================================================================
 {
-  expect(INSPECTABLE.length === 4 &&
-         ["vuln", "arch", "estimate", "algo"].every((a) => INSPECTABLE.includes(a)),
-    `inspectable analyzers are exactly the four a monitor can run (${INSPECTABLE.join(", ")})`);
+  // Derived from MONITOR_ANALYZERS rather than written out, because the
+  // invariant is the sentence, not the list: every analyzer you can SCHEDULE,
+  // you can OPEN. Cloud spend was the counter-example for months — schedulable
+  // since migration 0023, gradeable on the scorecard, and openable nowhere, so
+  // its column had the only cells in the grid that led to a dead end.
+  const missing = MONITOR_ANALYZERS.filter((a) => !INSPECTABLE.includes(a));
+  const extra   = INSPECTABLE.filter((a) => !MONITOR_ANALYZERS.includes(a));
+  expect(missing.length === 0 && extra.length === 0,
+    `every analyzer a monitor can run can also be inspected (${INSPECTABLE.join(", ")})` +
+    (missing.length ? ` — schedulable but not inspectable: ${missing.join(", ")}` : "") +
+    (extra.length ? ` — inspectable but not schedulable: ${extra.join(", ")}` : ""));
 
   const env = makeEnv();
   await seedOrg(env, "org_x", "u_x", "x@acme.test");
@@ -331,6 +339,79 @@ group("a successful inspection carries the result AND what is new in it");
     "the payload carries computedAt, so the page can say it is showing the repo as it is NOW");
   expect(body.baseline && body.baseline.at === NOW,
     "…alongside the baseline's own timestamp, which is a different fact");
+}
+
+// ===========================================================================
+group("cloud spend opens a standing result, and never a diff");
+// ===========================================================================
+{
+  const env = makeEnv();
+  await seedOrg(env, "org_c", "u_c", "c@acme.test");
+
+  // The column set the CUR parser actually requires — same shape the
+  // manual-upload tests use, so this exercises one parser and not a fixture
+  // invented to satisfy it.
+  const CUR = [
+    "lineItem/ProductCode,lineItem/UsageType,lineItem/UnblendedCost",
+    "AmazonEC2,BoxUsage:m5.large,120.50",
+    "AmazonEC2,BoxUsage:m5.large,118.25",
+    "AmazonS3,TimedStorage-ByteHrs,45.10",
+  ].join("\n");
+
+  const m = await createMonitor(env, {
+    orgId: "org_c", repoUrl: "https://github.com/acme/spend", createdBy: "u_c",
+    analyzers: ["vuln", "cost"],
+  });
+
+  const withExport = fakeGithub({
+    "algosize.budget.json": JSON.stringify({ cur: "billing/cur-2026-08.csv" }),
+    "billing/cur-2026-08.csv": CUR,
+  });
+
+  const ok = await inspectMonitor(env, null, m, "cost", withExport);
+  expect(ok.status === "ok", `a committed export is read and priced (got ${ok.status}${ok.reason ? "/" + ok.reason : ""})`);
+  expect(ok.result && typeof ok.result.currentSpend === "number",
+    "…returning the same shape the manual upload renders, so one renderer serves both");
+  expect(ok.curPath === "billing/cur-2026-08.csv",
+    "…and names the committed path it was read from, so the figure can be checked");
+
+  // The property that makes this analyzer different from the other four.
+  expect(ok.delta === null,
+    "there is NO delta — a bill differs every day, so diffing one sweep against the last " +
+    "would report Tuesday being different from Monday as a finding");
+  expect(ok.baseline && ok.baseline.isBaseline === null,
+    "…and isBaseline is null rather than false: `false` would assert this is not the first " +
+    "reading, which nothing measured");
+
+  // Every way it can decline, and each has to be its own sentence. A repo
+  // that never named an export opted out; one that named a missing file
+  // meant to opt in. Same blank cell, opposite fixes.
+  const noConfig = await inspectMonitor(env, null, m, "cost", fakeGithub({}));
+  expect(noConfig.status === "unavailable" && noConfig.reason === "no_cur",
+    `a repo with no algosize.budget.json is unavailable/no_cur (got ${noConfig.reason})`);
+
+  const namedButMissing = await inspectMonitor(env, null, m, "cost", fakeGithub({
+    "algosize.budget.json": JSON.stringify({ cur: "billing/gone.csv" }),
+  }));
+  expect(namedButMissing.status === "unavailable" && namedButMissing.reason === "cur_missing",
+    `a named-but-uncommitted export is its own reason (got ${namedButMissing.reason})`);
+  expect(namedButMissing.detail === "billing/gone.csv",
+    "…carrying the path, so the reader is not sent hunting for a filename only we know");
+
+  // Never a zero. This is the column where the difference costs real money:
+  // a $0 bill and a bill nobody read are opposite claims.
+  [noConfig, namedButMissing].forEach((r) => {
+    expect(!r.result, "an unreadable spend carries no result at all, never an empty one");
+  });
+
+  // And the analyzer-off case stays distinct from all of them.
+  const other = await createMonitor(env, {
+    orgId: "org_c", repoUrl: "https://github.com/acme/nospend", createdBy: "u_c",
+    analyzers: ["vuln"],
+  });
+  const off = await inspectMonitor(env, null, other, "cost", withExport);
+  expect(off.status === "not_enabled" && off.reason === "analyzer_off",
+    "a monitor not watching spend reports analyzer_off, which offers a switch rather than an error");
 }
 
 // ===========================================================================

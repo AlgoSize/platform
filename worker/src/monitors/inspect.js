@@ -39,6 +39,7 @@
 
 import {
   runArchForMonitor,
+  runCostForMonitor,
   runEstimateForMonitor,
   runAlgoForMonitor,
   diffArchFindings,
@@ -50,7 +51,7 @@ import { runLockfileAudit } from "../handlers/analyze.js";
 import { diffAdvisories } from "./diff.js";
 
 /** The analyzers a monitor can be inspected for — the same set it can run. */
-export const INSPECTABLE = Object.freeze(["vuln", "arch", "estimate", "algo"]);
+export const INSPECTABLE = Object.freeze(["vuln", "arch", "estimate", "algo", "cost"]);
 
 /**
  * Re-run one analyzer against one monitor's repository.
@@ -94,6 +95,7 @@ export async function inspectMonitor(env, ctx, monitor, analyzer, fetchImpl) {
   if (analyzer === "vuln")     return inspectVuln(env, ctx, monitor, baseline);
   if (analyzer === "arch")     return inspectArch(env, monitor, baseline, fetchImpl);
   if (analyzer === "estimate") return inspectEstimate(env, ctx, monitor, baseline, fetchImpl);
+  if (analyzer === "cost")     return inspectCost(env, ctx, monitor, baseline, fetchImpl);
   return inspectAlgo(env, monitor, baseline, fetchImpl);
 }
 
@@ -155,6 +157,45 @@ async function inspectArch(env, monitor, baseline, fetchImpl) {
       // the only proof that last sprint's refactor actually landed.
       resolvedKeys: (monitor.lastArchKeys || []).filter((k) => !run.keys.includes(k)),
     },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// cost — the cloud spend analyzer
+// ---------------------------------------------------------------------------
+//
+// The one inspectable analyzer with NO delta, and that is the honest answer
+// rather than a gap. runCostForMonitor stores no baseline on purpose: a bill
+// differs every single day, so diffing one sweep against the last would
+// report Tuesday being different from Monday as a finding. What the column
+// holds is a standing result, not a comparison.
+//
+// So this returns `delta: null` and `isBaseline: null` — not an empty delta
+// and not `false`. An empty delta object would read as "we compared and
+// nothing is new", and `false` would assert this is not the first reading.
+// Neither was measured. Saying nothing about a comparison nobody ran is the
+// whole rule this file is built on.
+async function inspectCost(env, ctx, monitor, baseline, fetchImpl) {
+  const run = await runCostForMonitor(monitor, env, ctx, fetchImpl);
+  if (run.status !== "ok") {
+    return {
+      status: "unavailable",
+      reason: run.reason || run.status,
+      // Which file was named but not found, or was too large. "cur_missing"
+      // alone sends a reader to look for a file whose path only this knows.
+      detail: run.detail || null,
+      baseline,
+    };
+  }
+  return {
+    status: "ok",
+    result: run.result,
+    // The committed path this was read from. A spend figure with no stated
+    // source is a number the reader cannot check, and this one comes out of
+    // whatever `cur` in algosize.budget.json points at.
+    curPath: run.curPath || null,
+    baseline: { ...baseline, isBaseline: null },
+    delta: null,
   };
 }
 
