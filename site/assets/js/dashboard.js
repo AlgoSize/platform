@@ -831,8 +831,16 @@
 
     // Big-O probe chart — inline SVG, no chart library.
     if (result.bigO && Array.isArray(result.bigO.points) && result.bigO.points.length >= 2) {
-      wrap.appendChild(el("h4", { class: "result-section-title" }, "Timing at 3 input sizes"));
-      wrap.appendChild(renderBigOChart(result.bigO.points));
+      wrap.appendChild(el("h4", { class: "result-section-title" }, "Timing curve · log\u2013log"));
+      wrap.appendChild(renderBigOChart(result.bigO.points, result.bigO.noiseFloorMs));
+      // Said once, under the chart: the grade is the SLOPE of this line, which
+      // is only true because both axes are logarithmic. On the linear axis
+      // this chart used to have, the same three points supported no such
+      // reading — and the caption would have been wrong.
+      wrap.appendChild(el("p", { class: "result-reason" },
+        "Both axes are logarithmic, so the line's steepness is the measured exponent \u2014 " +
+        "the same fit the grade above comes from. A hollow point sat at or under the noise " +
+        "floor, which is what the fit used for it rather than the raw reading."));
     }
 
     // Sample-run result preview.
@@ -1001,54 +1009,116 @@
   // Inline SVG chart for the Big-O probe — renders 3 (n, ms) points with a
   // log-x axis. No external chart lib so the dashboard stays a single static
   // page with zero build step.
-  function renderBigOChart(points) {
-    var W = 480, H = 140, PAD = 28;
+  /**
+   * The three probes, drawn in the space the grade was computed in.
+   *
+   * This used to plot log10(n) against a LINEAR millisecond axis, which is a
+   * different geometry from the one the verdict comes out of: analyzers/bigo.js
+   * fits log(t) against log(n) and reads the SLOPE. On a linear y-axis an
+   * O(n log n) curve and an O(n²) curve both look like a hockey stick, and an
+   * O(n) function looks nearly flat beside either — so the picture could not
+   * be used to check the letter above it, which is the only reason to draw it.
+   *
+   * Log–log fixes that: a complexity class becomes a straight line whose
+   * steepness IS the exponent, and two grades are told apart by eye.
+   *
+   * The noise floor is drawn because the fit already applies it. Any probe at
+   * or below `noiseFloorMs` was replaced by the floor before the slope was
+   * taken, so plotting it where it landed would show a measurement the grade
+   * never used.
+   */
+  function renderBigOChart(points, noiseFloorMs) {
+    var W = 480, H = 160, PAD_L = 46, PAD_R = 16, PAD_T = 14, PAD_B = 30;
+    var floor = typeof noiseFloorMs === "number" && noiseFloorMs > 0 ? noiseFloorMs : null;
+
     var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("viewBox", "0 0 " + W + " " + H);
     svg.setAttribute("class", "bigo-chart");
     svg.setAttribute("role", "img");
-    svg.setAttribute("aria-label", "Run time at three input sizes");
+    svg.setAttribute("aria-label",
+      "Run time against input size on logarithmic axes; the slope is the measured complexity");
 
+    function svgEl(tag, attrs) {
+      var n = document.createElementNS("http://www.w3.org/2000/svg", tag);
+      Object.keys(attrs).forEach(function (k) { n.setAttribute(k, attrs[k]); });
+      return n;
+    }
+
+    // Both axes in log10. Zero and sub-floor timings are lifted to the floor
+    // for plotting exactly as the fit lifts them — never dropped, because a
+    // missing dot would read as a probe that did not run.
+    var lift = floor || 0.001;
     var xs = points.map(function (p) { return Math.log10(p.n); });
-    var ys = points.map(function (p) { return p.ms; });
+    var ys = points.map(function (p) { return Math.log10(Math.max(p.ms, lift)); });
+
     var xMin = Math.min.apply(null, xs), xMax = Math.max.apply(null, xs);
-    var yMax = Math.max.apply(null, ys) || 1;
     if (xMax === xMin) xMax = xMin + 1;
+    var yLo = Math.min.apply(null, ys);
+    var yHi = Math.max.apply(null, ys);
+    if (floor) yLo = Math.min(yLo, Math.log10(floor));
+    if (yHi - yLo < 0.5) { yHi = yLo + 0.5; }        // a flat run still needs a band
+    var yPad = (yHi - yLo) * 0.12;
+    yLo -= yPad; yHi += yPad;
 
-    function px(x) { return PAD + (x - xMin) / (xMax - xMin) * (W - 2 * PAD); }
-    function py(y) { return H - PAD - (y / yMax) * (H - 2 * PAD); }
+    function px(x) { return PAD_L + (x - xMin) / (xMax - xMin) * (W - PAD_L - PAD_R); }
+    function py(y) { return H - PAD_B - (y - yLo) / (yHi - yLo) * (H - PAD_T - PAD_B); }
 
-    // Axes
-    var ax = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    ax.setAttribute("d", "M" + PAD + " " + (H - PAD) + " L" + (W - PAD) + " " + (H - PAD));
-    ax.setAttribute("stroke", "#9ca3af"); ax.setAttribute("fill", "none");
-    svg.appendChild(ax);
+    svg.appendChild(svgEl("path", {
+      d: "M" + PAD_L + " " + (H - PAD_B) + " L" + (W - PAD_R) + " " + (H - PAD_B),
+      stroke: "#2a3340", fill: "none",
+    }));
+    svg.appendChild(svgEl("path", {
+      d: "M" + PAD_L + " " + PAD_T + " L" + PAD_L + " " + (H - PAD_B),
+      stroke: "#2a3340", fill: "none",
+    }));
 
-    // Polyline through the points
+    // The noise floor, as a rule rather than as a note under the chart: a
+    // point sitting on it is the fastest thing this bench can claim to have
+    // measured, not the fastest thing the function can do.
+    if (floor) {
+      var fy = py(Math.log10(floor));
+      svg.appendChild(svgEl("path", {
+        d: "M" + PAD_L + " " + fy + " L" + (W - PAD_R) + " " + fy,
+        stroke: "#f59e0b", "stroke-dasharray": "4 4", "stroke-width": "1", fill: "none",
+        opacity: "0.7",
+      }));
+      var fl = svgEl("text", {
+        x: W - PAD_R, y: fy - 4, "text-anchor": "end",
+        "font-size": "10", fill: "#f59e0b",
+      });
+      fl.textContent = formatMs(floor) + " noise floor";
+      svg.appendChild(fl);
+    }
+
     var d = points.map(function (p, i) {
-      return (i === 0 ? "M" : "L") + px(Math.log10(p.n)) + " " + py(p.ms);
+      return (i === 0 ? "M" : "L") + px(Math.log10(p.n)) + " " + py(Math.log10(Math.max(p.ms, lift)));
     }).join(" ");
-    var line = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    line.setAttribute("d", d);
-    line.setAttribute("stroke", "#2563eb"); line.setAttribute("fill", "none");
-    line.setAttribute("stroke-width", "2");
-    svg.appendChild(line);
+    svg.appendChild(svgEl("path", { d: d, stroke: "#5eead4", fill: "none", "stroke-width": "2" }));
 
-    // Points + labels
     points.forEach(function (p) {
+      var clamped = floor !== null && p.ms <= floor;
       var cx = px(Math.log10(p.n));
-      var cy = py(p.ms);
-      var dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-      dot.setAttribute("cx", cx); dot.setAttribute("cy", cy);
-      dot.setAttribute("r", 4); dot.setAttribute("fill", "#2563eb");
-      svg.appendChild(dot);
-      var lbl = document.createElementNS("http://www.w3.org/2000/svg", "text");
-      lbl.setAttribute("x", cx); lbl.setAttribute("y", H - PAD + 16);
-      lbl.setAttribute("text-anchor", "middle");
-      lbl.setAttribute("font-size", "11"); lbl.setAttribute("fill", "#6b7280");
-      lbl.textContent = "n=" + p.n + " · " + formatMs(p.ms);
+      var cy = py(Math.log10(Math.max(p.ms, lift)));
+      svg.appendChild(svgEl("circle", {
+        cx: cx, cy: cy, r: 4,
+        // A clamped probe is hollow: it marks where the fit put the point,
+        // not where the clock did.
+        fill: clamped ? "#0a0d14" : "#5eead4",
+        stroke: clamped ? "#f59e0b" : "#5eead4", "stroke-width": "2",
+      }));
+      var lbl = svgEl("text", {
+        x: cx, y: H - PAD_B + 15, "text-anchor": "middle",
+        "font-size": "10", fill: "#8a93a3",
+      });
+      lbl.textContent = "n=" + p.n + " · " + (clamped ? "< " + formatMs(floor) : formatMs(p.ms));
       svg.appendChild(lbl);
     });
+
+    var yl = svgEl("text", {
+      x: 4, y: PAD_T + 8, "font-size": "10", fill: "#5b6373",
+    });
+    yl.textContent = "ms (log)";
+    svg.appendChild(yl);
 
     return svg;
   }

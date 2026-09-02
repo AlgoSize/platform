@@ -6428,3 +6428,177 @@ a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
 }
 .nav-menu-panel a:last-child { border-bottom: 0; }
 .nav-menu-panel a:hover { background: var(--bg-card); color: var(--text); }
+
+/* ---------------------------------------------------------------------------
+   Baseline panel — "what tonight's sweep will compare against"
+   ---------------------------------------------------------------------------
+   Collapsed by default and visually quieter than the row it hangs off: this
+   answers a question a reader asks occasionally, not one they scan every
+   morning. Six rows per monitor, open, on a page listing twenty of them would
+   bury the states that DO need daily attention. */
+.monitor-baseline { margin-top: var(--s-2); }
+.monitor-baseline-summary {
+  cursor: pointer;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  padding: 2px 0;
+}
+.monitor-baseline-summary::-webkit-details-marker { display: none; }
+.monitor-baseline-summary::before {
+  content: "▸";
+  font-size: 0.6rem;
+  color: var(--text-dim);
+  transition: transform 120ms ease;
+}
+.monitor-baseline[open] > .monitor-baseline-summary::before { transform: rotate(90deg); }
+.monitor-baseline-summary:hover { color: var(--text); }
+.monitor-baseline-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.monitor-baseline-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  margin-top: var(--s-2);
+  padding: var(--s-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+}
+.monitor-baseline-row { display: flex; gap: var(--s-3); align-items: flex-start; }
+/* A baseline that was never recorded is dimmed, not hidden: the row has to be
+   present for the reader to see that the analyzer is on and still has nothing
+   behind it. Absence is the finding. */
+.monitor-baseline-row-empty { opacity: 0.72; }
+.monitor-baseline-glyph {
+  flex: 0 0 auto;
+  min-width: 1.6em;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  padding-top: 1px;
+}
+.monitor-baseline-body { min-width: 0; flex: 1 1 auto; }
+.monitor-baseline-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  align-items: baseline;
+  font-size: 0.74rem;
+}
+.monitor-baseline-value { color: var(--text); font-size: 0.72rem; }
+.monitor-baseline-row-empty .monitor-baseline-value { color: var(--text-dim); }
+.monitor-baseline-at { color: var(--text-dim); font-size: 0.64rem; }
+.monitor-baseline-note {
+  margin: 2px 0 0;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+/* Cloud spend is recorded and compared against nothing. Marked rather than
+   left to read like the five rows above it, which ARE diff bases. */
+.monitor-baseline-nodiff {
+  border-left: 2px solid var(--accent-warm);
+  padding-left: var(--s-2);
+  margin-top: var(--s-2);
+  color: var(--text-dim);
+}
+.monitor-baseline-foot {
+  margin: var(--s-3) 0 0;
+  font-size: 0.66rem;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+/* ---------------------------------------------------------------------------
+   CI gates — the overview strip, and the setup folded behind it
+   ---------------------------------------------------------------------------
+   Five always-expanded wizards made the Monitors page mostly setup for gates
+   the reader had usually already wired. The wizards keep every ID and every
+   word; they are simply behind a disclosure now, with this strip carrying
+   what is worth seeing without opening one. */
+#ci-gates-body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--s-3);
+}
+.gate-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding: var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+}
+.gate-card-top { display: flex; flex-wrap: wrap; gap: var(--s-2); align-items: baseline; }
+.gate-card-file { margin: 0; font-size: 0.64rem; color: var(--text-dim); word-break: break-all; }
+.gate-card-on { margin: 0; font-size: 0.7rem; color: var(--text-muted); line-height: 1.45; }
+.gate-card-last { margin: var(--s-1) 0 0; font-size: 0.68rem; color: var(--text); line-height: 1.5; }
+/* Why a gate has nothing to show. Never phrased as a verdict on the
+   customer's repository, which we cannot see. */
+.gate-card-blind {
+  margin: var(--s-1) 0 0;
+  font-size: 0.66rem;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+.gate-card-jump {
+  margin-top: auto;
+  padding-top: var(--s-2);
+  font-size: 0.7rem;
+  align-self: flex-start;
+}
+
+.gate-setup { margin: 0; }
+.gate-setup-summary {
+  cursor: pointer;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  padding: 2px 0;
+}
+.gate-setup-summary::-webkit-details-marker { display: none; }
+.gate-setup-summary::before {
+  content: "▸";
+  font-size: 0.62rem;
+  color: var(--text-dim);
+  transition: transform 120ms ease;
+}
+.gate-setup[open] > .gate-setup-summary::before { transform: rotate(90deg); }
+.gate-setup-summary:hover { color: var(--text); }
+.gate-setup-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---------------------------------------------------------------------------
+   Recent CI runs
+   --------------------------------------------------------------------------- */
+.ci-run-list { display: flex; flex-direction: column; gap: var(--s-2); }
+.ci-run-row {
+  display: flex;
+  gap: var(--s-3);
+  align-items: flex-start;
+  padding: var(--s-2) 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+.ci-run-row:last-child { border-bottom: 0; }
+.ci-run-body { min-width: 0; flex: 1 1 auto; display: flex; flex-wrap: wrap; gap: var(--s-2); align-items: baseline; }
+.ci-run-head { flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: var(--s-2); font-size: 0.7rem; }
+.ci-run-when { color: var(--text-dim); }
+.ci-run-headline { margin: 0; flex: 1 1 auto; font-size: 0.74rem; color: var(--text); line-height: 1.45; }
+.ci-run-report { font-size: 0.68rem; }
+.ci-run-foot {
+  margin: var(--s-3) 0 0;
+  font-size: 0.66rem;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+@media (max-width: 640px) {
+  #ci-gates-body { grid-template-columns: 1fr; }
+  .ci-run-row { flex-direction: column; gap: var(--s-1); }
+}

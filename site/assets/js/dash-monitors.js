@@ -26,6 +26,9 @@
   var REPO_RE = /^https?:\/\/(?:www\.)?github\.com\/([\w.-]+)\/([\w.-]+?)(?:\.git)?\/*$/i;
 
   var state = {
+    // Stored CI runs, newest first. null = the read failed, which is a
+    // different thing from an empty feed and renders differently.
+    ciRuns: [],
     loaded: false,
     schedule: "daily",
     limit: null,
@@ -246,6 +249,8 @@
       if (why) info.appendChild(el("p", { class: "monitor-why" }, why));
       var az = analyzerRow(m);
       if (az) info.appendChild(az);
+      var base = baselinePanel(m);
+      if (base) info.appendChild(base);
       li.appendChild(info);
 
       var actions = el("div", { class: "monitor-actions" });
@@ -492,6 +497,198 @@
       .then(function () { setBusy(chip, false); });
   }
 
+  // ---------------------------------------------------------------------
+  // The baseline: what tonight's sweep will compare against
+  // ---------------------------------------------------------------------
+  //
+  // Every "+2 new" badge on this page is a subtraction, and until now the
+  // page showed only the answer. What is being subtracted FROM is already
+  // stored per monitor and already served: lastAdvisoryIds, lastSource,
+  // lastArchKeys, lastEstimate, lastAlgo and lastCost all come down on
+  // GET /api/monitors. No new table, no new endpoint — the numbers were
+  // simply never rendered.
+  //
+  // Why it earns a panel: a delta is only worth trusting if its starting
+  // point is visible. "No change" against a baseline recorded last night and
+  // "no change" against one recorded three weeks ago, before two skipped
+  // sweeps, are the same two words and very different facts.
+  //
+  // Collapsed by default. This is the answer to a question a reader asks
+  // occasionally ("compared to WHAT?"), not one they scan every morning, and
+  // six rows per monitor open on a page listing twenty of them would bury the
+  // states that do need daily attention.
+
+  /** A baseline the sweep never recorded. Never rendered as a zero — the
+   *  distinction this whole panel exists to make. */
+  function noBaseline(note) {
+    return { value: null, note: note };
+  }
+
+  function severityTail(counts) {
+    var order = ["critical", "high", "medium", "low", "info"];
+    var parts = [];
+    order.forEach(function (k) {
+      var n = Number(counts && counts[k]);
+      if (n > 0) parts.push(n + " " + k);
+    });
+    return parts.length ? parts.join(", ") : null;
+  }
+
+  /**
+   * One row per thing the sweep holds, in the order the sweep computes them.
+   *
+   * `diffed` is the load-bearing field. Five of these are compared against on
+   * every run (monitors/run.js builds diffAdvisories, sourceDiff, archDiff,
+   * estDiff and algoDiff); cloud spend is recorded and compared against
+   * nothing — there is no costDiff, deliberately, because a bill differs
+   * every day and "Tuesday is not Monday" would be noise dressed as a
+   * finding. Listing it silently beside five real baselines would imply a
+   * comparison the product does not make.
+   */
+  function baselineRows(m) {
+    var on = m.analyzers || [];
+    var rows = [];
+
+    // Dependencies and Code both come from the vuln analyzer, which every
+    // monitor runs — it is what a monitor IS — so neither is gated on `on`.
+    rows.push({
+      glyph: "!", label: "Dependencies", tool: "scanner", diffed: true,
+      body: (m.knownAdvisoryCount === null || m.knownAdvisoryCount === undefined)
+        ? noBaseline("No completed sweep has recorded an advisory list yet.")
+        : {
+            value: m.knownAdvisoryCount + " advisor" +
+                   (m.knownAdvisoryCount === 1 ? "y" : "ies") + " known",
+            note: "Tomorrow's email names the advisories that are not in this set.",
+          },
+      at: m.lastDelta ? m.lastDelta.at : null,
+    });
+
+    rows.push({
+      glyph: "\u2039\u203a", label: "Code", tool: "scanner", diffed: true,
+      body: !m.lastSource
+        ? noBaseline("No source scan has been stored for this monitor yet.")
+        : {
+            value: m.lastSource.total + " finding" + (m.lastSource.total === 1 ? "" : "s") + " held",
+            note: severityTail(m.lastSource.counts),
+          },
+      at: m.lastSource ? m.lastSource.at : null,
+    });
+
+    if (on.indexOf("arch") !== -1) {
+      rows.push({
+        glyph: "\u25ab", label: "Architecture", tool: "arch", diffed: true,
+        body: (m.archFindingCount === null || m.archFindingCount === undefined)
+          ? noBaseline("No X-ray snapshot has been stored for this monitor yet.")
+          : {
+              value: m.archFindingCount + " finding" + (m.archFindingCount === 1 ? "" : "s") + " held",
+              note: "A finding key that is not in this set is what makes the sweep call something new.",
+            },
+        at: null,
+      });
+    }
+
+    if (on.indexOf("estimate") !== -1) {
+      var est = m.lastEstimate;
+      var by = (est && est.byProvider) || {};
+      var totals = Object.keys(by).filter(function (k) { return typeof by[k] === "number"; });
+      rows.push({
+        glyph: "$\u2192", label: "Infra cost", tool: "estimate", diffed: true,
+        body: !est
+          ? noBaseline("No estimate has been stored for this monitor yet.")
+          : !totals.length
+            // A recorded-but-empty baseline is a real answer: the sweep looked
+            // and the repository has no compose file to price.
+            ? { value: "no compose file found", note: "There is nothing to price, so there is nothing to compare." }
+            : {
+                value: totals.length + " provider" + (totals.length === 1 ? "" : "s") + " priced",
+                note: totals.map(function (k) {
+                  return k + " " + (microUsdText(by[k]) || "—");
+                }).join(" · "),
+              },
+        at: est ? est.at : null,
+      });
+    }
+
+    if (on.indexOf("algo") !== -1) {
+      rows.push({
+        glyph: "\u0192", label: "Complexity", tool: "optimizer", diffed: true,
+        body: !m.lastAlgo
+          ? noBaseline("No optimizer sweep has been stored for this monitor yet.")
+          : !m.lastAlgo.functions
+            ? { value: "no optimizer.config.json", note: "The sweep looked and the repository has no watchlist to grade." }
+            : {
+                value: m.lastAlgo.functions + " grade" + (m.lastAlgo.functions === 1 ? "" : "s") + " held",
+                note: "A grade that moves to a worse bucket is what emails you; an improvement never does.",
+              },
+        at: m.lastAlgo ? m.lastAlgo.at : null,
+      });
+    }
+
+    if (on.indexOf("cost") !== -1) {
+      rows.push({
+        glyph: "$\u2190", label: "Cloud spend", tool: "cost", diffed: false,
+        body: !m.lastCost
+          ? noBaseline("No committed cost export has been read for this monitor yet.")
+          : {
+              value: "$" + Math.round(m.lastCost.currentSpend).toLocaleString() + " / mo recorded",
+              note: null,
+            },
+        at: m.lastCost ? m.lastCost.at : null,
+      });
+    }
+
+    return rows;
+  }
+
+  function baselinePanel(m) {
+    var rows = baselineRows(m);
+    if (!rows.length) return null;
+
+    var box = el("details", { class: "monitor-baseline" });
+    var sum = el("summary", { class: "monitor-baseline-summary" });
+    sum.appendChild(el("span", null, "Baseline the sweep diffs against"));
+    box.appendChild(sum);
+
+    var list = el("div", { class: "monitor-baseline-rows" });
+    rows.forEach(function (r) {
+      var row = el("div", {
+        class: "monitor-baseline-row" + (r.body.value === null ? " monitor-baseline-row-empty" : ""),
+      });
+      row.appendChild(el("span", { class: "monitor-baseline-glyph mono", "aria-hidden": "true" }, r.glyph));
+
+      var mid = el("div", { class: "monitor-baseline-body" });
+      var head = el("div", { class: "monitor-baseline-head" });
+      head.appendChild(el("strong", null, r.label));
+      head.appendChild(el("span", { class: "monitor-baseline-value mono" },
+        // Null is a sentence, never a zero. "Nothing stored" and "stored, and
+        // it was nothing" are the two readings this panel exists to separate.
+        r.body.value === null ? "not recorded yet" : r.body.value));
+      if (typeof r.at === "number") {
+        head.appendChild(el("span", { class: "monitor-baseline-at mono" },
+          "recorded " + core.formatRelativeTime(r.at * 1000)));
+      }
+      mid.appendChild(head);
+      if (r.body.note) mid.appendChild(el("p", { class: "monitor-baseline-note" }, r.body.note));
+      if (!r.diffed) {
+        mid.appendChild(el("p", { class: "monitor-baseline-note monitor-baseline-nodiff" },
+          "Recorded, not compared. A cloud bill differs every day, so a nightly diff would " +
+          "report Tuesday being different from Monday as a finding. Spend wants a threshold, " +
+          "not a delta \u2014 so nothing here is ever called new."));
+      }
+      row.appendChild(mid);
+      list.appendChild(row);
+    });
+    box.appendChild(list);
+
+    box.appendChild(el("p", { class: "monitor-baseline-foot" },
+      "These are the stored comparison points, not a history \u2014 the product keeps the current " +
+      "baseline for each analyzer and overwrites it on every successful sweep. A skipped night " +
+      "leaves them untouched on purpose, so an upstream outage can never produce a morning where " +
+      "everything reads as new."));
+
+    return box;
+  }
+
   function analyzerRow(m) {
     var box = el("div", { class: "monitor-analyzers" });
     SECONDARY_ANALYZERS.forEach(function (key) {
@@ -725,30 +922,202 @@
     });
   }
 
-  function checkFirstRun() {
-    var dot = document.getElementById("ci-status-dot");
-    var text = document.getElementById("ci-status-text");
-    return callApi("/api/runs?source=ci&limit=1", null, "GET").then(function (page) {
-      var run = page && page.items && page.items[0];
+  // ---------------------------------------------------------------------
+  // CI gates — what each one enforces, and what it last did
+  // ---------------------------------------------------------------------
+  //
+  // Five gates shipped as five always-expanded setup wizards and nothing that
+  // said which of them were live. The wizards are now behind their own
+  // disclosure; this strip is what is worth reading without opening any.
+  //
+  // The "last result" line is read from stored runs. It is never asserted and
+  // never inferred: whether the secret is set on somebody's repository is
+  // their repository's business, and the only evidence we hold is a run that
+  // arrived. Three gates leave that evidence — handlers/ci.js persists vuln,
+  // arch and algo with source "ci". The estimate and cloud-spend workflows
+  // post to /api/estimate and /api/analyze/cost with an API key instead,
+  // which files a run with a NULL source, so a working gate of either kind
+  // has nothing to show here. Those two say that, rather than borrowing the
+  // "not set up" line, which would be a claim about the customer's repo we
+  // have no standing to make.
+
+  var GATES = [
+    { id: "audit", analyzer: "vuln", name: "Dependency audit gate",
+      panel: "panel-ci", file: ".github/workflows/algosize-audit.yml",
+      gatesOn: "advisories and source findings at or above the workflow's fail_on",
+      feeds: true },
+    { id: "optimizer", analyzer: "algo", name: "Optimizer gate",
+      panel: "panel-ci-optimizer", file: ".github/workflows/algosize-optimizer.yml",
+      gatesOn: "the Big-O ceilings committed in optimizer.config.json",
+      feeds: true },
+    { id: "architecture", analyzer: "arch", name: "Architecture gate",
+      panel: "panel-ci-architecture", file: ".github/workflows/algosize-architecture.yml",
+      gatesOn: "new architecture findings against the base branch's snapshot",
+      feeds: true },
+    { id: "estimate", analyzer: null, name: "Cost estimate gate",
+      panel: "panel-ci-estimate", file: ".github/workflows/algosize-estimate.yml",
+      gatesOn: "the monthly ceiling in algosize.budget.json, when one is set",
+      feeds: false },
+    { id: "cost", analyzer: null, name: "Cloud cost gate",
+      panel: "panel-ci-cost", file: ".github/workflows/algosize-cost.yml",
+      gatesOn: "the committed Cost & Usage export against the same budget file",
+      feeds: false },
+  ];
+
+  /** Newest stored CI run per analyzer, from one page of the feed. */
+  function newestByAnalyzer(items) {
+    var out = {};
+    (items || []).forEach(function (r) {
+      if (r && r.analyzer && !out[r.analyzer]) out[r.analyzer] = r;
+    });
+    return out;
+  }
+
+  function renderGates() {
+    var wrap = document.getElementById("ci-gates-body");
+    if (!wrap) return;
+    while (wrap.firstChild) wrap.removeChild(wrap.firstChild);
+
+    var newest = newestByAnalyzer(state.ciRuns);
+
+    GATES.forEach(function (g) {
+      var card = el("div", { class: "gate-card" });
+
+      var top = el("div", { class: "gate-card-top" });
+      top.appendChild(el("strong", null, g.name));
+      var run = g.analyzer ? newest[g.analyzer] : null;
       if (run) {
-        // The waiting row flips in place — the facts that prove the wiring
-        // worked: repo, commit, what the scan found, and a path to the report.
-        if (dot) dot.className = "ci-status-dot ci-status-dot-ok";
-        if (text) {
-          while (text.firstChild) text.removeChild(text.firstChild);
-          text.appendChild(document.createTextNode("Connected — last CI run "));
-          text.appendChild(el("span", { class: "mono" },
-            (run.repo || "pipeline") + (run.commitSha ? " @ " + String(run.commitSha).slice(0, 7) : "")));
-          text.appendChild(document.createTextNode(" · " + (run.headline || "") + " · "));
-          text.appendChild(el("a", { href: "#/report/" + encodeURIComponent(run.id) }, "view report"));
-        }
+        top.appendChild(el("span", { class: "chip chip-ok" }, "✓ running"));
+      } else if (g.feeds) {
+        top.appendChild(el("span", { class: "chip chip-muted" }, "○ no run yet"));
       } else {
-        if (dot) dot.className = "ci-status-dot ci-status-dot-wait";
-        if (text) text.textContent =
-          "Waiting for the first CI run — this flips as soon as a request authenticates with your key.";
+        // Not "not set up". This gate can be wired and firing and still be
+        // invisible here, so the chip states what we know: nothing arrives.
+        top.appendChild(el("span", { class: "chip chip-muted" }, "○ not reported"));
       }
+      card.appendChild(top);
+
+      card.appendChild(el("p", { class: "gate-card-file mono" }, g.file));
+      card.appendChild(el("p", { class: "gate-card-on" }, "Gates on " + g.gatesOn + "."));
+
+      if (run) {
+        var last = el("p", { class: "gate-card-last" });
+        last.appendChild(el("span", { class: "mono" },
+          (run.repo || "pipeline") +
+          (run.commitSha ? " @ " + String(run.commitSha).slice(0, 7) : "")));
+        last.appendChild(document.createTextNode(
+          " · " + (run.headline || "no headline") + " · "));
+        last.appendChild(el("a", { href: "#/report/" + encodeURIComponent(run.id) }, "report"));
+        if (typeof run.createdAt === "number") {
+          last.appendChild(document.createTextNode(
+            " · " + core.formatRelativeTime(run.createdAt)));
+        }
+        card.appendChild(last);
+      } else if (!g.feeds) {
+        card.appendChild(el("p", { class: "gate-card-blind" },
+          "Runs from this gate are stored, but not tagged as CI — its workflow posts to the " +
+          "analyzer endpoint with your key rather than to the CI ingest endpoint. So it can be " +
+          "wired up and passing and still show nothing here."));
+      } else {
+        card.appendChild(el("p", { class: "gate-card-blind" },
+          "Nothing has arrived from this gate yet. It appears here the moment a workflow run " +
+          "authenticates with your key — there is nothing to press."));
+      }
+
+      // A real link, so it is focusable and reachable by keyboard; the
+      // handler opens the disclosure the href alone cannot.
+      var jump = el("a", { class: "gate-card-jump", href: "#/monitors" }, "Setup \u2193");
+      jump.addEventListener("click", function (ev) {
+        ev.preventDefault();
+        var panel = document.getElementById(g.panel);
+        if (!panel) return;
+        var det = panel.querySelector("details.gate-setup");
+        if (det) det.open = true;
+        if (panel.scrollIntoView) panel.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      card.appendChild(jump);
+
+      wrap.appendChild(card);
+    });
+  }
+
+  // ---------------------------------------------------------------------
+  // Recent CI runs
+  // ---------------------------------------------------------------------
+  //
+  // Every row is a stored run, not a reconstruction of a workflow log. The
+  // optimizer's rows carry the one piece of provenance in this feed that
+  // changes what a number is worth: measuredBy "ci_runner" means the Big-O
+  // grade was timed on the customer's runner rather than on ours, and two
+  // runs on differently-sized runners can honestly disagree.
+
+  var CI_TAG = { vuln: "audit", arch: "x-ray", algo: "optimizer",
+                 estimate: "estimate", cost: "spend" };
+
+  function renderCiRuns() {
+    var wrap = document.getElementById("ci-runs-body");
+    if (!wrap) return;
+    while (wrap.firstChild) wrap.removeChild(wrap.firstChild);
+
+    var items = state.ciRuns;
+    if (items === null) {
+      wrap.appendChild(core.errorState("Could not read the CI feed."));
+      return;
+    }
+    if (!items.length) {
+      wrap.appendChild(el("div", { class: "panel-empty" },
+        "No CI run has arrived yet. The first one appears here as soon as a workflow " +
+        "authenticates with your key."));
+      return;
+    }
+
+    var list = el("div", { class: "ci-run-list" });
+    items.slice(0, 12).forEach(function (r) {
+      var row = el("div", { class: "ci-run-row" });
+      row.appendChild(el("span", { class: "tag" }, CI_TAG[r.analyzer] || r.analyzer || "run"));
+
+      var body = el("div", { class: "ci-run-body" });
+      var head = el("div", { class: "ci-run-head mono" });
+      head.appendChild(el("span", null,
+        (r.repo || "pipeline") + (r.commitSha ? " @ " + String(r.commitSha).slice(0, 7) : "")));
+      if (typeof r.createdAt === "number") {
+        head.appendChild(el("span", { class: "ci-run-when" },
+          core.formatRelativeTime(r.createdAt)));
+      }
+      body.appendChild(head);
+      body.appendChild(el("p", { class: "ci-run-headline" }, r.headline || "no headline recorded"));
+
+      // Null stays null: a run with no measuredBy gets no marker, rather than
+      // an "ours" badge we would be inventing.
+      if (r.measuredBy === "ci_runner") {
+        body.appendChild(el("span", {
+          class: "run-item-measured mono",
+          title: "The grade was timed on your CI runner, not on Algosize infrastructure. " +
+                 "Runs on different runner sizes can disagree.",
+        }, "measured in your runner"));
+      }
+      body.appendChild(el("a", { class: "ci-run-report", href: "#/report/" + encodeURIComponent(r.id) },
+        "report →"));
+      row.appendChild(body);
+      list.appendChild(row);
+    });
+    wrap.appendChild(list);
+
+    wrap.appendChild(el("p", { class: "ci-run-foot" },
+      "Three of the five gates file a run tagged as CI — the dependency audit, the " +
+      "architecture gate and the optimizer. The cost-estimate and cloud-spend workflows post " +
+      "to the analyzer endpoints with your key, which stores the run without the CI tag, so " +
+      "they do not appear in this feed even when they are running."));
+  }
+
+  function loadCiRuns() {
+    return callApi("/api/runs?source=ci&limit=25", null, "GET").then(function (page) {
+      state.ciRuns = (page && page.items) || [];
     }).catch(function () {
-      if (text) text.textContent = "Could not check for CI runs.";
+      state.ciRuns = null;
+    }).then(function () {
+      renderGates();
+      renderCiRuns();
     });
   }
 
@@ -925,7 +1294,7 @@
           wrap.appendChild(core.errorState(e.message || "Could not load monitors"));
         }
       }),
-      checkFirstRun(),
+      loadCiRuns(),
       loadAlertRoute(),
     ];
     if (first) jobs.push(loadSnippet(), loadOptimizerSnippet(),
@@ -957,14 +1326,6 @@
     // load (it stays hidden at the tier limit); default it visible so the
     // form is reachable even if the list request fails.
     if (addBtn) addBtn.hidden = false;
-
-    var refresh = document.getElementById("ci-status-refresh");
-    if (refresh) {
-      refresh.addEventListener("click", function () {
-        setBusy(refresh, true, "Checking…");
-        checkFirstRun().then(function () { setBusy(refresh, false); });
-      });
-    }
 
     setSchedule("daily");
     fillHourSelect();
