@@ -529,115 +529,133 @@ permalink: /dashboard/
 
     <!-- ================= ALGORITHM OPTIMIZER (D-6) ================= -->
     <div id="view-optimizer" class="dash-view" hidden>
-      <div class="dash-head">
-        <span class="eyebrow">Algorithm Optimizer</span>
-        <h2 class="dash-view-title">Measure once, enforce forever.</h2>
-        <p class="lede">
-          Measured complexity, not guessed — and enforced on every pull request
-          and every night. The bench grades a function; the watchlist turns
-          that grade into a ceiling both automations hold it to.
-        </p>
-      </div>
+      <div class="opt-page">
 
-      <!-- The pipeline strip: one committed file, three consumers. -->
-      <div class="flow-strip" aria-label="How the optimizer's pieces connect">
-        <span class="flow-node">① the bench measures</span>
-        <span class="flow-line" aria-hidden="true"></span>
-        <span class="flow-node flow-node-hub">② optimizer.config.json</span>
-        <span class="flow-line" aria-hidden="true"></span>
-        <span class="flow-node">③ the gate and the watch enforce</span>
-        <p class="flow-note">One committed file, three consumers by construction — the grade CI gets and the grade this page would give can never disagree.</p>
-      </div>
+        <header class="opt-page-head">
+          <div class="opt-page-intro">
+            <div class="opt-page-title-row">
+              <h1 class="opt-page-title">Algorithm Optimizer</h1>
+              <span class="opt-page-pill">Measure once, enforce forever</span>
+            </div>
+            <p class="opt-page-lede">Measured complexity, not guessed — enforced on every pull request and every night.</p>
+          </div>
+        </header>
 
-      <div class="opt-grid">
-        <div class="opt-col">
-          <section class="panel" id="panel-algo">
-            <header class="panel-head">
-              <div class="panel-heading">
-                <span class="panel-tag">Bench</span>
-                <h2>Algorithm optimizer</h2>
-                <p class="panel-desc">Paste a JS function plus a sample input. We run it in an isolated sandbox, probe it at n = 100 / 1,000 / 10,000 to measure the Big-O, and — when AI suggestions are enabled — propose a rewrite you can measure the same way.</p>
-              </div>
-              <div class="panel-actions">
+        <div class="flow-strip" aria-label="How the optimizer's pieces connect">
+          <span class="flow-node">① the bench measures</span>
+          <span class="flow-line" aria-hidden="true"></span>
+          <span class="flow-node flow-node-hub">② optimizer.config.json</span>
+          <span class="flow-line" aria-hidden="true"></span>
+          <span class="flow-node">③ the gate and the watch enforce</span>
+          <p class="flow-note">One committed file, three consumers by construction — the grade CI gets and the grade this page would give can never disagree.</p>
+        </div>
+
+        <div class="opt-grid opt-grid-3">
+          <!-- Column 1: bench + verdict (rendered into #output-algo) -->
+          <div class="opt-col opt-col-bench">
+            <section class="opt-card" id="panel-algo">
+              <div class="opt-card-head">
+                <h2 class="opt-card-title">The bench</h2>
                 <button type="button" class="btn btn-ghost btn-sm" data-action="sample" data-target="algo">Load sample</button>
-                <button type="button" class="btn btn-primary btn-sm" data-action="run" data-target="algo">Optimize →</button>
               </div>
-            </header>
-            <div class="panel-body">
-              <label class="panel-input-label" for="input-algo">Function · JavaScript <span class="field-optional">one function, no imports or outer variables — we run exactly what you paste</span></label>
-              <textarea
-                id="input-algo"
-                class="panel-input mono"
-                rows="12"
-                spellcheck="false"
-                autocomplete="off"
-                placeholder="function search(arr, x) { /* … */ }"></textarea>
-
-              <label class="panel-input-label" for="input-algo-sample">Sample input · JSON <span class="field-optional">an array or a number — the probe grows it to n = 10,000</span></label>
-              <textarea
-                id="input-algo-sample"
-                class="panel-input mono"
-                rows="3"
-                spellcheck="false"
-                autocomplete="off"
-                placeholder="[1, 2, 3, 1]"></textarea>
-
-              <label class="panel-input-label" for="output-algo">Result</label>
-              <div id="output-algo" class="panel-output">
-                <div class="panel-empty">Run the optimizer to measure the function — three probes, then one run on your own input.</div>
+              <div class="opt-card-body">
+                <div class="opt-field">
+                  <div class="opt-field-head">
+                    <label class="opt-field-label" for="input-algo">Function</label>
+                    <span class="opt-field-hint">One function, no imports or outer variables — we run exactly what you paste.</span>
+                  </div>
+                  <textarea
+                    id="input-algo"
+                    class="panel-input mono opt-code-input"
+                    rows="10"
+                    spellcheck="false"
+                    autocomplete="off"
+                    placeholder="function search(arr, x) { /* … */ }"></textarea>
+                </div>
+                <div class="opt-field">
+                  <div class="opt-field-head">
+                    <label class="opt-field-label" for="input-algo-sample">Sample input</label>
+                    <span class="opt-field-hint">A JSON array or a number — the probe grows it to n = 10,000.</span>
+                  </div>
+                  <textarea
+                    id="input-algo-sample"
+                    class="panel-input mono opt-code-input opt-code-input-sm"
+                    rows="2"
+                    spellcheck="false"
+                    autocomplete="off"
+                    placeholder="[1, 2, 3, 1]"></textarea>
+                </div>
+                <div class="opt-run-row">
+                  <button type="button" class="btn btn-primary" data-action="run" data-target="algo">Optimize →</button>
+                  <span class="opt-run-note">Three probes at n = 100 / 1,000 / 10,000, then one run on your own input.</span>
+                </div>
+                <div id="output-algo" class="opt-output">
+                  <div class="panel-empty">Run the optimizer to measure the function — three probes, then one run on your own input.</div>
+                </div>
               </div>
-            </div>
-          </section>
+            </section>
+          </div>
 
-          <section class="panel" id="panel-opt-gate">
-            <header class="panel-head">
-              <div class="panel-heading">
-                <span class="panel-tag">CI</span>
-                <h2>Every pull request</h2>
-                <p class="panel-desc">The gate re-measures each watched function from the PR's own checkout, through the same API as this page — the two grades can never disagree. Red only past a ceiling.</p>
+          <!-- Column 2: watchlist / optimizer.config.json -->
+          <div class="opt-col opt-col-watch">
+            <section class="opt-card opt-card-hub" id="panel-watchlist">
+              <div class="opt-card-head opt-card-head-stack">
+                <div class="opt-card-head-top">
+                  <h2 class="opt-card-title">Watchlist</h2>
+                  <span class="mono opt-watch-summary" id="opt-watch-count">Nothing watched yet</span>
+                </div>
+                <span class="mono opt-watch-subtitle">optimizer.config.json · fed by the bench, read by both automations</span>
               </div>
-            </header>
-            <div class="panel-body">
-              <div id="opt-gate-body"><div class="panel-empty">Loading the gate setup…</div></div>
-            </div>
-          </section>
+              <div class="opt-card-body opt-card-body-flush">
+                <div id="opt-watch-rows"><div class="panel-empty opt-watch-empty">Nothing watched yet — measure a function on the bench, then “Watch this function” promotes it here with a ceiling one bucket above its grade.</div></div>
+                <div id="opt-watch-cap" class="opt-watch-cap banner banner-amber" hidden></div>
+                <div class="opt-watch-foot" id="opt-watch-actions" hidden>
+                  <div class="opt-watch-actions">
+                    <button type="button" class="btn btn-ghost btn-sm" id="opt-watch-copy">Copy JSON</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="opt-watch-download">Download</button>
+                  </div>
+                  <span class="opt-watch-commit-note">Commit this at the repo root — the PR gate and the nightly watch both read it.</span>
+                </div>
+                <pre id="opt-watch-json" class="sr-only" aria-hidden="true"></pre>
+              </div>
+            </section>
+          </div>
+
+          <!-- Column 3: CI gate + nightly -->
+          <div class="opt-col opt-col-auto">
+            <section class="opt-card" id="panel-opt-gate">
+              <div class="opt-card-head">
+                <h2 class="opt-card-title">Every pull request</h2>
+                <span class="opt-status-pill opt-status-muted" id="opt-gate-status">NOT SET UP</span>
+              </div>
+              <div class="opt-card-body">
+                <div id="opt-gate-body"><div class="panel-empty">Loading the gate setup…</div></div>
+              </div>
+            </section>
+
+            <section class="opt-card" id="panel-opt-night">
+              <div class="opt-card-head">
+                <h2 class="opt-card-title">Every night</h2>
+                <span class="opt-status-pill opt-status-muted" id="opt-night-status" hidden>OFF</span>
+              </div>
+              <div class="opt-card-body">
+                <div id="opt-night-body"><div class="panel-empty">Loading monitors…</div></div>
+              </div>
+            </section>
+
+            <section class="opt-card opt-card-proposed" aria-labelledby="opt-history-title">
+              <div class="opt-card-head">
+                <h2 class="opt-card-title" id="opt-history-title">Grade history</h2>
+                <span class="opt-proposed-tag">proposed</span>
+              </div>
+              <div class="opt-card-body">
+                <p class="opt-proposed-note">A persisted timeline of measured grades per function — designed for when gate and nightly results are stored server-side. Today the bench verdict and nightly monitor rows carry the live grades.</p>
+              </div>
+            </section>
+          </div>
         </div>
 
-        <div class="opt-col">
-          <section class="panel panel-hub" id="panel-watchlist">
-            <header class="panel-head">
-              <div class="panel-heading">
-                <span class="panel-tag">Config</span>
-                <h2>Watchlist</h2>
-                <p class="panel-desc mono" id="opt-watch-count">optimizer.config.json · fed by the bench, read by both automations</p>
-              </div>
-            </header>
-            <div class="panel-body">
-              <div id="opt-watch-rows"><div class="panel-empty">Nothing watched yet — measure a function on the bench, then “Watch this function” promotes it here with a ceiling one bucket above its grade.</div></div>
-              <div id="opt-watch-cap" class="banner banner-amber" hidden></div>
-              <div class="form-actions" id="opt-watch-actions" hidden>
-                <button type="button" class="btn btn-ghost btn-sm" id="opt-watch-copy">Copy JSON</button>
-                <button type="button" class="btn btn-ghost btn-sm" id="opt-watch-download">Download</button>
-                <span class="field-msg">Commit this at the repo root — the PR gate and the nightly watch both read it.</span>
-              </div>
-              <pre id="opt-watch-json" class="sr-only" aria-hidden="true"></pre>
-            </div>
-          </section>
-
-          <section class="panel" id="panel-opt-night">
-            <header class="panel-head">
-              <div class="panel-heading">
-                <span class="panel-tag">Nightly</span>
-                <h2>Every night</h2>
-                <p class="panel-desc">A repo monitor with the optimizer switched on re-grades the watched functions nightly and emails only regressions. The first run records grades silently as the baseline.</p>
-              </div>
-            </header>
-            <div class="panel-body">
-              <div id="opt-night-body"><div class="panel-empty">Loading monitors…</div></div>
-            </div>
-          </section>
-        </div>
-      </div>
+      </div><!-- /.opt-page -->
     </div><!-- /view-optimizer -->
 
     <!-- ============ INFRASTRUCTURE COST ESTIMATOR (D-7) ============ -->
