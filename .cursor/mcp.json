@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "algosize": {
+      "command": "node",
+      "args": ["./mcp/bin/algosize-mcp.mjs"],
+      "env": {
+        "ALGOSIZE_API_KEY": "${ALGOSIZE_API_KEY}",
+        "ALGOSIZE_BASE_URL": "${ALGOSIZE_BASE_URL:-https://algosize.com}"
+      }
+    }
+  }
+}
