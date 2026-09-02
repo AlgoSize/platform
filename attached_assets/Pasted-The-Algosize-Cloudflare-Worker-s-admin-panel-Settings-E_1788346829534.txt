@@ -1,0 +1,67 @@
+The Algosize Cloudflare Worker's admin panel (Settings → Error reporting) reads
+NOT CONFIGURED, with "exceptions are logged to the console only" and SENTRY_DSN
+listed as missing.
+
+This is accurate, not a bug. The platform deliberately treats it as an open
+decision with two valid resolutions, and I need you to carry out ONE of them
+against the production Worker.
+
+CONTEXT — how the code reads this today
+- worker/src/observability.js sends exceptions to Sentry's envelope endpoint
+  only when env.SENTRY_DSN is set. With it unset, captureException logs to the
+  console and nothing else.
+- worker/src/handlers/admin_panel.js computes the row as:
+      configured: Boolean(env.SENTRY_DSN) || errorReportingOptOut
+      missing:    (!env.SENTRY_DSN && !errorReportingOptOut) ? ["SENTRY_DSN"] : []
+  so the row clears when EITHER the secret exists OR the opt-out is recorded.
+- worker/wrangler.toml documents the opt-out: ERROR_REPORTING = "console",
+  currently commented out. It is a plain var, not a secret, on purpose — it is
+  a policy choice, and a decision belongs where it can be read in a diff rather
+  than hidden among credentials.
+
+OPTION A — turn real error reporting on (do this if a Sentry project exists)
+1. Get the DSN for the Algosize project from Sentry
+   (Settings → Projects → algosize → Client Keys (DSN)).
+2. Set it as a Worker secret, production environment:
+       cd worker
+       ./node_modules/.bin/wrangler secret put SENTRY_DSN --env production
+   Paste the DSN when prompted. Do NOT put it in wrangler.toml — it is a
+   credential and belongs in the secret store.
+3. Repeat for staging if you want staged errors separated:
+       ./node_modules/.bin/wrangler secret put SENTRY_DSN --env staging
+   Use a SEPARATE Sentry project for staging, or staging noise will page you
+   for production.
+4. Redeploy so the binding is picked up, then reload the admin panel. The row
+   should read CONFIGURED and name the Sentry host.
+
+OPTION B — record console-only as a deliberate decision (do this if Sentry is
+not happening yet)
+1. In worker/wrangler.toml, uncomment the line:
+       ERROR_REPORTING = "console"
+   It sits under the block that already explains why. Leave that comment.
+2. Redeploy. The admin row then reports the DECISION rather than a gap, stops
+   listing SENTRY_DSN as missing, and still states the cost: Workers logs are
+   not durable, so a production exception is unobserved once it scrolls out of
+   the tail buffer.
+3. This is fully reversible — delete the line and set the real DSN whenever a
+   Sentry project exists.
+
+WHAT NOT TO DO
+- Do not hardcode a DSN into wrangler.toml or any source file. It is a
+  credential; it goes through `wrangler secret put`.
+- Do not silence the admin row by editing admin_panel.js. The row is doing its
+  job — it reports an unmade decision as unmade. Changing the reporting rather
+  than the state is how a panel starts lying to the people it exists to inform.
+- Do not set ERROR_REPORTING = "console" as a way of hiding Option A. Only pick
+  B if console-only is genuinely the intended posture for now.
+
+WHICH TO PICK
+If there is any paying traffic on this Worker, pick A — an unobserved
+production exception on a platform whose whole pitch is "never render
+unmeasured as clean" is the wrong irony to ship. Pick B only as an explicit,
+temporary, documented stance.
+
+DELIVERABLE
+Tell me which option you executed, paste the resulting admin Settings row, and
+if you picked A, confirm the DSN went in via `wrangler secret put` and not into
+a tracked file.

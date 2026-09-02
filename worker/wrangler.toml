@@ -291,7 +291,7 @@ REPORT_CNAME_TARGET  = "cname.algosize.com"
 # reviewed in a diff; hiding it among the secrets makes it invisible to
 # exactly the people it is meant to inform. (SENTRY_DSN itself IS a secret
 # and stays in `wrangler secret put`.)
-# ERROR_REPORTING = "console"
+ERROR_REPORTING = "console"
 
 [[env.production.kv_namespaces]]
 binding = "SESSIONS"
