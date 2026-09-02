@@ -173,6 +173,20 @@ for (const g of GATES) {
 }
 
 // ===========================================================================
+{
+  const auditCopies = [
+    buildWorkflow({ origin: ORIGIN }),
+    readFileSync(join(REPO, ".github", "workflows", "algosize-audit.yml"), "utf8"),
+    readFileSync(join(REPO, ".github", "workflows", "algosize-audit.yml.example"), "utf8"),
+  ];
+  const provenance = auditCopies.map((yaml) =>
+    yaml.match(/Analyzer build:.*$/m)?.[0].replaceAll("\\${{", "${{") || null);
+  expect(provenance.every((line) => line === provenance[0]),
+    "the generated audit workflow and both committed copies share one provenance line");
+  expect(provenance[0]?.includes("|| 'unknown'"),
+    "the provenance line falls back to unknown when the API omits its version");
+}
+
 group("the Worker's own pull-request gate actually covers the Worker");
 // ===========================================================================
 // Not a customer-facing gate — this is ours, and it is here because its
