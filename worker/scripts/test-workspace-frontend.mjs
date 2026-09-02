@@ -35,6 +35,7 @@ const routing   = readFileSync(join(WORKER, "monitors", "routing.js"), "utf8");
 const meJs      = readFileSync(join(WORKER, "handlers", "me.js"), "utf8");
 const inspect   = readFileSync(join(WORKER, "monitors", "inspect.js"), "utf8");
 const scanJs2   = readFileSync(join(SITE, "assets", "js", "dash-scanner.js"), "utf8");
+const costJs    = readFileSync(join(SITE, "assets", "js", "dash-cost.js"), "utf8");
 
 let failures = 0;
 const ok   = (msg) => console.log(`  \x1b[32m✓\x1b[0m ${msg}`);
@@ -262,12 +263,22 @@ group("a cell opens the tool behind it, for that repo");
     expect(new RegExp("\\b" + a + ": \"").test(viewKeys),
       `${a} is inspectable on the Worker, so its column links to a tool page`);
   });
-  expect(!/\bcost: "/.test(viewKeys),
-    "cloud spend does NOT link — it is not in INSPECTABLE, so there is no monitored result " +
-    "to open and the link would land on a bench that could only say nothing");
-  expect(!/cost\)\\\/watch/.test(router) && !/\|cost\)/.test(router),
-    "…and the router has no #/cost/watch route rather than a route to nothing");
-  expect(mapped.length >= 4, "the analyzer→view map is present");
+  expect(/\bcost: "cost"/.test(viewKeys),
+    "cloud spend links too — it was the last column that could be graded and never opened, " +
+    "and its cells were the only dead ends in the grid");
+  expect(analyzers.length === 5,
+    `all five analyzers are inspectable (${analyzers.join(", ")})`);
+  expect(mapped.length >= 5, "the analyzer→view map covers every one of them");
+
+  // The reason cloud spend took longer than the rest, and the rule that
+  // survived giving it a page: it is the one analyzer with no baseline, on
+  // purpose. A bill differs every day, so a diff would report Tuesday being
+  // different from Monday as a finding.
+  expect(/delta: null/.test(inspect) && /isBaseline: null/.test(inspect),
+    "inspectCost returns a NULL delta, not an empty one — an empty delta would read as " +
+    "'we compared and nothing changed' about a comparison nobody ran");
+  expect(!/lastCost/.test(scorecard) || !/trends: \{ [^}]*spend/.test(scorecard),
+    "…and cloud spend still carries no trend on the scorecard");
 
   // An <a> inside an <a> is invalid and the browser silently unnests it,
   // which is how the inner link stops working. The off cell already holds
@@ -277,16 +288,17 @@ group("a cell opens the tool behind it, for that repo");
 
   // Four tool pages, one entry point each, one route shape for all of them.
   for (const [mod, src] of [["DashScanner", scanJs2], ["DashArch", archJs],
-                            ["DashOptimizer", optJs], ["DashEstimate", estJs]]) {
+                            ["DashOptimizer", optJs], ["DashEstimate", estJs],
+                            ["DashCost", costJs]]) {
     expect(/openMonitor: openMonitor/.test(src) && /function openMonitor\(monitorId\)/.test(src),
       `${mod} exposes openMonitor(monitorId)`);
     expect(/core\.clickMonitorRow\(/.test(src),
       `…and drives the row's own button rather than a second path to the same result`);
   }
-  expect(/\(scanner\|arch\|optimizer\|estimate\)\\\/watch/.test(router),
-    "the router parses one watch shape for all four, not a special case per tool");
-  expect(/data-monitor": m\.monitorId/.test(scanJs2) && /data-monitor": m\.monitorId/.test(archJs) &&
-         /data-monitor": m\.monitorId/.test(optJs)  && /data-monitor": m\.monitorId/.test(estJs),
+  expect(/\(scanner\|arch\|optimizer\|estimate\|cost\)\\\/watch/.test(router),
+    "the router parses one watch shape for all five, not a special case per tool");
+  expect([scanJs2, archJs, optJs, estJs, costJs]
+           .every((src) => /data-monitor": m\.monitorId/.test(src)),
     "every watch row tags its open button with the monitor it opens");
 }
 
@@ -310,7 +322,8 @@ group("a link that cannot be followed says which of three things went wrong");
   for (const [mod, src, field] of [["scanner", scanJs2, "state.deepLink"],
                                    ["X-ray", archJs, "watch.deepLink"],
                                    ["optimizer", optJs, "state.deepLink"],
-                                   ["estimator", estJs, "watchDeepLink"]]) {
+                                   ["estimator", estJs, "watchDeepLink"],
+                                   ["cost analyzer", costJs, "state.deepLink"]]) {
     expect(src.includes(field + " = ") && src.includes("if (" + field + ")"),
       `the ${mod} holds the note in state and re-emits it on render`);
   }

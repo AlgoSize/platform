@@ -309,6 +309,25 @@ permalink: /dashboard/
           </div>
         </div>
       </section>
+
+      <!-- The monitored half. Unlike every other tool's, this one shows a
+           STANDING RESULT rather than a diff: a bill differs every day, so
+           "Tuesday is not Monday" would be noise dressed as a finding. See
+           inspectCost() in worker/src/monitors/inspect.js. -->
+      <section class="panel" id="panel-cost-watch">
+        <header class="panel-head">
+          <div class="panel-heading">
+            <span class="panel-tag">Nightly</span>
+            <h2>Repositories under watch</h2>
+            <p class="panel-desc">A repo monitor with cloud spend switched on reads the Cost &amp; Usage export the repository has committed — the one <code>cur</code> in <code>algosize.budget.json</code> names — and reports what it spent. No cloud account is contacted and no credential is accepted; a repository that has not named an export is telling us not to read its billing data, and that reads as not measured rather than as zero.</p>
+          </div>
+        </header>
+        <div class="panel-body">
+          <div id="cost-watch-body">
+            <div class="panel-empty">Loading your monitors…</div>
+          </div>
+        </div>
+      </section>
     </div><!-- /view-cost -->
 
     <!-- ================= ARCHITECTURE X-RAY =================
@@ -1352,6 +1371,7 @@ permalink: /dashboard/
 <script src="{{ '/assets/js/dash-estimate.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-optimizer.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-scanner.js' | relative_url }}" defer></script>
+<script src="{{ '/assets/js/dash-cost.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-workspace.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-account.js' | relative_url }}" defer></script>
     <script src="{{ '/assets/js/dash-mcp.js' | relative_url }}" defer></script>

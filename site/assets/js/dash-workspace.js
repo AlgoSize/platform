@@ -312,7 +312,7 @@
 
   var VIEW_NAME = {
     scanner: "the scanner", optimizer: "the optimizer",
-    estimate: "the estimator", arch: "the X-ray",
+    estimate: "the estimator", arch: "the X-ray", cost: "the analyzer",
   };
 
   function scorecardRow(r, columns) {
@@ -344,14 +344,13 @@
   // both belong on the scanner. Names differ from the analyzer only where the
   // page was named for what a person does with it rather than for the module
   // that fills it — vuln is read on the scanner, algo on the optimizer.
-  // Cloud spend is deliberately absent. INSPECTABLE on the Worker is
-  // ["vuln", "arch", "estimate", "algo"] — there is no endpoint that re-reads
-  // a monitored repo's committed CUR export, so the cost page has no
-  // monitored half to open and #/cost/watch/<id> would land on a bench that
-  // could only say nothing. A column that can be graded but not opened is a
-  // real gap; pointing a link at a page that cannot answer would hide it.
+  // All five, matching INSPECTABLE on the Worker. Cloud spend was the last
+  // column that could be graded and never opened — its cells were the only
+  // dead ends in the grid — and it links now that the cost page has a
+  // monitored half of its own.
   var ANALYZER_VIEW = {
     vuln: "scanner", arch: "arch", algo: "optimizer", estimate: "estimate",
+    cost: "cost",
   };
 
   /**

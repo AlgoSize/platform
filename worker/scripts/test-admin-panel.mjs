@@ -136,13 +136,21 @@ async function seed(env) {
 
   // Runs: 3 today for Meridian (2 ci), and 4 this month for the free org so
   // it lands in the near-quota bucket.
+  //
+  // Seeded at "a moment ago, but never before midnight". The overview counts
+  // runs since `now - (now % DAY)` — midnight UTC, which is the right
+  // definition — so a flat `now - 60` puts every run on YESTERDAY whenever
+  // the suite happens to run in the first minute of a UTC day, and
+  // runsToday reads {0,0,0}. Twice a year that is a mystery; once a day it
+  // is a test that cries wolf. The clamp costs nothing the rest of the time.
+  const todayish = Math.max(now - 60, now - (now % DAY));
   for (let i = 0; i < 3; i++) {
     await q(`INSERT INTO runs (id, user_id, org_id, source, analyzer, created_at) VALUES (?,?,?,?,?,?)`,
-            `run_m${i}`, "usr_sam", "org_meridian", i < 2 ? "ci" : "dashboard", "cost", now - 60);
+            `run_m${i}`, "usr_sam", "org_meridian", i < 2 ? "ci" : "dashboard", "cost", todayish);
   }
   for (let i = 0; i < 4; i++) {
     await q(`INSERT INTO runs (id, user_id, org_id, source, analyzer, created_at) VALUES (?,?,?,?,?,?)`,
-            `run_f${i}`, "usr_free", "org_free", "dashboard", "vuln", now - 60);
+            `run_f${i}`, "usr_free", "org_free", "dashboard", "vuln", todayish);
   }
 
   // Monitors: one healthy, one overdue, one never run, one paused.
