@@ -76,7 +76,10 @@ test.describe("dashboard happy path", () => {
 
     // The tab strip is down to two entries (D-8). Every tool kept its hash
     // route and moved to its own view, reached from the Workspace tool grid.
-    await expect(page.locator("#view-workspace h1")).toHaveText(/What your code is, right now\./);
+    // Workspace redesign (D-8): title is "Workspace"; the lede carries the tagline.
+    await expect(page.locator("#view-workspace h1.ws-page-title")).toHaveText("Workspace");
+    await expect(page.locator("#view-workspace .ws-page-lede"))
+      .toContainText(/What your code is, right now\./);
     await expect(page.locator('a[data-view="workspace"]')).toBeVisible();
     await expect(page.locator('a[data-view="monitors"]')).toBeVisible();
     await expect(page.locator(".dash-tab")).toHaveCount(2);
