@@ -170,20 +170,14 @@ console.log("\nERROR_REPORTING is documented where a reviewer will see it\n");
   const toml = readFileSync(new URL("../wrangler.toml", import.meta.url), "utf8");
   // A policy decision belongs in [vars], in the diff — not in the secret
   // store where the people it informs cannot see it.
-  //
-  // Either form satisfies this: commented means the decision is still open
-  // and the option is documented; uncommented means it was made. What must
-  // NOT happen is the var going missing, or being set live with the rationale
-  // stripped — which is exactly what a deploy-time-only change produces. The
-  // setting was uncommented on 2026-09-02, and this assertion had to widen
-  // rather than be deleted, because its subject is the rationale, not the
-  // comment marker.
-  expect(/^#?\s*ERROR_REPORTING\s*=\s*"console"/m.test(toml),
-    "wrangler.toml carries the var, commented or set, with its rationale");
+  const policyLine = /(^|\n)\s*(?:#\s*)?ERROR_REPORTING\s*=\s*"console"/m.exec(toml);
+  expect(Boolean(policyLine),
+    "wrangler.toml carries the console-only policy var with its rationale");
   // Window around the var, not forward-only: the rationale is written above
-  // it, so a forward search misses it.
-  const at = toml.search(/^#?\s*ERROR_REPORTING\s*=\s*"console"/m);
-  const window = toml.slice(Math.max(0, at - 1600), at + 200);
+  // the line, so a forward search misses it. The setting may be active or
+  // commented while the policy is being staged.
+  const at = policyLine ? policyLine.index : 0;
+  const window = toml.slice(Math.max(0, at - 1200), at + 200);
   expect(/not durable/.test(window),
     "…and states the cost of choosing console-only, right beside it");
   // The rationale wraps across comment lines, so match it with the line
