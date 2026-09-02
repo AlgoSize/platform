@@ -210,11 +210,11 @@
 
     var rows = (data.rows || []).slice();
     if (!rows.length) {
-      var empty = el("div", { class: "panel-empty-rich" });
-      empty.appendChild(el("strong", null, "No repositories under watch"));
+      var empty = el("div", { class: "panel-empty-rich ws-scorecard-empty" });
+      empty.appendChild(el("strong", null, "No monitors yet"));
       empty.appendChild(el("p", null,
-        "A monitor is a repository and a branch the analyzers re-read on a schedule without you. " +
-        "That scheduled result is what fills this table — a one-off run from a tool below is not graded here."));
+        "A monitor is a repo and a branch that the analyzers re-read every night without you — " +
+        "that nightly result is what fills this table."));
       empty.appendChild(el("a", { class: "btn btn-primary btn-sm", href: "#/monitors" },
         "Create a monitor →"));
       body.appendChild(empty);
@@ -254,37 +254,28 @@
     scroll.appendChild(table);
     body.appendChild(scroll);
 
-    // What the three non-numeric cells mean. They are easy to read as one
-    // "no data" state and they are not: each names a different party's move.
-    //
-    // Deliberately NOT a trend key. The obvious fourth row — a down arrow for
-    // better, an up arrow for worse, an equals sign for no movement, all
-    // against the previous nightly run — would be a legend for something only
-    // one of the six columns can say. The dependency sweep is the only one
-    // that stores a previous value, so an equals sign on the other five would
-    // caption a comparison nothing performed.
-    //
-    // (Written without quoting those glyphs: the guard in
-    // test-workspace-frontend.mjs reads the string literals in this file to
-    // prove the page never renders them, and a quoted example in a comment
-    // is indistinguishable from one.)
-    var key = el("p", { class: "scorecard-key mono" });
+    var foot = el("div", { class: "ws-scorecard-foot mono" });
+    // What the three non-numeric cells mean — each names a different party's move.
+    var key = el("span", { class: "scorecard-key" });
     [
       ["scorecard-key-pending",    "first run pending", "enabled; no sweep has produced a result yet"],
       ["scorecard-key-unmeasured", "not measured",      "the sweep ran and found nothing it could read"],
       ["scorecard-key-off",        "not watched",       "the analyzer is switched off for this repo"],
     ].forEach(function (k, i) {
-      if (i) key.appendChild(el("span", { class: "scorecard-key-sep", "aria-hidden": "true" }, "·"));
+      if (i) key.appendChild(el("span", { class: "scorecard-key-sep", "aria-hidden": "true" }, " \u00b7 "));
       var item = el("span", { class: "scorecard-key-item" });
       item.appendChild(el("span", { class: "scorecard-key-term " + k[0] }, k[1]));
       item.appendChild(el("span", { class: "scorecard-key-gloss" }, k[2]));
       key.appendChild(item);
     });
-    body.appendChild(key);
+    foot.appendChild(key);
+    foot.appendChild(el("span", { class: "ws-scorecard-idiom" },
+      "Each column is its own idiom. There is no overall repo score — a dependency grade and a cloud bill do not average."));
+    body.appendChild(foot);
 
-    var legend = el("p", { class: "scorecard-legend mono" },
-      data.basis || "Rows come from scheduled monitors.");
-    body.appendChild(legend);
+    if (data.basis) {
+      body.appendChild(el("p", { class: "scorecard-legend mono" }, data.basis));
+    }
   }
 
   function sortRows(rows) {
