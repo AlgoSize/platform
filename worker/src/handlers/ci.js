@@ -41,6 +41,7 @@ import { SUPPORTED_FILES as LOCKFILE_NAMES, MAX_LOCKFILE_BYTES } from "../analyz
 import { validateArchitectureInput, analyzeArchitecture } from "../analyzers/architecture.js";
 import { recordSnapshot } from "../arch/snapshots.js";
 import { captureException } from "../observability.js";
+import { analyzerVersion } from "../analyzer-version.js";
 
 // Total submitted bytes. Generous next to the per-file cap (a monorepo can
 // legitimately have a dozen lockfiles) but bounded, because this endpoint is
@@ -300,6 +301,7 @@ export async function ciRunHandler(request, env, ctx) {
 
   const fetchImpl = (env && env.FETCH) || globalThis.fetch;
   const origin = (env.SITE_ORIGIN || "").replace(/\/$/, "");
+  const version = analyzerVersion(env);
   const ciContext = { repo: v.value.repo, ref: v.value.ref, commitSha: v.value.commitSha };
 
   // ---------------------------------------------------------------------
@@ -371,6 +373,7 @@ export async function ciRunHandler(request, env, ctx) {
     // dashboard row can say which commit it was and link back to the build.
     const result = {
       ...audit.result,
+      analyzerVersion: version,
       // Under the same key the dashboard and the nightly sweep use, so a CI
       // run, a manual scan and a monitored repo all render through one path.
       ...(sourceScan ? { source: sourceScan } : {}),
@@ -489,6 +492,7 @@ export async function ciRunHandler(request, env, ctx) {
           },
           result: {
             ...archResult,
+            analyzerVersion: version,
             ci: { ...ciContext, failOn: v.value.archFailOn, failed: archFailed },
           },
         });
@@ -528,6 +532,7 @@ export async function ciRunHandler(request, env, ctx) {
         source: "ci",
         input: { ...ciContext, audited: rep.audited },
         result: {
+          analyzerVersion: version,
           // `measuredBy` is not decoration. Every other run in this feed was
           // measured by us; this one was measured by the customer's runner,
           // because grading a function means executing it and the gate does
@@ -565,6 +570,7 @@ export async function ciRunHandler(request, env, ctx) {
   // build gates on; architecture contributes to it only when the caller opted
   // in via `arch_fail_on`, which defaults to "none".
   return json({
+    analyzerVersion: version,
     runId:         vuln ? vuln.runId : null,
     reportUrl:     vuln ? vuln.reportUrl : null,
     summary:       vuln ? vuln.summary : pickCounts({}),
@@ -848,6 +854,7 @@ jobs:
             echo "failed=$(jq -r '.failed' response.json)"
             echo "report_url=$(jq -r '.reportUrl // empty' response.json)"
             echo "arch_run_id=$(jq -r '.architecture.runId // empty' response.json)"
+            echo "analyzer_version=$(jq -r '.analyzerVersion // \\\"unknown\\\"' response.json)"
           } >> "$GITHUB_OUTPUT"
           # The dependency table only exists when lockfiles were submitted; a
           # repo with none still gets an architecture summary rather than an
@@ -951,6 +958,8 @@ jobs:
               '### Algosize dependency audit',
               '',
               table,
+              '',
+              'Analyzer build: \${{ steps.audit.outputs.analyzer_version || 'unknown' }}',
               '',
               '[View the full report](\${{ steps.audit.outputs.report_url }})',
             ].join('\\n');
