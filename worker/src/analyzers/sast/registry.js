@@ -437,6 +437,18 @@ export const RULES = Object.freeze([
     title: "Cleartext http:// endpoint",
     description: "A non-local `http://` URL appears in source or configuration.",
     category: "data-exposure", severity: "low", confidence: "medium",
+    // The only rule in this registry that is suppressed in test code, and the
+    // measurement is why: across this repository it fires 107 times in test
+    // files against 2 everywhere else. A test suite for a URL detector holds,
+    // by necessity, one specimen of every URL the detector detects, and a
+    // fixture URL is not an endpoint anything connects to. The severity cap
+    // could never help — every one of those 107 is already `low`, below it.
+    //
+    // The next-noisiest rule is 18-in-tests against 3 elsewhere and stays
+    // capped: a SQL string built by concatenation in a test can still be a
+    // planted vector worth reading. Suppression is a decision to stop looking
+    // somewhere; it is spent here and nowhere else.
+    inTestCode: "suppress",
     cwe: ["CWE-319"], owasp: ["A02:2021-Cryptographic Failures"],
     languages: ["*"], module: "pattern-analyzer",
     remediation: "Use https:// for anything that leaves the machine — http:// sends cookies, tokens and credentials in the clear.",

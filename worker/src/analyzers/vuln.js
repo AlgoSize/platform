@@ -974,7 +974,13 @@ export function analyzeVuln(input) {
   // Normalization joins registry metadata, fingerprints, dedupes the overlap
   // between the two engines, sorts and numbers. It runs AFTER the redaction
   // pass above so no fingerprint is ever derived from live secret material.
-  const findings = normalizeFindings(allFindings);
+  const normalized = normalizeFindings(allFindings);
+  const findings = normalized.findings;
+  // What the test-code policy declined to show. Reported as a number rather
+  // than dropped silently: a count that vanishes is how a scanner starts
+  // lying about its coverage, and this one is the difference between "your
+  // tests are clean" and "we stopped looking at your tests".
+  coverage.suppressedInTests = normalized.suppressedInTests;
 
   // `findings` keeps every legacy field in the legacy order, so the existing
   // shape is unchanged for every existing reader; `summary` and `coverage`

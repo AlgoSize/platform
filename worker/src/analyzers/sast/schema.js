@@ -124,6 +124,36 @@ export function isTestCodePath(path) {
   return TEST_DIR_RE.test(p) || TEST_BASENAME_RE.test(p);
 }
 
+/**
+ * What a finding MEANS in test code, per rule.
+ *
+ *   "report"    exactly as important as anywhere else
+ *   "cap"       still true, still listed, severity capped (the default)
+ *   "suppress"  not reported at all — a specimen here is the test doing its job
+ *
+ * The cap below was the only lever this policy had, and it is a NO-OP for any
+ * rule already at or below `medium` — which is precisely where the noise
+ * lives. Measured on this repository: sast.transport.cleartext-url fires 107
+ * times in test files against 2 everywhere else, all of them at `low`, so the
+ * cap never touched one of them. A test suite for a URL detector contains, by
+ * necessity, one specimen of every URL the detector detects.
+ *
+ * `suppress` is a decision to stop looking somewhere, so it is declared
+ * per-rule in the registry with a justification, never inferred from a
+ * category or a severity, and never applied in bulk. Everything a rule
+ * suppresses is still COUNTED and reported as a count — a finding that
+ * vanishes without trace is how a scanner starts lying about its coverage.
+ */
+export function testCodePolicyFor(rule) {
+  // Secrets are forced, not defaulted. A credential does not care which
+  // directory it leaks from, and test files are where real keys most often
+  // land — so this must not be reachable by omitting a field or mistyping
+  // one. A registry entry that tries to quiet a secret is overruled here.
+  if (rule && rule.category === "secrets") return "report";
+  const declared = rule && rule.inTestCode;
+  return declared === "report" || declared === "suppress" ? declared : "cap";
+}
+
 // The highest severity a non-secret finding in test code can carry.
 //
 // An injection pattern in a test file is almost always a planted vector or a
@@ -156,6 +186,8 @@ export function normalizeFindings(rawFindings, { dedupe = true } = {}) {
   const byType = rulesForTypes();
   const occurrenceCount = new Map();
 
+  let suppressedInTests = 0;
+
   let findings = rawFindings.map((raw) => {
     const rule = byType.get(raw.type) || DEFAULT_RULE;
     const base = {
@@ -182,10 +214,17 @@ export function normalizeFindings(rawFindings, { dedupe = true } = {}) {
     if (raw.column !== undefined) base.column = raw.column;
     if (raw.evidence !== undefined) base.evidence = raw.evidence;
 
-    if (base.category !== "secrets" && isTestCodePath(base.path) &&
-        (SEVERITY_RANK[base.severity] || 0) > SEVERITY_RANK[TEST_CODE_SEVERITY_CAP]) {
-      base.severity = TEST_CODE_SEVERITY_CAP;
-      base.evidence = { ...(base.evidence || {}), inTestCode: true, severityCapped: true };
+    if (isTestCodePath(base.path)) {
+      const policy = testCodePolicyFor(rule);
+      if (policy === "suppress") {
+        suppressedInTests++;
+        return null;          // filtered below, before ids are handed out
+      }
+      if (policy === "cap" &&
+          (SEVERITY_RANK[base.severity] || 0) > SEVERITY_RANK[TEST_CODE_SEVERITY_CAP]) {
+        base.severity = TEST_CODE_SEVERITY_CAP;
+        base.evidence = { ...(base.evidence || {}), inTestCode: true, severityCapped: true };
+      }
     }
 
     const occKey = `${base.ruleId}|${base.path}|${String(base.snippet).replace(/\s+/g, " ").trim()}`;
@@ -195,10 +234,14 @@ export function normalizeFindings(rawFindings, { dedupe = true } = {}) {
     return base;
   });
 
+  findings = findings.filter(Boolean);
   if (dedupe) findings = dedupeFindings(findings, byType);
   sortFindings(findings);
   findings.forEach((f, i) => { f.id = "VS-" + String(i + 1).padStart(4, "0"); });
-  return findings;
+  // An object, not a bare array: the count has to travel with the findings or
+  // the caller cannot report what it stopped showing. Every caller reads
+  // `.findings`; nothing reads a normalized array positionally.
+  return { findings, suppressedInTests };
 }
 
 /**
