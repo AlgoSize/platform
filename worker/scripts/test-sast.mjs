@@ -616,6 +616,85 @@ console.log("\nthe test-code severity cap survives the SARIF boundary\n");
     "a shared rule takes the loudest severity among its findings, whatever the order");
 }
 
+// ===========================================================================
+group("what a finding means in test code is decided per rule");
+// ===========================================================================
+{
+  const { RULES } = await import("../src/analyzers/sast/registry.js");
+  const { testCodePolicyFor, isTestCodePath } = await import("../src/analyzers/sast/schema.js");
+
+  const APP  = "src/handler.js";
+  const TEST = "scripts/test-something.mjs";
+  expect(!isTestCodePath(APP) && isTestCodePath(TEST),
+    "the two paths under test are classified as app code and test code");
+
+  // 1. Secrets are never quieted. A credential does not care which directory
+  //    it leaks from, and test files are where real keys most often land.
+  {
+    const t = scan(TEST, `const key = "${FAKE_AWS}";`);
+    const f = t.findings.find((x) => x.category === "secrets");
+    expect(f && f.severity === "critical",
+      "a secret in a test file keeps its full severity");
+  }
+
+  // 2. …and that is structural, not a field somebody remembered to set. A
+  //    registry entry that tried to suppress a secret is overruled.
+  {
+    const spoof = { category: "secrets", inTestCode: "suppress" };
+    expect(testCodePolicyFor(spoof) === "report",
+      "a secrets rule declaring suppress is still reported — the category wins");
+  }
+
+  // 3. The default is unchanged: still listed, severity capped at medium.
+  //    The sample is deliberately a CRITICAL rule; a finding already at or
+  //    below the cap would exercise nothing, which is the very no-op that
+  //    made this policy necessary.
+  {
+    const src = "eval(req.body.code);";
+    const app = scan(APP, src).findings.find((x) => x.ruleId === "sast.code-injection.tainted-eval");
+    const tst = scan(TEST, src).findings.find((x) => x.ruleId === "sast.code-injection.tainted-eval");
+    expect(app && tst, "an undeclared rule still fires in both places");
+    expect(app && app.severity === "critical" && tst && tst.severity === "medium",
+      "…and is capped in test code, not dropped");
+    expect(tst && tst.evidence && tst.evidence.severityCapped === true,
+      "…and says so on the finding rather than only in the number");
+  }
+
+  // 4. A suppressed rule disappears in test code and STILL fires outside it.
+  //    The second half is the one that matters: a suppression that leaked
+  //    into app code would be a rule quietly switched off.
+  {
+    const src = 'fetch("http://api.example.com/v1");';
+    const app = scan(APP, src);
+    const tst = scan(TEST, src);
+    const has = (r) => r.findings.some((x) => x.ruleId === "sast.transport.cleartext-url");
+    expect(has(app), "the suppressed rule still fires in application code");
+    expect(!has(tst), "…and does not fire in test code");
+    expect(tst.coverage.suppressedInTests === 1 && app.coverage.suppressedInTests === 0,
+      "…and what it dropped is counted, so the coverage line can say so");
+  }
+
+  // 5. Suppression is spent deliberately. This asserts the COUNT, so adding a
+  //    second one is a decision somebody has to make in this file too —
+  //    which is the point: it is a decision to stop looking somewhere.
+  {
+    const suppressed = RULES.filter((r) => r.inTestCode === "suppress").map((r) => r.id);
+    expect(suppressed.length === 1 && suppressed[0] === "sast.transport.cleartext-url",
+      `exactly one rule suppresses in test code (found: ${suppressed.join(", ") || "none"})`);
+    const badSecret = RULES.find((r) => r.category === "secrets" && r.inTestCode === "suppress");
+    expect(!badSecret, "no secrets rule declares suppress");
+  }
+
+  // 6. An unknown value falls back to the cap rather than to silence. A typo
+  //    must not be a way to switch a rule off.
+  {
+    expect(testCodePolicyFor({ category: "injection", inTestCode: "supress" }) === "cap",
+      "a misspelled policy falls back to cap, never to suppress");
+    expect(testCodePolicyFor({ category: "injection" }) === "cap",
+      "an absent policy is cap");
+  }
+}
+
 console.log("");
 if (failures === 0) {
   console.log("\x1b[32m  all SAST tests passed\x1b[0m\n");

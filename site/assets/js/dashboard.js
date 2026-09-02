@@ -571,6 +571,13 @@
     if (cov.truncated) {
       meta += " · capped at " + (cov.filesScanned || 0) + " of " + cov.filesEligible;
     }
+    // What the test-code policy declined to show. Said out loud for the same
+    // reason the pattern-only count is: a reader deciding whether a clean
+    // result means anything has to know what was deliberately not reported.
+    // Silence here would let a policy decision read as an absence of findings.
+    if (cov.suppressedInTests) {
+      meta += " · " + cov.suppressedInTests + " in test files not shown";
+    }
     wrap.appendChild(el("p", { class: "result-item-meta mono" }, meta));
 
     if (!findings.length) {
