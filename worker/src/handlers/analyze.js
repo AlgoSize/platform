@@ -36,6 +36,7 @@ import { queuePersist } from "./runs.js";
 import { getActiveOrg } from "./_orgs.js";
 import { storeReportFor } from "../reports/render.js";
 import { captureException } from "../observability.js";
+import { analyzerVersion } from "../analyzer-version.js";
 
 // After a 200 from any analyzer, queue a non-blocking write to the per-user
 // run-history KV. Skipped when there's no logged-in user (e.g. an unauth'd
@@ -165,7 +166,7 @@ async function runAnalyzer(request, validate, analyze, label, env, ctx) {
     return json({ error: "analyzer_failed", message: "could not analyze the provided payload" }, 500);
   }
 
-  return json(result, 200);
+  return json({ ...result, analyzerVersion: analyzerVersion(env) }, 200);
 }
 
 // ---------------------------------------------------------------------------
@@ -251,7 +252,7 @@ async function runCurAnalyzer(request, env, ctx) {
     return json({ error: "analyzer_failed", message: "could not analyze the CUR" }, 500);
   }
 
-  return json(result, 200);
+  return json({ ...result, analyzerVersion: analyzerVersion(env) }, 200);
 }
 
 /**
@@ -742,6 +743,7 @@ export async function runLockfileAudit(body, env, request, ctx) {
     repoUrl: `https://github.com/${repo.owner}/${repo.repo}`,
     ...audit.result,
     source,
+    analyzerVersion: analyzerVersion(env),
   }, 200);
 }
 
@@ -1018,6 +1020,7 @@ async function runAlgoSandbox(body, env) {
     bigO: result.bigO,
     suggestion: result.suggestion,
     sandbox: env && env.SANDBOX ? "service_binding" : "in_process",
+    analyzerVersion: analyzerVersion(env),
   }, 200);
 }
 
@@ -1175,6 +1178,6 @@ async function runAnalyzerWithBody(body, validate, analyze, label, request, env,
     }
     return json({ error: "analyzer_failed", message: "could not analyze the provided payload" }, 500);
   }
-  return json(result, 200);
+  return json({ ...result, analyzerVersion: analyzerVersion(env) }, 200);
 }
 
