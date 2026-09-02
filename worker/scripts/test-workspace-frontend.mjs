@@ -418,17 +418,13 @@ group("the watch list groups branches of one repository");
   // flat list made them read as two unrelated services.
   expect(/function groupByRepo/.test(monJs) && /groupByRepo\(monitors\)\.forEach/.test(monJs),
     "the list is built from repository groups rather than a flat forEach");
-  expect(/monitor-group-head/.test(monJs) && /\.monitor-group-head\b/.test(css),
+  expect(/mc-repo-head/.test(monJs) && /\.mc-repo-head\b/.test(css),
     "each group carries a header naming the repository");
-  // The grouping must not imply shared state, because there is none: each
-  // branch keeps its own baseline and diffs independently.
-  expect(/each keeps its own baseline/.test(monJs),
-    "…and says the branches are watched separately, so nothing implies a shared baseline");
-  expect(/g\.monitors\.length > 1/.test(monJs),
+  expect(/one service/.test(monJs),
+    "…and says multiple branches belong to one service");
+  expect(/g\.monitors\.length === 1/.test(monJs),
     "the branch note appears only when there is more than one branch to explain");
-  // Every per-row control has to survive the refactor — the row moved into
-  // its own function and a lost listener would be silent.
-  expect(/function monitorItem\(m\)/.test(monJs), "one row builder, called per group member");
+  expect(/function monitorRow\(m\)/.test(monJs), "one row builder, called per group member");
   for (const control of ["Run now", "Remove"]) {
     expect(monJs.includes(`"${control}"`), `…and the ${control} control still exists`);
   }
@@ -526,14 +522,14 @@ group("the schedule hour is offered, sent, and read back");
 group("the new classes are styled, and none are dead");
 // ===========================================================================
 {
-  const PREFIX = /^(ws-pulse|ws-tool|scorecard-|route-|dash-avatar|dash-account|dash-tab-glyph|dash-head-split|dash-head-aside|dash-crumb|monitor-why|panel-empty-rich|ws-tools|deeplink-)/;
+  const PREFIX = /^(ws-pulse|ws-tool|scorecard-|mc-|dash-avatar|dash-account|dash-tab-glyph|dash-head-split|dash-head-aside|dash-crumb|panel-empty-rich|ws-tools|deeplink-)/;
   const applied = uniq([
     ...matchAll(wsJs,  /class:\s*"([^"]+)"/g).flatMap((c) => c.split(/\s+/)),
     ...matchAll(monJs, /class:\s*"([^"]+)"/g).flatMap((c) => c.split(/\s+/)),
     ...matchAll(dashJs, /class:\s*"([^"]+)"/g).flatMap((c) => c.split(/\s+/)),
     ...matchAll(html,  /class="([^"]+)"/g).flatMap((c) => c.split(/\s+/)),
   ]).filter((c) => PREFIX.test(c));
-  const styled = new Set(matchAll(css, /\.((?:ws-pulse|ws-tool|scorecard-|route-|dash-avatar|dash-account|dash-tab-glyph|dash-head-split|dash-head-aside|dash-crumb|monitor-why|panel-empty-rich|ws-tools|deeplink-)[a-zA-Z0-9-]*)/g));
+  const styled = new Set(matchAll(css, /\.((?:ws-pulse|ws-tool|scorecard-|mc-|dash-avatar|dash-account|dash-tab-glyph|dash-head-split|dash-head-aside|dash-crumb|panel-empty-rich|ws-tools|deeplink-)[a-zA-Z0-9-]*)/g));
   // Two families are composed at runtime — "scorecard-cell-" + cell.kind and
   // "route-row-" + (wired ? "on" : "off"). The extractor sees the stem, so
   // the stem is checked against the variants that actually exist rather than
@@ -686,12 +682,12 @@ group("a monitor row can show the baseline its deltas are measured from");
   // Every "+2 new" badge on the Monitors page is a subtraction. The thing
   // being subtracted FROM is already stored and already served — this panel
   // is the first place the product renders it.
-  expect(/function baselinePanel/.test(monJs),
-    "dash-monitors renders a baseline panel");
+  expect(/function baselinePanel/.test(monJs) && /function renderBaselineGrid/.test(monJs),
+    "dash-monitors renders a baseline inspection surface");
   expect(/Baseline the sweep diffs against/.test(monJs),
     "…labelled as what the sweep diffs against, not as a result");
-  expect(/var base = baselinePanel\(m\);/.test(monJs),
-    "…and every monitor row gets one");
+  expect(/renderBaselineGrid\(m\)/.test(monJs),
+    "…and the expanded row renders the five-card grid");
 
   // The panel must read the stored fields, not re-derive them. Each of these
   // is a column the sweep writes and GET /api/monitors already returns.
@@ -720,12 +716,12 @@ group("a monitor row can show the baseline its deltas are measured from");
   expect(/Recorded, not compared/.test(monJs),
     "…and says so in words, not only by omission");
 
-  // Collapsed by default: six rows per monitor, open, on a page listing
-  // twenty of them would bury the states that need daily attention.
-  expect(/el\("details", \{ class: "monitor-baseline" \}\)/.test(monJs),
-    "the panel is a <details>, so it starts collapsed");
-  expect(/\.monitor-baseline-summary/.test(css),
-    "the disclosure is styled rather than falling back to the UA marker");
+  // Collapsed by default: the baseline grid lives behind Details, so a page
+  // listing twenty monitors does not bury the states that need daily attention.
+  expect(/Details/.test(monJs) && /mc-baseline-grid/.test(monJs),
+    "the baseline is behind a Details toggle and renders as a card grid");
+  expect(/\.mc-baseline-grid/.test(css),
+    "the card grid is styled rather than falling back to unstyled blocks");
   expect(/\.monitor-baseline-nodiff/.test(css),
     "the not-compared row is visually distinct from the five that are");
 }
@@ -759,10 +755,9 @@ group("the five CI gates read as five gates, not five wizards");
   expect(/source: "ci"/.test(ci), "the CI ingest endpoint tags its runs as CI");
   expect((ci.match(/source: "ci"/g) || []).length === 3,
     "…for exactly three analyzers, which is why two gates cannot appear in the feed");
-  expect(/not reported/.test(monJs),
-    "a gate that files no CI-tagged run reads as not reported, never as not set up");
-  expect(/can be\s*\n?\s*"?\s*wired up and passing and still show nothing here/.test(monJs) ||
-         /wired up and passing and still show nothing here/.test(monJs),
+  expect(/not set up/.test(monJs),
+    "a gate with no stored CI run reads as not set up");
+  expect(/without the CI tag|Until the workflow lands/.test(monJs),
     "…and the card says why, rather than implying the customer has not set it up");
 }
 

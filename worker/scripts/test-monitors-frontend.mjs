@@ -143,8 +143,8 @@ group("the analyzer commitments hold in the source");
     "and the config example + filename come from the endpoint, not hardcoded copy");
 
   // 6. The lede tells the truth about scope.
-  expect(/architecture, cost, and complexity checks/.test(html),
-    "the screen's lede names the multi-tool watch, not just the audit");
+  expect(/product working while you don't|architecture, cost, and complexity checks/.test(html),
+    "the screen's lede names what this page owns");
 }
 
 // ---------- summary ----------

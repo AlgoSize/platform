@@ -652,47 +652,47 @@ permalink: /dashboard/
 
     <!-- ================= MONITORS & CI (D-3) ================= -->
     <div id="view-monitors" class="dash-view" hidden>
-      <div class="dash-head">
-        <span class="eyebrow">Monitors &amp; CI</span>
-        <h2 class="dash-view-title">Repositories under continuous watch.</h2>
-        <p class="lede">
-          Advisories get published against code that hasn't changed. A monitor
-          re-scans on a schedule and emails only what's new — the dependency
-          audit always, plus architecture, cost, and complexity checks you can
-          switch on per repo. The CI hooks run the audit and the optimizer on
-          every pull request.
-        </p>
-      </div>
-
-      <!-- ============= PULSE (D-8) =============
-           Four numbers about the automation itself — how many repos are
-           watched, how many are healthy, when the last sweep ran, where the
-           next alert goes. Filled by dash-monitors.js from the monitor list
-           and GET /api/monitors/route; nothing here is a second copy of a
-           result the Workspace already shows. -->
-      <div class="ws-pulse" id="monitors-pulse" hidden></div>
-
-      <section class="panel" id="panel-monitors">
-        <header class="panel-head">
-          <div class="panel-heading">
-            <span class="panel-tag">Monitors</span>
-            <h2>Scheduled scans</h2>
-            <p class="panel-desc">Daily or weekly re-scans against the repo's default branch (or one you name). Alert emails carry only what's new since the previous run.</p>
+      <div class="mc-page">
+        <header class="mc-page-head">
+          <div class="mc-page-intro">
+            <h1 class="mc-page-title">Monitors &amp; CI</h1>
+            <p class="mc-page-lede">The product working while you don't. What you ran by hand lives in the Workspace.</p>
           </div>
-          <div class="panel-actions">
+          <button type="button" class="btn btn-ghost mc-new-btn" id="monitor-add-btn" hidden>New monitor</button>
+        </header>
+
+        <!-- Four numbers about the sweep machinery — filled by dash-monitors.js -->
+        <div class="ws-pulse" id="monitors-pulse" hidden></div>
+
+        <!-- Shown briefly after a monitor is created -->
+        <div id="monitor-created-banner" class="mc-created-banner" hidden role="status"></div>
+
+        <section class="mc-section" id="panel-monitors">
+          <div class="mc-section-head">
+            <div>
+              <h2 class="mc-section-title">Under watch</h2>
+              <p class="mc-section-note">Grouped by repository — two branches of one service read as one entry.</p>
+            </div>
             <span class="usage-meter" id="monitor-meter" hidden>
               <span class="usage-meter-text mono" id="monitor-meter-text"></span>
               <span class="usage-meter-bar" aria-hidden="true"><span class="usage-meter-fill" id="monitor-meter-fill"></span></span>
             </span>
-            <button type="button" class="btn btn-primary btn-sm" id="monitor-add-btn" hidden>Add monitor</button>
           </div>
-        </header>
-        <div class="panel-body">
-          <div id="monitor-limit-note" class="banner banner-amber" hidden></div>
+
+          <div id="monitor-limit-note" class="mc-limit-note banner banner-amber" hidden></div>
           <div id="monitors-list"><div class="panel-empty">Loading monitors…</div></div>
 
-          <!-- New-monitor form, revealed by the Add button. -->
-          <form id="monitor-form" class="stack-form" hidden novalidate>
+          <!-- Empty-state create form (shown when no monitors exist) -->
+          <div id="monitor-empty-create" class="mc-empty-create" hidden>
+            <div class="mc-empty-copy">
+              <h2 class="mc-empty-title">Nothing is being watched yet</h2>
+              <p class="mc-empty-lede">A monitor is a repo, a branch and a time — the analyzers re-read it on that schedule and email you only when something changes.</p>
+            </div>
+            <div id="monitor-empty-form-host"></div>
+          </div>
+
+          <!-- New-monitor form, revealed by New monitor -->
+          <form id="monitor-form" class="stack-form mc-create-form" hidden novalidate>
             <h3 class="result-section-title">New monitor</h3>
             <label class="panel-input-label" for="monitor-repo">GitHub repository URL</label>
             <input id="monitor-repo" class="panel-input mono" type="url" spellcheck="false"
@@ -763,8 +763,7 @@ permalink: /dashboard/
             </div>
             <p class="field-msg field-msg-error" id="monitor-form-error" hidden></p>
           </form>
-        </div>
-      </section>
+        </section>
 
       <!-- ============= WHERE THE NEXT ALERT GOES (D-8) =============
            Not a restatement of the notification settings. The rows are
@@ -773,11 +772,10 @@ permalink: /dashboard/
            is a channel that will actually be posted to, and a channel the
            settings screen shows as "on" but that has nowhere to deliver says
            so in the words of the thing that would have delivered it. -->
-      <section class="panel" id="panel-alert-route">
+      <section class="panel mc-panel" id="panel-alert-route">
         <header class="panel-head">
           <div class="panel-heading">
-            <span class="panel-tag">Alerts</span>
-            <h2>Where the next alert goes</h2>
+            <h2 class="mc-section-title">Where the next alert goes</h2>
             <p class="panel-desc">Not what is configured — what will actually be delivered.</p>
           </div>
         </header>
@@ -804,16 +802,15 @@ permalink: /dashboard/
            and still have nothing to show here — and the strip says exactly
            that rather than rendering them as "not set up", which would be a
            guess about the customer's repository. -->
-      <section class="panel" id="panel-ci-gates">
+      <section class="panel mc-panel" id="panel-ci-gates">
         <header class="panel-head">
           <div class="panel-heading">
-            <span class="panel-tag">CI</span>
-            <h2>CI gates</h2>
-            <p class="panel-desc">One <code class="mono">ALGOSIZE_API_KEY</code> secret serves all five. Each gate's setup is folded away below — open the one you are wiring up.</p>
+            <h2 class="mc-section-title">CI gates</h2>
+            <p class="panel-desc">One <code class="mono">ALGOSIZE_API_KEY</code> secret serves all five. Setup shows only where there is something to set up.</p>
           </div>
         </header>
         <div class="panel-body">
-          <div id="ci-gates-body"><div class="panel-empty">Reading the gates…</div></div>
+          <div id="ci-gates-body" class="mc-gates-grid"><div class="panel-empty">Reading the gates…</div></div>
         </div>
       </section>
 
@@ -1058,18 +1055,18 @@ permalink: /dashboard/
            ours, and two runs on different runner sizes can legitimately
            disagree — the one number in this feed whose provenance changes how
            much it is worth. -->
-      <section class="panel" id="panel-ci-runs">
+      <section class="panel mc-panel" id="panel-ci-runs">
         <header class="panel-head">
           <div class="panel-heading">
-            <span class="panel-tag">Feed</span>
-            <h2>Recent CI runs</h2>
-            <p class="panel-desc">What the gates actually did, newest first — the same stored runs the reports are rendered from.</p>
+            <h2 class="mc-section-title">Recent CI runs</h2>
+            <p class="panel-desc" id="ci-runs-count">Reading the CI feed…</p>
           </div>
         </header>
         <div class="panel-body">
           <div id="ci-runs-body"><div class="panel-empty">Reading the CI feed…</div></div>
         </div>
       </section>
+      </div><!-- /.mc-page -->
     </div><!-- /view-monitors -->
 
     <!-- ================= TEAM (D-2) ================= -->

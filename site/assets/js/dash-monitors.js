@@ -33,6 +33,8 @@
     schedule: "daily",
     limit: null,
     used: 0,
+    openMonitor: null,       // monitorId of the expanded row
+    createdMonitor: null,    // briefly shown after create
     // Secondary analyzers ticked in the new-monitor form. The dependency
     // audit is not in here because it is not a choice — the Worker forces
     // "vuln" into every set it stores.
@@ -80,6 +82,239 @@
   function shortRepo(url) {
     var m = REPO_RE.exec(url || "");
     return m ? m[1] + "/" + m[2] : url;
+  }
+
+  function scheduleLabel(m) {
+    var sched = (m.paused ? "paused" : (m.schedule === "weekly" ? "weekly" : "daily"));
+    if (m.paused && m.lastRunAt) {
+      return "paused · was " + (m.schedule === "weekly" ? "weekly" : "daily") + " · " + hourLabel(m.runAtHour);
+    }
+    if (m.runAtHour === null || m.runAtHour === undefined) {
+      return sched + " · no hour set";
+    }
+    return sched + " · " + hourLabel(m.runAtHour);
+  }
+
+  var DELTA_ORDER = ["critical", "high", "medium", "low", "unknown"];
+
+  /** Map a monitor row to the five health states the redesign renders. */
+  function healthState(m) {
+    if (m.paused) return { id: "paused", label: "paused", glyph: "\u23F8", tone: "muted" };
+    if (m.lastStatus === "failed") return { id: "broken", label: "misconfigured", glyph: "\u00D7", tone: "bad" };
+    if (m.lastStatus === "skipped") return { id: "stale", label: "stale", glyph: "\u25F7", tone: "warn" };
+    if (!m.lastStatus && m.lastRunAt === null) return { id: "pending", label: "baseline pending", glyph: "\u25F7", tone: "accent" };
+    return { id: "healthy", label: "healthy", glyph: "\u2713", tone: "ok" };
+  }
+
+  /** The headline + because lines beside the health pill. */
+  function resultCopy(m) {
+    var h = healthState(m);
+    if (h.id === "broken") {
+      return {
+        result: m.lastError || "the sweep failed",
+        because: "Retrying nightly will not fix this on its own.",
+        cls: "mc-result-bad",
+      };
+    }
+    if (h.id === "stale") {
+      return {
+        result: "last sweep skipped",
+        because: (m.lastError ? m.lastError + ". " : "") + "Baselines were left untouched.",
+        cls: "mc-result-warn",
+      };
+    }
+    if (h.id === "pending") {
+      return {
+        result: "first sweep pending",
+        because: "Nothing has been measured yet — there is no baseline to diff against.",
+        cls: "mc-result-accent",
+      };
+    }
+    if (h.id === "paused") {
+      return {
+        result: (m.knownAdvisoryCount === null ? "paused" : m.knownAdvisoryCount + " advisories as of pause"),
+        because: "Paused, so nothing is swept and nothing is emailed. Still counts against the monitor limit.",
+        cls: "mc-result-ok",
+      };
+    }
+    var d = m.lastDelta;
+    if (!d || typeof d.total !== "number") {
+      return { result: "awaiting first result", because: "The first completed sweep will establish the baseline.", cls: "mc-result-accent" };
+    }
+    if (d.baseline) {
+      return { result: "baseline recorded", because: "The first sweep listed what was already known.", cls: "mc-result-ok" };
+    }
+    if (d.total === 0) {
+      var known = (m.knownAdvisoryCount === null ? "unknown" : m.knownAdvisoryCount + " advisories known");
+      return { result: "clean · no change", because: known + ". Nothing new since the last sweep.", cls: "mc-result-ok" };
+    }
+    var parts = [];
+    var counts = d.counts || {};
+    DELTA_ORDER.forEach(function (sev) { if (counts[sev]) parts.push("+" + counts[sev] + " " + sev); });
+    return {
+      result: parts.length ? parts.join(", ") : ("+" + d.total + " new"),
+      because: "The email names only what is new since the stored baseline.",
+      cls: "mc-result-warn",
+    };
+  }
+
+  function hoursUntilNextSweep() {
+    var now = new Date();
+    var next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 3, 0, 0));
+    if (now.getTime() >= next.getTime()) next.setUTCDate(next.getUTCDate() + 1);
+    var ms = next.getTime() - now.getTime();
+    var h = Math.floor(ms / 3600000);
+    var m = Math.floor((ms % 3600000) / 60000);
+    return h + " h " + m + " m";
+  }
+
+  function countAlertsThisWeek(monitors) {
+    var weekAgo = Math.floor(Date.now() / 1000) - 7 * 86400;
+    var n = 0;
+    (monitors || []).forEach(function (mon) {
+      var d = mon.lastDelta;
+      if (d && typeof d.total === "number" && d.total > 0 && !d.baseline &&
+          typeof d.at === "number" && d.at >= weekAgo) n += d.total;
+    });
+    return n;
+  }
+
+  function toolLink(tool) {
+    if (tool === "scanner") return "#/tools/vuln";
+    if (tool === "arch") return "#/tools/arch";
+    if (tool === "estimate") return "#/tools/estimate";
+    if (tool === "optimizer") return "#/tools/optimizer";
+    if (tool === "cost") return "#/tools/cost";
+    return "#/workspace";
+  }
+
+  var BASELINE_TOOLS = [
+    { id: "security", glyph: "!", label: "Known advisories", tool: "scanner", sub: "", accent: "#f3c4c4" },
+    { id: "arch", glyph: "\u25AB", label: "Architecture findings", tool: "arch", sub: "", accent: "#a5b4fc" },
+    { id: "estimate", glyph: "$\u2192", label: "Estimated · priced forward", tool: "estimate", sub: "what this config would cost, from list prices", accent: "#34d399" },
+    { id: "cost", glyph: "$\u2190", label: "Actual · spent", tool: "cost", sub: "what the CUR says was billed", accent: "#fbbf24" },
+    { id: "complex", glyph: "\u0192", label: "Grades vs ceilings", tool: "optimizer", sub: "", accent: "#5eead4" },
+  ];
+
+  function baselineCardItems(m, toolId) {
+    var on = m.analyzers || [];
+    if (toolId === "security") {
+      if (m.knownAdvisoryCount === null || m.knownAdvisoryCount === undefined) {
+        return [{ k: "not yet swept", v: "\u2014", cls: "" }];
+      }
+      return [
+        { k: "packages watched", v: String(m.knownAdvisoryCount) + " known", cls: "" },
+        { k: "source findings", v: m.lastSource ? String(m.lastSource.total) + " held" : "\u2014", cls: "" },
+      ];
+    }
+    if (toolId === "arch") {
+      if (on.indexOf("arch") === -1) return [{ k: "not enabled", v: "\u2014", cls: "" }];
+      if (m.archFindingCount === null || m.archFindingCount === undefined) return [{ k: "not yet swept", v: "\u2014", cls: "" }];
+      return [{ k: "findings held", v: String(m.archFindingCount), cls: "" }];
+    }
+    if (toolId === "estimate") {
+      if (on.indexOf("estimate") === -1) return [{ k: "not enabled", v: "\u2014", cls: "" }];
+      if (!m.lastEstimate) return [{ k: "not yet swept", v: "\u2014", cls: "" }];
+      var by = m.lastEstimate.byProvider || {};
+      var keys = Object.keys(by).filter(function (k) { return typeof by[k] === "number"; });
+      if (!keys.length) return [{ k: "no compose file", v: "\u2014", cls: "" }];
+      return keys.slice(0, 3).map(function (k) {
+        return { k: k, v: microUsdText(by[k]) || "\u2014", cls: k === keys[0] ? "mc-result-ok" : "" };
+      });
+    }
+    if (toolId === "cost") {
+      if (on.indexOf("cost") === -1) return [{ k: "not enabled", v: "\u2014", cls: "" }];
+      if (!m.lastCost) return [{ k: "not yet swept", v: "\u2014", cls: "" }];
+      return [{ k: "recorded spend", v: "$" + Math.round(m.lastCost.currentSpend).toLocaleString() + "/mo", cls: "" }];
+    }
+    if (toolId === "complex") {
+      if (on.indexOf("algo") === -1) return [{ k: "not enabled", v: "\u2014", cls: "" }];
+      if (!m.lastAlgo) return [{ k: "not yet swept", v: "\u2014", cls: "" }];
+      if (!m.lastAlgo.functions) return [{ k: "no optimizer.config.json", v: "\u2014", cls: "" }];
+      return [{ k: "functions graded", v: String(m.lastAlgo.functions), cls: "mc-result-ok" }];
+    }
+    return [{ k: "not enabled", v: "\u2014", cls: "" }];
+  }
+
+  function renderBaselineGrid(m) {
+    var grid = el("div", { class: "mc-baseline-grid" });
+    BASELINE_TOOLS.forEach(function (t) {
+      var card = el("div", { class: "mc-baseline-card" });
+      var head = el("div", { class: "mc-baseline-card-head" });
+      var glyph = el("span", { class: "mc-baseline-card-glyph mono", "aria-hidden": "true" }, t.glyph);
+      glyph.style.color = t.accent;
+      glyph.style.borderColor = t.accent + "59";
+      glyph.style.background = t.accent + "14";
+      head.appendChild(glyph);
+      head.appendChild(el("span", { class: "mc-baseline-card-label mono" }, t.label));
+      card.appendChild(head);
+      if (t.sub) card.appendChild(el("span", { class: "mc-baseline-card-sub" }, t.sub));
+      baselineCardItems(m, t.id).forEach(function (it) {
+        var row = el("div", { class: "mc-baseline-card-row mono" });
+        row.appendChild(el("span", { class: "mc-baseline-card-k" }, it.k));
+        row.appendChild(el("span", { class: "mc-baseline-card-v " + (it.cls || "") }, it.v));
+        card.appendChild(row);
+      });
+      var link = el("a", { class: "mc-baseline-card-link mono", href: toolLink(t.tool) }, "open " + t.tool + " \u2192");
+      card.appendChild(link);
+      grid.appendChild(card);
+    });
+    return grid;
+  }
+
+  function renderSweepTimeline(m) {
+    var box = el("div", { class: "mc-timeline-box" });
+    var head = el("div", { class: "mc-timeline-head" });
+    head.appendChild(el("span", { class: "mc-timeline-label mono" }, "Sweep timeline \u00B7 last 14 nights"));
+    head.appendChild(el("span", { class: "mc-timeline-proposed mono" }, "proposed"));
+    box.appendChild(head);
+    var strip = el("div", { class: "mc-timeline-strip" });
+    for (var i = 0; i < 14; i++) {
+      var cell = el("span", { class: "mc-timeline-cell mono", title: "Per-night history is not stored yet" }, "\u00B7");
+      cell.style.color = "#3a414c";
+      strip.appendChild(cell);
+    }
+    box.appendChild(strip);
+    box.appendChild(el("p", { class: "mc-timeline-note" },
+      "Costs one row per monitor per night — the product keeps only the current baseline today. " +
+      "What it buys that the five cards above cannot: when a finding appeared and how many nights it survived."));
+    box.appendChild(el("span", { class: "mc-timeline-legend mono" }, "\u00B7 clean   n new   \u25F7 skipped   \u00D7 failed"));
+    return box;
+  }
+
+  function showCreatedBanner(m) {
+    var banner = document.getElementById("monitor-created-banner");
+    if (!banner) return;
+    while (banner.firstChild) banner.removeChild(banner.firstChild);
+    var text = el("div", { class: "mc-created-text" });
+    var strong = el("strong");
+    strong.appendChild(el("span", { class: "mono", "aria-hidden": "true", style: "color:var(--accent-2)" }, "\u2713"));
+    strong.appendChild(document.createTextNode(" Watching " + shortRepo(m.repoUrl) + " \u00B7 " + (m.branch || "default branch")));
+    text.appendChild(strong);
+    text.appendChild(el("p", null,
+      scheduleLabel(m) + " — or run it now to check the configuration works before you walk away."));
+    banner.appendChild(text);
+    var runBtn = el("button", { type: "button", class: "btn btn-primary" }, "Run now \u2192");
+    runBtn.addEventListener("click", function () {
+      state.openMonitor = m.monitorId;
+      queueRun(m, runBtn);
+    });
+    banner.appendChild(runBtn);
+    banner.hidden = false;
+  }
+
+  function queueRun(m, btn) {
+    setBusy(btn, true, "Queuing\u2026");
+    callApi("/api/monitors/" + encodeURIComponent(m.monitorId) + "/run", {})
+      .then(function () {
+        setBusy(btn, false);
+        btn.textContent = "Queued \u2713";
+        btn.disabled = true;
+      })
+      .catch(function (e) {
+        setBusy(btn, false);
+        window.alert(e.message || "Could not queue the run");
+      });
   }
 
   // ---------------------------------------------------------------------
@@ -140,46 +375,151 @@
     }
 
     var wrap = document.getElementById("monitors-list");
+    var emptyCreate = document.getElementById("monitor-empty-create");
     if (!wrap) return;
     while (wrap.firstChild) wrap.removeChild(wrap.firstChild);
 
     var monitors = data.monitors || [];
+    var sectionHead = document.querySelector("#panel-monitors .mc-section-head");
+    if (sectionHead) sectionHead.hidden = !monitors.length;
+
     if (!monitors.length) {
-      var empty = el("div", { class: "keys-empty" });
-      empty.appendChild(el("span", { class: "panel-tag" }, "Watch"));
-      empty.appendChild(el("h3", null, "No repositories under watch yet"));
-      empty.appendChild(el("p", null,
-        "A monitor re-scans a repo on a schedule and emails only what's new since the last run — " +
-        "start with the repo whose dependencies you'd least like to discover in an incident."));
-      wrap.appendChild(empty);
+      wrap.hidden = true;
+      if (emptyCreate) {
+        emptyCreate.hidden = false;
+        var host = document.getElementById("monitor-empty-form-host");
+        var form = document.getElementById("monitor-form");
+        if (host && form && !host.contains(form)) {
+          host.appendChild(form);
+          form.hidden = false;
+          form.classList.add("mc-create-form");
+        }
+      }
       return;
     }
 
-    // Grouped by repository. Two branches of one service are two monitors —
-    // separate schedules, separate baselines, separate emails — but they are
-    // ONE thing you are watching, and a flat list makes them read as two
-    // unrelated services. The grouping says which is which without pretending
-    // they share any state.
-    var ul = el("ul", { class: "monitor-list" });
+    wrap.hidden = false;
+    if (emptyCreate) emptyCreate.hidden = true;
+    var form = document.getElementById("monitor-form");
+    var panel = document.getElementById("panel-monitors");
+    if (form && panel && form.parentElement !== panel) {
+      panel.appendChild(form);
+      form.hidden = true;
+    }
+
     groupByRepo(monitors).forEach(function (g) {
-      var group = el("li", { class: "monitor-group" });
-
-      var ghead = el("div", { class: "monitor-group-head" });
-      ghead.appendChild(el("strong", { class: "mono" }, g.repo));
-      // Only when there is more than one, and it says what the reader needs
-      // to know about the grouping: these rows do NOT share a baseline.
-      if (g.monitors.length > 1) {
-        ghead.appendChild(el("span", { class: "monitor-group-note mono" },
-          g.monitors.length + " branches, watched separately \u2014 each keeps its own baseline"));
-      }
-      group.appendChild(ghead);
-
-      var sub = el("ul", { class: "monitor-group-list" });
-      g.monitors.forEach(function (m) { sub.appendChild(monitorItem(m)); });
-      group.appendChild(sub);
-      ul.appendChild(group);
+      wrap.appendChild(renderRepoCard(g));
     });
-    wrap.appendChild(ul);
+
+    if (state.createdMonitor) {
+      var created = monitors.find(function (m) { return m.monitorId === state.createdMonitor; });
+      if (created) showCreatedBanner(created);
+      else {
+        var banner = document.getElementById("monitor-created-banner");
+        if (banner) banner.hidden = true;
+      }
+    }
+  }
+
+  function renderRepoCard(g) {
+    var card = el("section", { class: "mc-repo-card" });
+    var head = el("div", { class: "mc-repo-head" });
+    head.appendChild(el("span", { class: "mc-repo-name mono" }, g.repo));
+    head.appendChild(el("span", { class: "mc-repo-note mono" },
+      g.monitors.length === 1 ? "1 branch" : g.monitors.length + " branches \u00B7 one service"));
+    card.appendChild(head);
+    g.monitors.forEach(function (m) { card.appendChild(monitorRow(m)); });
+    return card;
+  }
+
+  function monitorRow(m) {
+    var health = healthState(m);
+    var copy = resultCopy(m);
+    var open = state.openMonitor === m.monitorId;
+    var row = el("div", { class: "mc-monitor-row" });
+
+    var summary = el("div", { class: "mc-monitor-summary", "data-health": health.id });
+    var branchBox = el("div", { class: "mc-monitor-branch mono" });
+    branchBox.appendChild(el("strong", null, m.branch || "default branch"));
+    branchBox.appendChild(el("span", { class: "mc-monitor-schedule" }, scheduleLabel(m)));
+    if (m.runAtHour !== null && m.runAtHour !== undefined && localHourFor(m.runAtHour) !== null) {
+      branchBox.appendChild(el("span", { class: "mc-monitor-local" },
+        "(" + pad2(localHourFor(m.runAtHour)) + ":00 your time \u2014 converted in your browser)"));
+    }
+    summary.appendChild(branchBox);
+
+    var pill = el("span", { class: "mc-health-pill mono", "data-tone": health.tone });
+    pill.appendChild(el("span", { "aria-hidden": "true" }, health.glyph));
+    pill.appendChild(document.createTextNode(" " + health.label));
+    summary.appendChild(pill);
+
+    var result = el("div", { class: "mc-monitor-result mono" });
+    result.appendChild(el("strong", { class: copy.cls }, copy.result));
+    result.appendChild(el("span", null, copy.because));
+    summary.appendChild(result);
+
+    var actions = el("div", { class: "mc-monitor-actions" });
+    if (!m.paused) {
+      var runBtn = el("button", { type: "button", class: "btn btn-ghost btn-sm" }, "Run now");
+      runBtn.addEventListener("click", function () { queueRun(m, runBtn); });
+      actions.appendChild(runBtn);
+    }
+    var toggleBtn = el("button", {
+      type: "button", class: "btn btn-ghost btn-sm",
+      "aria-expanded": open ? "true" : "false",
+    }, (open ? "\u25BE Close" : "\u25B8 Details"));
+    toggleBtn.addEventListener("click", function () {
+      state.openMonitor = open ? null : m.monitorId;
+      load(true);
+    });
+    actions.appendChild(toggleBtn);
+    summary.appendChild(actions);
+    row.appendChild(summary);
+
+    if (open) {
+      var detail = el("div", { class: "mc-monitor-detail", "data-health": health.id });
+      var bar = el("div", { class: "mc-baseline-bar" });
+      bar.appendChild(el("span", { class: "mc-baseline-bar-label mono" }, "Baseline the sweep diffs against"));
+      bar.appendChild(el("span", { class: "mc-baseline-bar-rule", "aria-hidden": "true" }));
+      bar.appendChild(el("span", { class: "mc-baseline-bar-note mono" }, "stored today \u00B7 no new tables needed to show it"));
+      detail.appendChild(bar);
+      detail.appendChild(renderBaselineGrid(m));
+      detail.appendChild(renderSweepTimeline(m));
+      detail.appendChild(analyzerRow(m));
+
+      var detailActions = el("div", { class: "mc-detail-actions" });
+      if (!m.paused) {
+        var runNow = el("button", { type: "button", class: "btn btn-primary btn-sm" }, "Run now");
+        runNow.addEventListener("click", function () { queueRun(m, runNow); });
+        detailActions.appendChild(runNow);
+      }
+      var pauseBtn = el("button", { type: "button", class: "btn btn-ghost btn-sm" },
+        m.paused ? "Resume" : "Pause");
+      pauseBtn.addEventListener("click", function () {
+        setBusy(pauseBtn, true, "\u2026");
+        callApi("/api/monitors/" + encodeURIComponent(m.monitorId) + "/pause", { paused: !m.paused })
+          .then(function () { return load(true); })
+          .catch(function (e) { window.alert(e.message || "Could not update the monitor"); })
+          .then(function () { setBusy(pauseBtn, false); });
+      });
+      detailActions.appendChild(pauseBtn);
+      var rmBtn = el("button", { type: "button", class: "btn btn-ghost btn-sm btn-danger-ghost" }, "Remove");
+      rmBtn.addEventListener("click", function () {
+        if (!window.confirm("Stop monitoring " + shortRepo(m.repoUrl) +
+          "? Pausing keeps the slot; removing frees it.")) return;
+        setBusy(rmBtn, true, "Removing\u2026");
+        callApi("/api/monitors/" + encodeURIComponent(m.monitorId), null, "DELETE")
+          .then(function () { return load(true); })
+          .catch(function (e) { window.alert(e.message || "Could not remove the monitor"); })
+          .then(function () { setBusy(rmBtn, false); });
+      });
+      detailActions.appendChild(rmBtn);
+      detailActions.appendChild(el("span", { class: "mc-detail-footnote mono" },
+        "Run now = one manual-trigger endpoint on the queue that already exists"));
+      detail.appendChild(detailActions);
+      row.appendChild(detail);
+    }
+    return row;
   }
 
   /**
@@ -209,118 +549,8 @@
     });
   }
 
-  /** One monitor's row. The repository name lives on the group header. */
-  function monitorItem(m) {
-    {
-      var li = el("li", { class: "monitor-item" + (m.paused ? " monitor-item-paused" : "") });
-
-      var info = el("div", { class: "monitor-info" });
-      var top = el("div", { class: "monitor-top" });
-      top.appendChild(el("strong", { class: "mono monitor-branch-lead" }, m.branch || "default branch"));
-      var health = healthBadge(m);
-      if (health) top.appendChild(health);
-      var badge = statusBadge(m);
-      if (badge) top.appendChild(badge);
-      // What changed since the previous sweep, beside the standing total. The
-      // two answer different questions — "how exposed is this repo" versus
-      // "did anything move" — and the second is the one a daily reader is
-      // actually scanning for.
-      var delta = deltaBadges(m);
-      if (delta) top.appendChild(delta);
-      info.appendChild(top);
-
-      var meta = el("div", { class: "monitor-meta mono" });
-      var when = el("span", null, (m.paused ? "Paused · " : "") +
-        (m.schedule === "weekly" ? "Weekly" : "Daily") + " · " + hourLabel(m.runAtHour));
-      // The local half of that label is computed from THIS browser's clock,
-      // not stored anywhere — only the UTC hour is (monitors.run_at_hour).
-      // Without saying so it reads as a preference the reader configured and
-      // the platform honours, and the same monitor would quietly disagree
-      // with itself for two teammates in different timezones.
-      if (m.runAtHour !== null && m.runAtHour !== undefined && localHourFor(m.runAtHour) !== null) {
-        when.title = "The UTC hour is the stored setting. The local time beside it is " +
-                     "converted in your browser, so a teammate elsewhere sees a different one.";
-      }
-      meta.appendChild(when);
-      meta.appendChild(el("span", null,
-        m.lastRunAt ? "last ran " + core.formatRelativeTime(m.lastRunAt * 1000) : "first run pending"));
-      info.appendChild(meta);
-      var why = healthReason(m);
-      if (why) info.appendChild(el("p", { class: "monitor-why" }, why));
-      var az = analyzerRow(m);
-      if (az) info.appendChild(az);
-      var base = baselinePanel(m);
-      if (base) info.appendChild(base);
-      li.appendChild(info);
-
-      var actions = el("div", { class: "monitor-actions" });
-
-      // Run now. Not offered on a paused monitor: running it would advance
-      // the baseline, so resuming later would compare against a sweep the
-      // owner had already decided not to take — and the first real run would
-      // report nothing new when plenty had changed. The API refuses it too;
-      // this just doesn't render a button whose only outcome is a 409.
-      if (!m.paused) {
-        var runBtn = el("button", { type: "button", class: "btn btn-ghost btn-sm" }, "Run now");
-        runBtn.addEventListener("click", function () {
-          setBusy(runBtn, true, "Queuing…");
-          callApi("/api/monitors/" + encodeURIComponent(m.monitorId) + "/run", {})
-            .then(function () {
-              // 202, not 200: the run is queued, not finished. Saying
-              // "queued" rather than "done" is the difference between a
-              // truthful control and one that lies for a nicer moment.
-              setBusy(runBtn, false);
-              runBtn.textContent = "Queued ✓";
-              runBtn.disabled = true;
-            })
-            .catch(function (e) {
-              setBusy(runBtn, false);
-              window.alert(e.message || "Could not queue the run");
-            });
-        });
-        actions.appendChild(runBtn);
-      }
-
-      var pauseBtn = el("button", { type: "button", class: "btn btn-ghost btn-sm" },
-        m.paused ? "Resume" : "Pause");
-      pauseBtn.addEventListener("click", function () {
-        setBusy(pauseBtn, true, "…");
-        callApi("/api/monitors/" + encodeURIComponent(m.monitorId) + "/pause", { paused: !m.paused })
-          .then(function () { return load(true); })
-          .catch(function (e) { window.alert(e.message || "Could not update the monitor"); })
-          .then(function () { setBusy(pauseBtn, false); });
-      });
-      actions.appendChild(pauseBtn);
-
-      var rmBtn = el("button", { type: "button", class: "btn btn-ghost btn-sm btn-danger-ghost" }, "Remove");
-      rmBtn.addEventListener("click", function () {
-        if (!window.confirm("Stop monitoring " + shortRepo(m.repoUrl) +
-          "? Pausing keeps the slot; removing frees it.")) return;
-        setBusy(rmBtn, true, "Removing…");
-        callApi("/api/monitors/" + encodeURIComponent(m.monitorId), null, "DELETE")
-          .then(function () { return load(true); })
-          .catch(function (e) { window.alert(e.message || "Could not remove the monitor"); })
-          .then(function () { setBusy(rmBtn, false); });
-      });
-      actions.appendChild(rmBtn);
-      li.appendChild(actions);
-      return li;
-    }
-  }
-
   /**
    * The monitor's health, which is a different question from its findings.
-   *
-   * Health comes first because a monitor that cannot run has no findings
-   * worth reading. Before migrations/0017 there was nothing to read here:
-   * a monitor whose repo has no supported lockfile failed every night,
-   * recorded nothing, and rendered "baseline pending" forever — exactly what
-   * a healthy monitor shows on its first day. Those two now differ.
-   *
-   *   failed   ran, and will keep failing until the configuration changes
-   *   skipped  transient upstream failure; the baseline was deliberately
-   *            left alone, so the next successful sweep still diffs honestly
-   *   null     genuinely never attempted — the only honest "pending"
    */
   function healthBadge(m) {
     if (m.paused) return el("span", { class: "chip chip-muted" }, "paused");
@@ -792,8 +1022,9 @@
       repoUrl: repoUrl, branch: branch, schedule: state.schedule,
       analyzers: formAnalyzers(), runAtHour: formHour(),
     })
-      .then(function () {
+      .then(function (res) {
         toggleForm(false);
+        state.createdMonitor = res && res.monitor && res.monitor.monitorId ? res.monitor.monitorId : null;
         return load(true);
       })
       .catch(function (e) {
@@ -981,52 +1212,46 @@
     var newest = newestByAnalyzer(state.ciRuns);
 
     GATES.forEach(function (g) {
-      var card = el("div", { class: "gate-card" });
-
-      var top = el("div", { class: "gate-card-top" });
-      top.appendChild(el("strong", null, g.name));
       var run = g.analyzer ? newest[g.analyzer] : null;
-      if (run) {
-        top.appendChild(el("span", { class: "chip chip-ok" }, "✓ running"));
-      } else if (g.feeds) {
-        top.appendChild(el("span", { class: "chip chip-muted" }, "○ no run yet"));
-      } else {
-        // Not "not set up". This gate can be wired and firing and still be
-        // invisible here, so the chip states what we know: nothing arrives.
-        top.appendChild(el("span", { class: "chip chip-muted" }, "○ not reported"));
+      var configured = !!run || g.feeds;
+      var tone = run && run.headline && /fail/i.test(run.headline) ? "bad" : (run ? "ok" : "none");
+      var card = el("div", { class: "mc-gate-card-v2", "data-tone": tone === "bad" ? "bad" : "" });
+
+      var head = el("div", { class: "mc-gate-card-head" });
+      head.appendChild(el("h3", null, g.name));
+      var pillTone = run ? (tone === "bad" ? "bad" : "ok") : "muted";
+      var pillLabel = run ? (tone === "bad" ? "failing" : "passing") : "not set up";
+      var pill = el("span", { class: "mc-health-pill mono", "data-tone": pillTone },
+        (pillTone === "ok" ? "\u2713 " : pillTone === "bad" ? "\u25B2 " : "\u25CB ") + pillLabel);
+      head.appendChild(pill);
+      card.appendChild(head);
+
+      var body = el("div", { class: "mc-gate-card-body" });
+      if (run || g.feeds) {
+        var fileRow = el("div", { class: "mc-gate-snippet-row" });
+        fileRow.appendChild(el("code", { class: "mono" }, g.file));
+        body.appendChild(fileRow);
+        body.appendChild(el("p", { class: "gate-card-on" }, "Gates on " + g.gatesOn + "."));
       }
-      card.appendChild(top);
-
-      card.appendChild(el("p", { class: "gate-card-file mono" }, g.file));
-      card.appendChild(el("p", { class: "gate-card-on" }, "Gates on " + g.gatesOn + "."));
-
       if (run) {
-        var last = el("p", { class: "gate-card-last" });
-        last.appendChild(el("span", { class: "mono" },
-          (run.repo || "pipeline") +
-          (run.commitSha ? " @ " + String(run.commitSha).slice(0, 7) : "")));
-        last.appendChild(document.createTextNode(
-          " · " + (run.headline || "no headline") + " · "));
-        last.appendChild(el("a", { href: "#/report/" + encodeURIComponent(run.id) }, "report"));
-        if (typeof run.createdAt === "number") {
-          last.appendChild(document.createTextNode(
-            " · " + core.formatRelativeTime(run.createdAt)));
-        }
-        card.appendChild(last);
+        var lastBox = el("div", { class: "mc-gate-last-box", "data-tone": tone === "bad" ? "bad" : "ok" });
+        lastBox.appendChild(el("strong", { class: "mono" }, run.headline || "no headline"));
+        var meta = (run.repo || "pipeline") +
+          (run.commitSha ? " \u00B7 " + String(run.commitSha).slice(0, 7) : "") +
+          (typeof run.createdAt === "number" ? " \u00B7 " + core.formatRelativeTime(run.createdAt) : "");
+        lastBox.appendChild(el("span", { class: "mono" }, meta));
+        body.appendChild(lastBox);
       } else if (!g.feeds) {
-        card.appendChild(el("p", { class: "gate-card-blind" },
-          "Runs from this gate are stored, but not tagged as CI — its workflow posts to the " +
-          "analyzer endpoint with your key rather than to the CI ingest endpoint. So it can be " +
-          "wired up and passing and still show nothing here."));
+        body.appendChild(el("p", { class: "gate-card-blind" }, g.gatesOn ?
+          "Until the workflow lands nothing runs and nothing fails." :
+          "Runs from this gate are stored without the CI tag."));
       } else {
-        card.appendChild(el("p", { class: "gate-card-blind" },
-          "Nothing has arrived from this gate yet. It appears here the moment a workflow run " +
-          "authenticates with your key — there is nothing to press."));
+        body.appendChild(el("p", { class: "gate-card-blind" },
+          "Nothing has arrived from this gate yet."));
       }
 
-      // A real link, so it is focusable and reachable by keyboard; the
-      // handler opens the disclosure the href alone cannot.
-      var jump = el("a", { class: "gate-card-jump", href: "#/monitors" }, "Setup \u2193");
+      var jump = el("a", { class: "btn btn-ghost btn-sm", href: "#/monitors" },
+        configured ? "Setup \u2193" : "Set up \u2192");
       jump.addEventListener("click", function (ev) {
         ev.preventDefault();
         var panel = document.getElementById(g.panel);
@@ -1035,8 +1260,8 @@
         if (det) det.open = true;
         if (panel.scrollIntoView) panel.scrollIntoView({ behavior: "smooth", block: "start" });
       });
-      card.appendChild(jump);
-
+      body.appendChild(jump);
+      card.appendChild(body);
       wrap.appendChild(card);
     });
   }
@@ -1056,13 +1281,20 @@
 
   function renderCiRuns() {
     var wrap = document.getElementById("ci-runs-body");
+    var countEl = document.getElementById("ci-runs-count");
     if (!wrap) return;
     while (wrap.firstChild) wrap.removeChild(wrap.firstChild);
 
     var items = state.ciRuns;
     if (items === null) {
+      if (countEl) countEl.textContent = "Could not read the CI feed";
       wrap.appendChild(core.errorState("Could not read the CI feed."));
       return;
+    }
+    if (countEl) {
+      countEl.textContent = items.length
+        ? items.length + " in the last fetch"
+        : "No CI run has arrived yet";
     }
     if (!items.length) {
       wrap.appendChild(el("div", { class: "panel-empty" },
@@ -1071,43 +1303,29 @@
       return;
     }
 
-    var list = el("div", { class: "ci-run-list" });
     items.slice(0, 12).forEach(function (r) {
-      var row = el("div", { class: "ci-run-row" });
-      row.appendChild(el("span", { class: "tag" }, CI_TAG[r.analyzer] || r.analyzer || "run"));
-
-      var body = el("div", { class: "ci-run-body" });
-      var head = el("div", { class: "ci-run-head mono" });
-      head.appendChild(el("span", null,
-        (r.repo || "pipeline") + (r.commitSha ? " @ " + String(r.commitSha).slice(0, 7) : "")));
-      if (typeof r.createdAt === "number") {
-        head.appendChild(el("span", { class: "ci-run-when" },
-          core.formatRelativeTime(r.createdAt)));
-      }
-      body.appendChild(head);
-      body.appendChild(el("p", { class: "ci-run-headline" }, r.headline || "no headline recorded"));
-
-      // Null stays null: a run with no measuredBy gets no marker, rather than
-      // an "ours" badge we would be inventing.
+      var row = el("div", { class: "mc-ci-run-row" });
+      var tag = el("span", { class: "mc-ci-run-tag mono" }, CI_TAG[r.analyzer] || r.analyzer || "run");
+      row.appendChild(tag);
+      row.appendChild(el("span", { class: "mc-ci-run-where mono" },
+        (r.repo || "pipeline") + (r.commitSha ? " \u00B7 " + String(r.commitSha).slice(0, 7) : "")));
+      var verdictCls = r.headline && /fail/i.test(r.headline) ? "mc-result-bad" : "mc-result-ok";
+      row.appendChild(el("span", { class: "mc-ci-run-verdict mono " + verdictCls },
+        r.headline || "no headline recorded"));
       if (r.measuredBy === "ci_runner") {
-        body.appendChild(el("span", {
+        row.appendChild(el("span", {
           class: "run-item-measured mono",
-          title: "The grade was timed on your CI runner, not on Algosize infrastructure. " +
-                 "Runs on different runner sizes can disagree.",
+          title: "The grade was timed on your CI runner, not on Algosize infrastructure.",
         }, "measured in your runner"));
       }
-      body.appendChild(el("a", { class: "ci-run-report", href: "#/report/" + encodeURIComponent(r.id) },
-        "report →"));
-      row.appendChild(body);
-      list.appendChild(row);
+      row.appendChild(el("span", { class: "mc-ci-run-when mono" },
+        typeof r.createdAt === "number" ? core.formatRelativeTime(r.createdAt) : "\u2014"));
+      wrap.appendChild(row);
     });
-    wrap.appendChild(list);
 
     wrap.appendChild(el("p", { class: "ci-run-foot" },
-      "Three of the five gates file a run tagged as CI — the dependency audit, the " +
-      "architecture gate and the optimizer. The cost-estimate and cloud-spend workflows post " +
-      "to the analyzer endpoints with your key, which stores the run without the CI tag, so " +
-      "they do not appear in this feed even when they are running."));
+      "Every row is a stored run. Optimizer rows carry measuredBy: ci_runner when the Big-O " +
+      "grade was timed on your CI machine, not ours."));
   }
 
   function loadCiRuns() {
@@ -1138,38 +1356,40 @@
     var monitors = (data && data.monitors) || [];
     if (!monitors.length) { wrap.hidden = true; return; }
 
-    var active = 0, unhealthy = 0, pending = 0, lastRun = null;
+    var repos = {};
+    monitors.forEach(function (m) { repos[shortRepo(m.repoUrl)] = true; });
+    var repoCount = Object.keys(repos).length;
+    var active = monitors.filter(function (m) { return !m.paused; }).length;
+    var lastRun = null;
+    var completed = 0;
+    var attempted = 0;
     monitors.forEach(function (m) {
       if (m.paused) return;
-      active++;
-      if (m.lastStatus === "failed" || m.lastStatus === "skipped") unhealthy++;
-      if (!m.lastStatus && m.lastRunAt === null) pending++;
-      if (m.lastRunAt && (!lastRun || m.lastRunAt > lastRun)) lastRun = m.lastRunAt;
+      attempted++;
+      if (m.lastRunAt) {
+        completed++;
+        if (!lastRun || m.lastRunAt > lastRun) lastRun = m.lastRunAt;
+      }
     });
+    var alerts = countAlertsThisWeek(monitors);
 
     var items = [
-      { label: "Watching", value: String(active),
-        note: monitors.length > active
-          ? (monitors.length - active) + " paused"
-          : (active === 1 ? "repository" : "repositories") },
-      { label: "Healthy", value: String(Math.max(0, active - unhealthy - pending)),
-        note: unhealthy ? unhealthy + " need attention" : "all sweeping cleanly",
-        tone: unhealthy ? "bad" : "ok" },
-      { label: "Awaiting first sweep", value: String(pending),
-        note: pending ? "no baseline yet" : "every monitor has a baseline",
-        tone: pending ? "warn" : null },
+      { label: "Repos under watch", value: String(repoCount),
+        note: monitors.length + " monitors \u00B7 " + (data.monitorsUsed || monitors.length) +
+              " of " + (data.monitorLimit || "\u2014") + " slots", tone: null },
+      { label: "Next sweep", value: hoursUntilNextSweep(), note: "tonight 03:00 UTC", tone: "accent" },
       { label: "Last sweep", value: lastRun ? core.formatRelativeTime(lastRun * 1000) : "never",
-        note: lastRun ? "most recent result" : "nothing has run yet",
-        tone: lastRun ? null : "warn" },
+        note: completed + " completed of " + attempted + " attempted", tone: null },
+      { label: "Alerts this week", value: String(alerts),
+        note: alerts ? "new findings emailed" : "nothing new reported", tone: null },
     ];
 
     wrap.textContent = "";
     items.forEach(function (it) {
       var box = el("div", { class: "ws-pulse-item" });
       box.appendChild(el("span", { class: "ws-pulse-label mono" }, it.label));
-      box.appendChild(el("span", {
-        class: "ws-pulse-value mono" + (it.tone ? " ws-pulse-" + it.tone : ""),
-      }, it.value));
+      var valCls = "ws-pulse-value mono" + (it.tone === "accent" ? " ws-pulse-ok" : "");
+      box.appendChild(el("span", { class: valCls }, it.value));
       box.appendChild(el("span", { class: "ws-pulse-note" }, it.note));
       wrap.appendChild(box);
     });
@@ -1201,37 +1421,32 @@
   function renderAlertRoute(body, route) {
     body.textContent = "";
 
-    // Said first and said plainly, because "nothing will be delivered" is
-    // the one state on this page that someone has to act on today.
-    var summary = el("p", {
-      class: "route-summary" + (route.muted ? " route-summary-bad" : ""),
-    }, route.summary);
-    body.appendChild(summary);
-
     (route.channels || []).forEach(function (c) {
-      var row = el("div", { class: "route-row route-row-" + (c.wired ? "on" : "off") });
+      var row = el("div", { class: "mc-route-card", "data-wired": c.wired ? "true" : "false" });
 
-      var pill = el("span", { class: "chip " + (c.wired ? "chip-ok" : "chip-muted") },
-        c.wired ? "wired" : "not delivering");
+      var pill = el("span", { class: "mc-health-pill mono", "data-tone": c.wired ? "ok" : "muted" },
+        c.wired ? "\u2713 delivering" : "\u25CB not delivering");
       row.appendChild(pill);
 
-      var textWrap = el("div", { class: "route-text" });
+      var textWrap = el("div", { class: "mc-route-card-body" });
       textWrap.appendChild(el("strong", null, c.label));
       if (c.detail && c.detail.length) {
-        textWrap.appendChild(el("span", { class: "route-target mono" }, c.detail.join(", ")));
+        textWrap.appendChild(el("span", { class: "mc-route-card-target mono" }, c.detail.join(", ")));
       }
-      if (c.note) textWrap.appendChild(el("span", { class: "route-note" }, c.note));
+      if (c.note) textWrap.appendChild(el("span", { class: "mc-route-card-note" }, c.note));
       row.appendChild(textWrap);
 
-      // The fix lives on the Account screen for both channels — notification
-      // preferences for email, the org's webhook for Slack — so an unwired
-      // channel links there rather than explaining where to look.
       if (!c.wired) {
         row.appendChild(el("a", { class: "btn btn-ghost btn-sm", href: "#/account/notifications" },
-          c.id === "slack" ? "Set up Slack →" : "Notification settings →"));
+          c.id === "slack" ? "Add a webhook \u2192" : "Turn on in Account \u2192"));
       }
       body.appendChild(row);
     });
+
+    if (route.muted) {
+      var warn = el("p", { class: "route-summary route-summary-bad" }, route.summary);
+      body.insertBefore(warn, body.firstChild);
+    }
   }
 
   // ---------------------------------------------------------------------
