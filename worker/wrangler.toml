@@ -291,6 +291,11 @@ REPORT_CNAME_TARGET  = "cname.algosize.com"
 # reviewed in a diff; hiding it among the secrets makes it invisible to
 # exactly the people it is meant to inform. (SENTRY_DSN itself IS a secret
 # and stays in `wrangler secret put`.)
+#
+# SET, as of 2026-09-02. Console-only logging is now the recorded decision
+# rather than an unmade one, and the admin settings row says so instead of
+# listing SENTRY_DSN as missing. Delete this line to go back to being
+# reminded; replace it with a real SENTRY_DSN secret to get durable events.
 ERROR_REPORTING = "console"
 
 [[env.production.kv_namespaces]]
