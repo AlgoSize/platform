@@ -158,10 +158,16 @@ console.log("\nlistRuns() — pagination + filters expired\n");
   // runs: a row that appeared without anyone asking has to be able to say
   // which schedule produced it. Null on every other origin — it is an id, not
   // a payload.
+  // `measuredBy` joined when the optimizer's CI gate started grading on the
+  // customer's own runner. It is one short enum pulled with json_extract —
+  // the whole result_json is still NOT selected — and it earns a place for
+  // the same reason credentialKind did: the row cannot be read correctly
+  // without it. A Big-O grade timed on a pull request's runner and one timed
+  // on ours are different measurements, and the feed showed them identically.
   const sampleKeys = Object.keys(page1.items[0]).sort().join(",");
   expect(!("result" in page1.items[0]) && !("input" in page1.items[0]),
          "list items carry no heavy fields");
-  expect(sampleKeys === "analyzer,commitSha,createdAt,credentialKind,hasInput,headline,id,monitorId,ms,repo,source",
+  expect(sampleKeys === "analyzer,commitSha,createdAt,credentialKind,hasInput,headline,id,measuredBy,monitorId,ms,repo,source",
          `list-item shape is the summary set (got: ${sampleKeys})`);
   expect(page1.nextCursor && typeof page1.nextCursor === "string", "first page returns nextCursor");
 

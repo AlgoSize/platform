@@ -31,6 +31,7 @@ const router  = readFileSync(join(SITE, "assets", "js", "dash-router.js"), "utf8
 const css     = readFileSync(join(SITE, "assets", "css", "main.css"), "utf8");
 const worker  = readFileSync(join(WORKER, "index.js"), "utf8");
 const scorecard = readFileSync(join(WORKER, "handlers", "scorecard.js"), "utf8");
+const runsJs    = readFileSync(join(WORKER, "handlers", "runs.js"), "utf8");
 const routing   = readFileSync(join(WORKER, "monitors", "routing.js"), "utf8");
 const meJs      = readFileSync(join(WORKER, "handlers", "me.js"), "utf8");
 const inspect   = readFileSync(join(WORKER, "monitors", "inspect.js"), "utf8");
@@ -406,6 +407,72 @@ group("monitor health is rendered as four distinct states");
     "and the endpoint refuses it server-side regardless of what the UI renders");
   expect(/Queued/.test(monJs),
     "the button reports 'queued', not 'done' — the endpoint answers 202, not a result");
+}
+
+// ===========================================================================
+group("the watch list groups branches of one repository");
+// ===========================================================================
+{
+  // Two branches of one service are two monitors — separate schedules,
+  // separate baselines, separate emails — but ONE thing you are watching. A
+  // flat list made them read as two unrelated services.
+  expect(/function groupByRepo/.test(monJs) && /groupByRepo\(monitors\)\.forEach/.test(monJs),
+    "the list is built from repository groups rather than a flat forEach");
+  expect(/monitor-group-head/.test(monJs) && /\.monitor-group-head\b/.test(css),
+    "each group carries a header naming the repository");
+  // The grouping must not imply shared state, because there is none: each
+  // branch keeps its own baseline and diffs independently.
+  expect(/each keeps its own baseline/.test(monJs),
+    "…and says the branches are watched separately, so nothing implies a shared baseline");
+  expect(/g\.monitors\.length > 1/.test(monJs),
+    "the branch note appears only when there is more than one branch to explain");
+  // Every per-row control has to survive the refactor — the row moved into
+  // its own function and a lost listener would be silent.
+  expect(/function monitorItem\(m\)/.test(monJs), "one row builder, called per group member");
+  for (const control of ["Run now", "Remove"]) {
+    expect(monJs.includes(`"${control}"`), `…and the ${control} control still exists`);
+  }
+  expect(/m\.paused \? "Resume" : "Pause"/.test(monJs), "…and so does pause/resume");
+}
+
+// ===========================================================================
+group("a grade timed on someone else's machine says so");
+// ===========================================================================
+{
+  // The optimizer's CI gate grades a function by EXECUTING it, on the pull
+  // request's own runner. ci.js has stored measuredBy: "ci_runner" since the
+  // gate shipped, with a comment saying exactly why it matters — and nothing
+  // read it back, so the feed rendered a runner-timed grade and a nightly one
+  // as the same kind of fact.
+  const ciJs = readFileSync(join(WORKER, "handlers", "ci.js"), "utf8");
+  expect(/measuredBy: "ci_runner"/.test(ciJs), "the CI gate stores the provenance");
+  expect(/json_extract\(result_json, '\$\.measuredBy'\)/.test(runsJs),
+    "the runs list extracts that ONE scalar rather than selecting result_json");
+  expect(!/SELECT[^`]*result_json,/.test(runsJs.slice(runsJs.indexOf("FROM runs") - 400)) ||
+         !/result_json\s*\n\s*FROM runs/.test(runsJs),
+    "…so the list still hauls no heavy fields");
+  expect(/measuredBy: r\.measured_by \|\| null/.test(runsJs),
+    "null when absent — every other analyzer is measured on our infrastructure, " +
+    "which is an absence and not an unknown");
+  expect(/it\.measuredBy === "ci_runner"/.test(dashJs) && /measured in your runner/.test(dashJs),
+    "the feed renders it on the rows that carry it");
+  expect(/\.run-item-measured\b/.test(css), "…and it is styled");
+}
+
+// ===========================================================================
+group("the local schedule time is a conversion, not a setting");
+// ===========================================================================
+{
+  // Only the UTC hour is stored (monitors.run_at_hour). The local half is
+  // computed from the reader's own clock, so the same monitor reads
+  // differently to two teammates — and without saying so it looks like a
+  // preference the platform is honouring.
+  expect(/converted in your browser/.test(monJs),
+    "the row says the local time is converted in the browser");
+  expect(/not saved|not a stored setting/.test(monJs),
+    "…and that it is not stored");
+  expect(/stored in UTC/.test(monJs),
+    "…while naming what IS stored");
 }
 
 // ===========================================================================
