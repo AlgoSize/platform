@@ -94,6 +94,23 @@ jobs:
             console.log("bridge has no runtime dependencies");
           '
 
+      # The scanner, run over the repository that contains it, using THIS
+      # commit's rules rather than the deployed Worker's.
+      #
+      # The four Algosize checks on a pull request post the repo's files to
+      # https://algosize.com and are answered by whatever is deployed there.
+      # That is right for a normal change and a trap for a change to an
+      # analyzer: the gate scans the fix with the bug the fix removes. It
+      # happened on #101, where nine of fourteen findings were already fixed
+      # by the diff being reviewed and nothing on the page said so.
+      #
+      # This step closes that loop. It imports the pure analyzer directly —
+      # no credentials, no network, no Worker runtime — so an analyzer change
+      # is checked by the analyzer it changes, on the same commit.
+      - name: Self-scan with this commit's analyzer
+        working-directory: worker
+        run: npm run selfscan
+
       # The full suite last. It is the slowest, and by this point the
       # MCP-specific failures have already been surfaced with a clear name.
       - name: Full worker suite
