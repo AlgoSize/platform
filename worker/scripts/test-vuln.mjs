@@ -260,6 +260,52 @@ console.log("\nDetector: insecure http:// URLs\n");
   ok("http:// for localhost / RFC1918 / .local are NOT flagged");
 }
 
+// 24b. URI-shaped IDENTIFIERS are not endpoints and are NOT flagged.
+//
+// Found by this scanner on this repository's own pull request, where it
+// flagged `document.createElementNS("http://www.w3.org/2000/svg", tag)`. That
+// string is the SVG namespace: nothing fetches it, and the https:// spelling
+// is a DIFFERENT namespace that no browser renders as SVG — so the rule's own
+// remediation would have broken the code it was pointing at.
+{
+  const samples = [
+    ['x.js',    'var n = document.createElementNS("http://www.w3.org/2000/svg", tag);'],
+    ['x.html',  '<svg xmlns="http://www.w3.org/2000/svg"></svg>'],
+    ['x.js',    'el.setAttributeNS("http://www.w3.org/1999/xlink", "href", u);'],
+    ['pom.xml', '<project xmlns="http://maven.apache.org/POM/4.0.0">'],
+    ['x.java',  'p.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", true);'],
+    ['s.json',  '{"$schema": "http://json-schema.org/draft-07/schema#"}'],
+  ];
+  let bad = null;
+  for (const [path, content] of samples) {
+    const out = analyzeVuln({ files: [{ path, content }] });
+    if (out.findings.some(x => x.type === "insecure_http_url")) { bad = content; break; }
+  }
+  if (bad) fail(`namespace/identifier URI false-positive on: ${bad}`);
+  else ok("XML namespaces, parser features and $schema ids are NOT flagged");
+}
+
+// 24c. …and the allowlist is anchored, so a lookalike host does not inherit it.
+//
+// The exemption is for the exact identifier hosts, not for anything with
+// "w3.org" in it. A rule that can be bypassed by registering
+// `w3.org.attacker.net` would be worse than the false positive it fixed.
+{
+  const attacks = [
+    'fetch("http://w3.org.evil.com/steal")',
+    'fetch("http://www.w3.org.attacker.net/x")',
+    'fetch("http://notw3.org/x")',
+    'fetch("http://evil.com/?u=http://www.w3.org/2000/svg")',
+  ];
+  let missed = null;
+  for (const code of attacks) {
+    const out = analyzeVuln({ files: [{ path: "x.js", content: code }] });
+    if (!out.findings.some(x => x.type === "insecure_http_url")) { missed = code; break; }
+  }
+  if (missed) fail(`lookalike host slipped past the identifier allowlist: ${missed}`);
+  else ok("lookalike hosts do NOT inherit the identifier exemption");
+}
+
 console.log("\nAggregation\n");
 
 // 25. Clean code → empty findings
