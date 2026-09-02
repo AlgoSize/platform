@@ -187,6 +187,37 @@ for (const g of GATES) {
     "the provenance line falls back to unknown when the API omits its version");
 }
 
+// Every jq program these workflows emit has to be a jq program.
+//
+// The generators are JS template literals, so a `"` inside an emitted string
+// needs escaping in the SOURCE — and it is very easy to escape it once too
+// often. The jq programs here sit inside SHELL SINGLE QUOTES, where a
+// backslash is literal, so a stray \" reaches jq as \" and is a compile
+// error. It fails quietly: the command substitution yields an empty string,
+// the surrounding echo still succeeds, and the only trace is a jq error on
+// stderr in a log nobody opens.
+//
+// This has now happened twice in these generators. Rather than pin the one
+// line, pin the property: no jq program may contain an escaped double quote.
+{
+  const ALL = [
+    ["audit", buildWorkflow({ origin: ORIGIN })],
+    ["optimizer", buildOptimizerWorkflow({ origin: ORIGIN })],
+    ["estimate", buildEstimateWorkflow({ origin: ORIGIN })],
+    ["architecture", buildArchitectureWorkflow({ origin: ORIGIN })],
+    ["cost", buildCostWorkflow({ origin: ORIGIN })],
+  ];
+  let bad = null;
+  for (const [name, yaml] of ALL) {
+    for (const m of yaml.matchAll(/jq -r '([^']*)'/g)) {
+      if (m[1].includes('\\"')) { bad = name + ": jq -r '" + m[1] + "'"; break; }
+    }
+    if (bad) break;
+  }
+  expect(!bad,
+    "no emitted jq program escapes a double quote" + (bad ? " — found " + bad : ""));
+}
+
 group("the Worker's own pull-request gate actually covers the Worker");
 // ===========================================================================
 // Not a customer-facing gate — this is ours, and it is here because its

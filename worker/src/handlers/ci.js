@@ -854,7 +854,7 @@ jobs:
             echo "failed=$(jq -r '.failed' response.json)"
             echo "report_url=$(jq -r '.reportUrl // empty' response.json)"
             echo "arch_run_id=$(jq -r '.architecture.runId // empty' response.json)"
-            echo "analyzer_version=$(jq -r '.analyzerVersion // \\\"unknown\\\"' response.json)"
+            echo "analyzer_version=$(jq -r '.analyzerVersion // \"unknown\"' response.json)"
           } >> "$GITHUB_OUTPUT"
           # The dependency table only exists when lockfiles were submitted; a
           # repo with none still gets an architecture summary rather than an
@@ -878,7 +878,7 @@ jobs:
           elif [ "$(jq -r 'has("source")' response.json)" = "true" ]; then
             {
               echo ""
-              jq -r '"**Code scan** · did not run — \\(.source.message // \\"no reason given\\")"' response.json
+              jq -r '"**Code scan** · did not run — \\(.source.message // "no reason given")"' response.json
             } >> table.md
           fi
           if [ "$(jq -r 'has("architecture")' response.json)" = "true" ]; then
