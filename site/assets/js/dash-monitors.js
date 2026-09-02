@@ -152,14 +152,68 @@
       return;
     }
 
+    // Grouped by repository. Two branches of one service are two monitors —
+    // separate schedules, separate baselines, separate emails — but they are
+    // ONE thing you are watching, and a flat list makes them read as two
+    // unrelated services. The grouping says which is which without pretending
+    // they share any state.
     var ul = el("ul", { class: "monitor-list" });
+    groupByRepo(monitors).forEach(function (g) {
+      var group = el("li", { class: "monitor-group" });
+
+      var ghead = el("div", { class: "monitor-group-head" });
+      ghead.appendChild(el("strong", { class: "mono" }, g.repo));
+      // Only when there is more than one, and it says what the reader needs
+      // to know about the grouping: these rows do NOT share a baseline.
+      if (g.monitors.length > 1) {
+        ghead.appendChild(el("span", { class: "monitor-group-note mono" },
+          g.monitors.length + " branches, watched separately \u2014 each keeps its own baseline"));
+      }
+      group.appendChild(ghead);
+
+      var sub = el("ul", { class: "monitor-group-list" });
+      g.monitors.forEach(function (m) { sub.appendChild(monitorItem(m)); });
+      group.appendChild(sub);
+      ul.appendChild(group);
+    });
+    wrap.appendChild(ul);
+  }
+
+  /**
+   * Monitors bucketed by repository, each bucket's rows in a stable order.
+   *
+   * Keyed on the shortened owner/name rather than the raw URL so the same
+   * repository written two ways still groups. Branch order is alphabetical
+   * with the default branch first, because "main and a release branch" is the
+   * common shape and main is the one people look for.
+   */
+  function groupByRepo(monitors) {
+    var order = [];
+    var byRepo = {};
     monitors.forEach(function (m) {
+      var key = shortRepo(m.repoUrl);
+      if (!byRepo[key]) { byRepo[key] = { repo: key, monitors: [] }; order.push(key); }
+      byRepo[key].monitors.push(m);
+    });
+    return order.map(function (key) {
+      var g = byRepo[key];
+      g.monitors.sort(function (a, b) {
+        if (!a.branch) return -1;
+        if (!b.branch) return 1;
+        return a.branch < b.branch ? -1 : a.branch > b.branch ? 1 : 0;
+      });
+      return g;
+    });
+  }
+
+  /** One monitor's row. The repository name lives on the group header. */
+  function monitorItem(m) {
+    {
       var li = el("li", { class: "monitor-item" + (m.paused ? " monitor-item-paused" : "") });
 
       var info = el("div", { class: "monitor-info" });
       var top = el("div", { class: "monitor-top" });
-      top.appendChild(el("strong", { class: "mono" }, shortRepo(m.repoUrl)));
-      top.appendChild(el("span", { class: "mono monitor-branch" }, m.branch || "default branch"));
+      top.appendChild(el("strong", { class: "mono monitor-branch-lead" }, m.branch || "default branch"));
       var health = healthBadge(m);
       if (health) top.appendChild(health);
       var badge = statusBadge(m);
@@ -173,8 +227,18 @@
       info.appendChild(top);
 
       var meta = el("div", { class: "monitor-meta mono" });
-      meta.appendChild(el("span", null, (m.paused ? "Paused · " : "") +
-        (m.schedule === "weekly" ? "Weekly" : "Daily") + " · " + hourLabel(m.runAtHour)));
+      var when = el("span", null, (m.paused ? "Paused · " : "") +
+        (m.schedule === "weekly" ? "Weekly" : "Daily") + " · " + hourLabel(m.runAtHour));
+      // The local half of that label is computed from THIS browser's clock,
+      // not stored anywhere — only the UTC hour is (monitors.run_at_hour).
+      // Without saying so it reads as a preference the reader configured and
+      // the platform honours, and the same monitor would quietly disagree
+      // with itself for two teammates in different timezones.
+      if (m.runAtHour !== null && m.runAtHour !== undefined && localHourFor(m.runAtHour) !== null) {
+        when.title = "The UTC hour is the stored setting. The local time beside it is " +
+                     "converted in your browser, so a teammate elsewhere sees a different one.";
+      }
+      meta.appendChild(when);
       meta.appendChild(el("span", null,
         m.lastRunAt ? "last ran " + core.formatRelativeTime(m.lastRunAt * 1000) : "first run pending"));
       info.appendChild(meta);
@@ -235,9 +299,8 @@
       });
       actions.appendChild(rmBtn);
       li.appendChild(actions);
-      ul.appendChild(li);
-    });
-    wrap.appendChild(ul);
+      return li;
+    }
   }
 
   /**
@@ -833,7 +896,11 @@
     if (!sel || !note) return;
     note.textContent = sel.value === ""
       ? "Runs at 03:00 UTC, the hour every monitor has always used."
-      : "Held back until this hour, so the alert lands when you are there to read it.";
+      // The stored setting is the UTC hour. The "your time" half of each
+      // option is converted from this browser's clock and is not saved, so a
+      // teammate in another timezone reads the same monitor differently.
+      : "Held back until this hour, so the alert lands when you are there to read it. " +
+        "The hour is stored in UTC; your local time is converted in this browser, not saved.";
   }
 
   function formHour() {

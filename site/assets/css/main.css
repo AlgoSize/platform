@@ -4553,6 +4553,37 @@ a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
    see the comment on the block that builds it. */
 /* The second line of a banner: still the banner's voice, quieter, for the
    correction that only some readers need. */
+/* Monitors grouped by repository. Two branches of one service are two
+   monitors with separate baselines, but one thing you are watching — the
+   group says so without implying they share any state. */
+.monitor-group { list-style: none; margin-bottom: var(--s-4); }
+.monitor-group:last-child { margin-bottom: 0; }
+.monitor-group-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  align-items: baseline;
+  padding: 0 0 var(--s-2);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--s-2);
+}
+.monitor-group-note { font-size: 0.66rem; color: var(--text-dim); }
+.monitor-group-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s-2); }
+/* The branch leads the row now that the repository names the group. */
+.monitor-branch-lead { font-size: 0.82rem; }
+
+/* "measured in your runner" — the one row in the feed whose number came off
+   somebody else's machine. Quiet, because it is provenance rather than a
+   warning: the grade is not wrong, it is just not ours. */
+.run-item-measured {
+  font-size: 0.62rem;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+
 .banner-fine { font-size: 0.76rem; color: var(--text-dim); }
 
 .scorecard-key {

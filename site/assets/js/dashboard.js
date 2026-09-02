@@ -1216,6 +1216,18 @@
           (it.commitSha ? " · " + String(it.commitSha).slice(0, 7) : "")
         : null;
       if (origin) meta.appendChild(el("span", { class: "run-item-origin mono" }, origin));
+      // Whose machine produced the number. The optimizer's CI gate grades a
+      // function by running it, on the pull request's own runner — so this
+      // one figure in the feed was not measured by us, and two runs on
+      // differently-sized runners can disagree without either being wrong.
+      // Rendered only when the stored result says so; its absence means
+      // Algosize infrastructure, which is what every other row already is.
+      if (it.measuredBy === "ci_runner") {
+        meta.appendChild(el("span", { class: "run-item-measured mono",
+          title: "The Big-O grade was timed on your CI runner, not on Algosize " +
+                 "infrastructure. Runs on different runner sizes can disagree." },
+          "measured in your runner"));
+      }
       meta.appendChild(el("span", { class: "run-item-time mono" }, formatRelativeTime(it.createdAt)));
       li.appendChild(meta);
 

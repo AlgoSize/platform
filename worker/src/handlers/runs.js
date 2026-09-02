@@ -352,7 +352,8 @@ export async function listRuns(env, scope, { limit = 20, cursor = null, source =
     // Strictly-after the cursor in DESC order: row.created_at < c.ts, OR
     // (== c.ts AND id < c.id). The compound index makes this cheap.
     result = await env.DB.prepare(
-      `SELECT id, analyzer, headline, ms, created_at, input_json, source, credential_kind
+      `SELECT id, analyzer, headline, ms, created_at, input_json, source, credential_kind,
+              json_extract(result_json, '$.measuredBy') AS measured_by
          FROM runs
         WHERE ${scopeSql}
           AND created_at > ?
@@ -362,7 +363,8 @@ export async function listRuns(env, scope, { limit = 20, cursor = null, source =
     ).bind(...scopeArgs, cutoff, c.ts, c.ts, c.id, cap + 1).all();
   } else {
     result = await env.DB.prepare(
-      `SELECT id, analyzer, headline, ms, created_at, input_json, source, credential_kind
+      `SELECT id, analyzer, headline, ms, created_at, input_json, source, credential_kind,
+              json_extract(result_json, '$.measuredBy') AS measured_by
          FROM runs
         WHERE ${scopeSql}
           AND created_at > ?
@@ -398,6 +400,22 @@ export async function listRuns(env, scope, { limit = 20, cursor = null, source =
       // column — the values were stored at ingest and never change. Null on
       // dashboard runs, where there is no commit to name.
       repo:      hasRepo && input && typeof input.repo === "string" ? input.repo : null,
+      // WHERE this run was measured, when that is not us.
+      //
+      // The optimizer's CI gate grades a function by EXECUTING it, and it
+      // does that on the pull request's own runner — so the number came off
+      // the customer's machine, and two runs on different runner sizes can
+      // legitimately disagree. ci.js has said so in the stored result since
+      // the gate shipped; nothing ever read it back, so the feed showed a
+      // runner-timed grade and a nightly one as the same kind of fact.
+      //
+      // Extracted as one scalar rather than by selecting result_json: this
+      // list deliberately does not haul full results, and a provenance label
+      // is not a reason to start.
+      //
+      // Null means measured on Algosize infrastructure, which is the default
+      // for every other analyzer — an absence, not an unknown.
+      measuredBy: r.measured_by || null,
       commitSha: isCi && input && typeof input.commitSha === "string" ? input.commitSha : null,
       // Re-run depends on the input still being there. Disabled for CUR
       // uploads (input was too big to keep) so the dashboard can grey out
