@@ -522,14 +522,14 @@ group("the schedule hour is offered, sent, and read back");
 group("the new classes are styled, and none are dead");
 // ===========================================================================
 {
-  const PREFIX = /^(ws-pulse|ws-tool|scorecard-|mc-|dash-avatar|dash-account|dash-tab-glyph|dash-head-split|dash-head-aside|dash-crumb|panel-empty-rich|ws-tools|deeplink-)/;
+  const PREFIX = /^(ws-page|ws-card|ws-sort|ws-scorecard|ws-pulse|ws-tool|scorecard-|mc-|dash-avatar|dash-account|dash-tab-glyph|dash-crumb|panel-empty-rich|ws-tools|deeplink-)/;
   const applied = uniq([
     ...matchAll(wsJs,  /class:\s*"([^"]+)"/g).flatMap((c) => c.split(/\s+/)),
     ...matchAll(monJs, /class:\s*"([^"]+)"/g).flatMap((c) => c.split(/\s+/)),
     ...matchAll(dashJs, /class:\s*"([^"]+)"/g).flatMap((c) => c.split(/\s+/)),
     ...matchAll(html,  /class="([^"]+)"/g).flatMap((c) => c.split(/\s+/)),
   ]).filter((c) => PREFIX.test(c));
-  const styled = new Set(matchAll(css, /\.((?:ws-pulse|ws-tool|scorecard-|mc-|dash-avatar|dash-account|dash-tab-glyph|dash-head-split|dash-head-aside|dash-crumb|panel-empty-rich|ws-tools|deeplink-)[a-zA-Z0-9-]*)/g));
+  const styled = new Set(matchAll(css, /\.((?:ws-page|ws-card|ws-sort|ws-scorecard|ws-pulse|ws-tool|scorecard-|mc-|dash-avatar|dash-account|dash-tab-glyph|dash-crumb|panel-empty-rich|ws-tools|deeplink-)[a-zA-Z0-9-]*)/g));
   // Two families are composed at runtime — "scorecard-cell-" + cell.kind and
   // "route-row-" + (wired ? "on" : "off"). The extractor sees the stem, so
   // the stem is checked against the variants that actually exist rather than

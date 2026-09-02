@@ -4788,21 +4788,6 @@ input.acct-input, select.acct-input { min-height: 44px; }
 .dash-avatar.has-image { background: var(--border); }
 .dash-avatar-img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
-/* --- Split page head: title left, one link right --- */
-.dash-head-split {
-  display: flex;
-  gap: var(--s-4);
-  justify-content: space-between;
-  align-items: flex-end;
-  flex-wrap: wrap;
-}
-.dash-head-aside {
-  flex: 0 0 auto;
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  border-bottom: 1px solid rgba(94, 234, 212, 0.4);
-  padding-bottom: 2px;
-}
 .dash-crumb {
   display: inline-block;
   margin-bottom: var(--s-2);
@@ -4812,6 +4797,108 @@ input.acct-input, select.acct-input { min-height: 44px; }
 }
 .dash-crumb:hover { color: var(--accent); }
 
+/* --- Workspace page shell (redesign) --- */
+.ws-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  padding-bottom: var(--s-8);
+  max-width: 1400px;
+}
+.ws-page-head {
+  display: flex;
+  gap: var(--s-4);
+  justify-content: space-between;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+.ws-page-intro { flex: 1 1 30ch; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.ws-page-title { margin: 0; font-size: 1.5rem; font-weight: 600; letter-spacing: -0.02em; }
+.ws-page-lede { margin: 0; color: var(--text-muted); font-size: 0.92rem; text-wrap: pretty; }
+.ws-page-aside {
+  flex: 0 0 auto;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--accent);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  text-decoration: none;
+}
+.ws-page-aside:hover { color: var(--accent-2); }
+
+.ws-card {
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: var(--bg-card);
+  overflow: hidden;
+}
+.ws-card-head {
+  display: flex;
+  gap: var(--s-3);
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 12px 15px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg-elevated);
+}
+.ws-card-intro { flex: 1 1 28ch; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ws-card-title { margin: 0; font-size: 1.05rem; font-weight: 600; letter-spacing: -0.01em; }
+.ws-card-desc { margin: 0; font-size: 0.78rem; color: var(--text-muted); text-wrap: pretty; }
+.ws-card-actions { flex: 0 0 auto; display: flex; gap: var(--s-2); align-items: center; flex-wrap: wrap; }
+.ws-card-actions-wrap { gap: var(--s-3); }
+.ws-card-body { padding: 15px; }
+.ws-card-body-flush { padding: 0; }
+
+.ws-sort-label {
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.ws-sort-group {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+.ws-sort-group .seg-btn {
+  padding: 4px 9px;
+  min-height: 28px;
+  font-size: 0.72rem;
+  border-radius: 6px;
+  border: 0;
+  background: transparent;
+}
+.ws-sort-group .seg-btn.is-active {
+  background: var(--bg-elevated);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.ws-scorecard-foot {
+  display: flex;
+  gap: var(--s-4);
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 10px 15px;
+  border-top: 1px solid var(--border-soft);
+  background: var(--bg-elevated);
+  font-size: 0.66rem;
+  color: var(--text-muted);
+}
+.ws-scorecard-foot .scorecard-key {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0;
+  margin: 0;
+  font-size: inherit;
+}
+.ws-scorecard-idiom { color: var(--text-muted); }
+.ws-scorecard-empty { padding: 24px 15px; }
+
 /* --- Pulse strip --- */
 .ws-pulse {
   display: flex;
@@ -4820,7 +4907,6 @@ input.acct-input, select.acct-input { min-height: 44px; }
   border-radius: 12px;
   background: var(--bg-elevated);
   overflow: hidden;
-  margin-bottom: var(--s-5);
 }
 .ws-pulse[hidden] { display: none !important; }
 .ws-pulse-item {
@@ -5103,8 +5189,10 @@ a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
 .panel-empty-rich p { margin: 0; color: var(--text-muted); max-width: 60ch; }
 
 /* --- Tool grid --- */
-.ws-tools-section { display: flex; flex-direction: column; gap: var(--s-3); margin: var(--s-6) 0; }
+.ws-tools-section { display: flex; flex-direction: column; gap: 11px; margin: 0; }
 .ws-tools-head { display: flex; gap: var(--s-3); justify-content: space-between; align-items: baseline; flex-wrap: wrap; }
+.ws-tools-title { margin: 0; font-size: 1.05rem; font-weight: 600; letter-spacing: -0.01em; }
+.ws-tools-lede { margin: 0; font-size: 0.78rem; color: var(--text-muted); }
 .ws-tools-head h2 { margin: 0; font-size: 1.05rem; letter-spacing: -0.01em; }
 .ws-tools-head .lede { margin: 0; font-size: var(--fs-sm); }
 .ws-tools {
@@ -5286,7 +5374,7 @@ a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
   .dash-tab,
   .dash-account,
   .dash-crumb,
-  .dash-head-aside,
+  .ws-page-aside,
   .acct-nav-item,
   .scorecard-enable,
   .ws-tool-open,
@@ -5306,7 +5394,7 @@ a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
   /* Two links that are navigation dressed as text. They get the height, and
      the padding that makes the height reachable rather than a tall box with
      a small hot spot in it. */
-  .dash-crumb, .dash-head-aside {
+  .dash-crumb, .ws-page-aside {
     display: inline-flex;
     align-items: center;
     padding-block: var(--s-2);

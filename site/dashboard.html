@@ -84,109 +84,80 @@ permalink: /dashboard/
 
     <!-- ================= WORKSPACE (default view) ================= -->
     <div id="view-workspace" class="dash-view">
+      <div class="ws-page">
 
-      <div class="dash-head dash-head-split">
-        <div>
-          <span class="eyebrow">Workspace</span>
-          <h1>What your code is, right now.</h1>
-          <p class="lede">
-            Every tool, and everything they have produced. What runs on a
-            schedule without you lives one tab over.
-          </p>
-        </div>
-        <a href="#/monitors" class="dash-head-aside">What runs without you →</a>
-      </div>
-
-      <!-- Billing state banner (D-1): one slot, one banner at a time, filled
-           by dashboard.js from /api/me. role=alert for the states that need
-           action (past_due), role=status otherwise. -->
-      <div id="billing-banner" hidden></div>
-
-      <!-- Inline upgrade banner (Task #19) — revealed when any analyzer call
-           returns 402 quota_exceeded. The modal carries the details; this
-           persists after the modal is dismissed. -->
-      <div id="quota-upgrade-banner" class="quota-banner" hidden>
-        <div class="quota-banner-text">
-          <strong id="quota-banner-title">You've used all 5 free analyses this month.</strong>
-          <p id="quota-banner-msg">Upgrade to Pro for unlimited cost, vulnerability, and algorithm runs.</p>
-        </div>
-        <div class="quota-banner-actions">
-          <button id="quota-upgrade-btn" type="button" class="btn btn-primary btn-sm">Upgrade to Pro →</button>
-        </div>
-      </div>
-
-
-      <!-- ============= PULSE (D-8) =============
-           Five numbers across the top, each a link into the thing it counts.
-           Rendered by dash-workspace.js from data the dashboard already
-           fetches — there is no pulse endpoint, because a summary computed
-           server-side would be a second source of truth for numbers that are
-           already on the page. -->
-      <nav class="ws-pulse" id="ws-pulse" aria-label="Workspace summary" hidden></nav>
-
-      <!-- ============= SERVICE SCORECARD (D-8) =============
-           One row per watched repo, one column per analyzer, read from
-           GET /api/scorecard — which reads stored monitor baselines and
-           nothing else. Cells are graded / stale / pending / unmeasured /
-           off, and the difference matters: a blank that reads as a pass would
-           turn "we never looked" into "we looked and it was fine". Every
-           blank also carries the one change that would fill it, or nothing at
-           all when the condition clears on its own. -->
-      <section class="panel" id="panel-scorecard">
-        <header class="panel-head">
-          <div class="panel-heading">
-            <span class="panel-tag">Scorecard</span>
-            <h2>Service scorecard</h2>
-            <p class="panel-desc">One row per watched repository, one column per analyzer. Graded on the last nightly sweep.</p>
+        <header class="ws-page-head">
+          <div class="ws-page-intro">
+            <h1 class="ws-page-title">Workspace</h1>
+            <p class="ws-page-lede">What your code is, right now. Five tools, and everything they have produced.</p>
           </div>
-          <div class="panel-actions">
-            <span class="field-label" id="scorecard-sort-label">Sort</span>
-            <div class="seg-group" role="group" aria-labelledby="scorecard-sort-label" id="scorecard-sort"></div>
-          </div>
+          <a href="#/monitors" class="ws-page-aside">What runs without you →</a>
         </header>
-        <div class="panel-body">
-          <div id="scorecard-body">
-            <div class="panel-empty">Loading the scorecard…</div>
-          </div>
-        </div>
-      </section>
 
-      <!-- ============= TOOLS (D-8) =============
-           Every analyzer as a card: what it answers, what it last found, and
-           one control to start a run. The full bench for each lives on its
-           own view — the card is the doorway, not a second copy of it. -->
-      <section class="ws-tools-section">
-        <div class="ws-tools-head">
-          <h2>Tools</h2>
-          <p class="lede">Start a run here; open a tool for the full bench.</p>
-        </div>
-        <div class="ws-tools" id="ws-tools"></div>
-      </section>
-      <!-- ============= RECENT RUNS (Task #17 → D-3 feed) ============= -->
-      <section class="panel" id="panel-runs">
-        <header class="panel-head">
-          <div class="panel-heading">
-            <span class="panel-tag">History</span>
-            <h2>Recent runs</h2>
-            <p class="panel-desc">CI and dashboard runs share one feed — they answer the same question. CI entries carry the repo and commit that produced them; dependency audits open as a client-ready report.</p>
+        <div id="billing-banner" hidden></div>
+
+        <div id="quota-upgrade-banner" class="quota-banner" hidden>
+          <div class="quota-banner-text">
+            <strong id="quota-banner-title">You've used all 5 free analyses this month.</strong>
+            <p id="quota-banner-msg">Upgrade to Pro for unlimited cost, vulnerability, and algorithm runs.</p>
           </div>
-          <div class="panel-actions">
-            <div class="seg-group" role="group" aria-label="Filter runs by source" id="runs-filter">
-              <button type="button" class="seg-btn" data-runs-filter="all" aria-pressed="true">All</button>
-              <button type="button" class="seg-btn" data-runs-filter="ci" aria-pressed="false">CI</button>
-              <button type="button" class="seg-btn" data-runs-filter="monitor" aria-pressed="false">Monitors</button>
-              <button type="button" class="seg-btn" data-runs-filter="manual" aria-pressed="false">Manual</button>
+          <div class="quota-banner-actions">
+            <button id="quota-upgrade-btn" type="button" class="btn btn-primary btn-sm">Upgrade to Pro →</button>
+          </div>
+        </div>
+
+        <nav class="ws-pulse" id="ws-pulse" aria-label="Workspace summary" hidden></nav>
+
+        <section class="ws-card" id="panel-scorecard">
+          <div class="ws-card-head">
+            <div class="ws-card-intro">
+              <h2 class="ws-card-title">Service scorecard</h2>
+              <p class="ws-card-desc">One row per watched repo, one column per analyzer — six, because two labels were split so half a scan cannot read as a clean bill. Every cell links into that tool filtered to that repo; the repo column stays put when the grid scrolls.</p>
             </div>
-            <button type="button" class="btn btn-ghost btn-sm" id="runs-refresh-btn">Refresh</button>
+            <div class="ws-card-actions">
+              <span class="ws-sort-label mono" id="scorecard-sort-label">Sort</span>
+              <div class="ws-sort-group" role="group" aria-labelledby="scorecard-sort-label" id="scorecard-sort"></div>
+            </div>
           </div>
-        </header>
-        <div class="panel-body">
-          <div id="runs-list" class="runs-list">
-            <div class="panel-empty">Loading recent runs…</div>
+          <div class="ws-card-body">
+            <div id="scorecard-body">
+              <div class="panel-empty">Loading the scorecard…</div>
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
 
+        <section class="ws-tools-section">
+          <div class="ws-tools-head">
+            <h2 class="ws-tools-title">Tools</h2>
+            <p class="ws-tools-lede">Start a run here; open a tool for the full bench.</p>
+          </div>
+          <div class="ws-tools" id="ws-tools"></div>
+        </section>
+
+        <section class="ws-card" id="panel-runs">
+          <div class="ws-card-head">
+            <div class="ws-card-intro">
+              <h2 class="ws-card-title">Recent runs</h2>
+              <p class="ws-card-desc">CI and dashboard runs share one feed — they answer the same question. CI entries carry the repo and commit that produced them.</p>
+            </div>
+            <div class="ws-card-actions ws-card-actions-wrap">
+              <div class="ws-sort-group" role="group" aria-label="Filter runs by source" id="runs-filter">
+                <button type="button" class="seg-btn" data-runs-filter="all" aria-pressed="true">All</button>
+                <button type="button" class="seg-btn" data-runs-filter="ci" aria-pressed="false">CI</button>
+                <button type="button" class="seg-btn" data-runs-filter="monitor" aria-pressed="false">Monitors</button>
+                <button type="button" class="seg-btn" data-runs-filter="manual" aria-pressed="false">Manual</button>
+              </div>
+              <button type="button" class="btn btn-ghost btn-sm" id="runs-refresh-btn">Refresh</button>
+            </div>
+          </div>
+          <div class="ws-card-body ws-card-body-flush">
+            <div id="runs-list" class="runs-list">
+              <div class="panel-empty">Loading recent runs…</div>
+            </div>
+          </div>
+        </section>
+
+      </div><!-- /.ws-page -->
     </div><!-- /view-workspace -->
 
     <!-- ================= VULNERABILITY SCANNER =================
