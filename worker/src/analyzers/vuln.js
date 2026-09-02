@@ -474,6 +474,45 @@ const PRODUCTION_PATH_RE = /(?:^|[\\/])(prod|production|\.env(?:\.|$)|config|wra
 const LOCAL_HOST_RE = /^http:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[::1\]|[a-z0-9-]+\.local)/i;
 const HTTP_URL_RE = /\bhttp:\/\/[^\s"'`<>]+/g;
 
+// URIs that are IDENTIFIERS, not endpoints.
+//
+// An XML namespace, an XML-parser feature switch and a JSON-Schema `$schema`
+// are URI-shaped by specification and are never dereferenced — nothing is
+// fetched, so no bytes travel in the clear and there is nothing for this rule
+// to protect. Worse, they are FIXED strings: `http://www.w3.org/2000/svg` is
+// the SVG namespace, and `https://www.w3.org/2000/svg` is a different
+// namespace that no browser renders as SVG. So the remediation this rule
+// recommends does not harden the code, it breaks it.
+//
+// Found by this scanner running on this repository's own pull request, where
+// it flagged `document.createElementNS("http://www.w3.org/2000/svg", tag)` —
+// a line that cannot be written any other way. That is the real cost of a
+// false positive in a security rule: not the noise, but that a reader who
+// dismisses it once learns to dismiss the next one, and the next one may be
+// a genuine cleartext endpoint.
+//
+// Matched on the URI itself rather than on the syntax around it, because
+// these are globally fixed identifiers: the SVG namespace is not an endpoint
+// in a createElementNS call and an endpoint everywhere else.
+const IDENTIFIER_URI_RE = new RegExp("^http://(?:" + [
+  // XML namespaces and the XML infrastructure that names things with URIs.
+  "(?:www\\.)?w3\\.org/",
+  "xmlns\\.",
+  "schemas\\.xmlsoap\\.org/",
+  "schemas\\.microsoft\\.com/",
+  "schemas\\.android\\.com/",
+  "schemas\\.openxmlformats\\.org/",
+  // Parser feature and property switches, e.g. the load-external-dtd feature
+  // this file's own XXE rule matches on.
+  "(?:xml\\.org/sax/|apache\\.org/xml/|javax\\.xml\\.)",
+  // Schema and vocabulary identifiers.
+  "json-schema\\.org/",
+  "purl\\.org/",
+  "maven\\.apache\\.org/POM/",
+  "www\\.opengis\\.net/",
+  "iptc\\.org/std/",
+].join("|") + ")", "i");
+
 function detectInsecureHttp(file) {
   const findings = [];
   const inProductionContext = PRODUCTION_PATH_RE.test(file.path);
@@ -487,6 +526,8 @@ function detectInsecureHttp(file) {
     while ((m = HTTP_URL_RE.exec(text)) !== null) {
       const url = m[0];
       if (LOCAL_HOST_RE.test(url)) continue;
+      // Never fetched, and the https:// spelling is a different identifier.
+      if (IDENTIFIER_URI_RE.test(url)) continue;
       // A URL is "in a comment" if the whole line is a comment OR if its
       // start position is past the inline comment marker.
       const inComment = isCommentLine(text) || (ci >= 0 && m.index >= ci);
