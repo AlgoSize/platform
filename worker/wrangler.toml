@@ -117,6 +117,25 @@ max_retries    = 3
 dead_letter_queue = "algosize-scans-dlq"
 
 # ----------------------------------------------------------------------------
+# Version metadata — which build answered
+# ----------------------------------------------------------------------------
+#
+# Cloudflare hands the Worker its own deployment identity at runtime:
+# env.CF_VERSION_METADATA is { id, tag, timestamp }. No build step, no secret,
+# no deploy-time argument — which is what makes it correct no matter who
+# deploys or how, including a `wrangler deploy` run by hand.
+#
+# It exists because the CI gate scans a repository's files with the DEPLOYED
+# analyzer, not the one in the pull request. On #101 that reported nine
+# findings a reviewer's own diff had already fixed, and nothing on the page
+# said which build had answered. #103 added an `analyzerVersion` field for
+# exactly that, reading RELEASE_TAG — which nothing sets, so every CI comment
+# since has read "Analyzer build: unreleased". A provenance field that always
+# says the same thing is worse than no field: it looks like an answer.
+[version_metadata]
+binding = "CF_VERSION_METADATA"
+
+# ----------------------------------------------------------------------------
 # Default (local-dev) public env vars. Override per-environment below.
 # ----------------------------------------------------------------------------
 [vars]
@@ -190,6 +209,7 @@ REPORT_CNAME_TARGET  = "cname.algosize.com"
 # ----------------------------------------------------------------------------
 [env.production]
 name   = "algosize"
+
 # REQUIRED because `routes` is set below. Wrangler decides whether to publish
 # the <name>.<subdomain>.workers.dev host with:
 #
@@ -230,6 +250,21 @@ routes = [
   { pattern = "algosize.com/.well-known/oauth-protected-resource",   zone_name = "algosize.com" },
   { pattern = "algosize.com/.well-known/oauth-authorization-server", zone_name = "algosize.com" },
 ]
+
+# Bindings are NOT inherited from the top level into a named environment, so
+# this repeats deliberately. Without it the production Worker keeps reporting
+# "unreleased" while local dev reports a real version — the one place the
+# answer matters least being the only place it is right.
+#
+# Placed here, with the other [env.production.*] tables, and NOT up beside
+# `name`. A sub-table header ends the parent table's key region in TOML, so
+# putting it there silently moved `workers_dev` and `routes` into this table —
+# which is exactly the "every deploy takes the Worker OFF workers.dev" failure
+# the comment above `workers_dev` warns about. `wrangler deploy --dry-run`
+# accepted that config without complaint; scripts/test-wrangler-config.mjs is
+# what caught it.
+[env.production.version_metadata]
+binding = "CF_VERSION_METADATA"
 
 [env.production.vars]
 # Production site origin: must match the hostname users load the site from.

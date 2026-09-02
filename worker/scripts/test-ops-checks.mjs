@@ -211,6 +211,52 @@ console.log("\nthe optimizer CLI does not build a shell string from --base\n");
     "no template literal builds a git command line from a variable");
 }
 
+console.log("\nthe analyzer says which build answered, from a fact not a guess\n");
+
+{
+  const { analyzerVersion } = await import("../src/analyzer-version.js");
+  const { readFileSync } = await import("node:fs");
+  const toml = readFileSync(new URL("../wrangler.toml", import.meta.url), "utf8");
+
+  // The binding has to be declared in BOTH environments. Bindings are not
+  // inherited from the top level into a named environment, so a config that
+  // declares it once gives local dev a real version and production the
+  // fallback — the one place the answer matters least being the only place
+  // it is right.
+  expect(/^\[version_metadata\]\s*\nbinding = "CF_VERSION_METADATA"/m.test(toml),
+    "wrangler.toml declares the version metadata binding");
+  expect(/^\[env\.production\.version_metadata\]\s*\nbinding = "CF_VERSION_METADATA"/m.test(toml),
+    "…and again under [env.production], because bindings do not inherit");
+
+  // The binding wins over the env var. This is the whole point: RELEASE_TAG
+  // is set by nothing, so a resolver that preferred it would keep reporting
+  // "unreleased" on every deploy that has a real version to report.
+  expect(analyzerVersion({ CF_VERSION_METADATA: { id: "e864bf3d-f693-4c3d" },
+                           RELEASE_TAG: "would-be-wrong" }) === "e864bf3d",
+    "the deployment version wins over RELEASE_TAG");
+  expect(analyzerVersion({ CF_VERSION_METADATA: { id: "abcdef01", tag: "v2.4.1" } }) === "v2.4.1",
+    "…and a hand-set version tag wins over the id, being the meaningful one");
+
+  // The env vars stay as a fallback: staging already sets one, and a runtime
+  // without the binding must not lose provenance it does have.
+  expect(analyzerVersion({ RELEASE_TAG: "staging-7" }) === "staging-7",
+    "RELEASE_TAG still answers when there is no binding");
+  expect(analyzerVersion({ RELEASE: "legacy" }) === "legacy",
+    "…as does the older RELEASE name");
+
+  // Never blank. A provenance field rendered as an empty string reads as a
+  // rendering bug; "unreleased" is a claim a reader can act on.
+  for (const [label, env] of [
+    ["no env at all", undefined],
+    ["empty env", {}],
+    ["binding present but empty", { CF_VERSION_METADATA: {} }],
+    ["binding with blank strings", { CF_VERSION_METADATA: { id: "  ", tag: " " } }],
+    ["blank RELEASE_TAG", { RELEASE_TAG: "   " }],
+  ]) {
+    expect(analyzerVersion(env) === "unreleased", `${label} → "unreleased", never ""`);
+  }
+}
+
 console.log("");
 if (failures === 0) {
   console.log("\x1b[32m  all ops-check tests passed\x1b[0m\n");
