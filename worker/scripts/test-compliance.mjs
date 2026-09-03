@@ -512,6 +512,63 @@ function req(url, { method = "GET", body = null, userId = "usr_1", email = "a@b.
   expect(unknown.status === 404, "an unknown framework is a 404, not a 500");
 }
 
+// ---------------------------------------------------------------------------
+section("The period a request returns must survive being sent back");
+// ---------------------------------------------------------------------------
+
+{
+  // The page stores period.startOn/endOn from the response and echoes them on
+  // every later call — a framework switch, a retry, a publish. So the endpoint
+  // has to be a FIXED POINT over its own output. It was not: the default was
+  // computed in raw seconds and returned as day strings, and re-parsing those
+  // widened the window by up to 23:59:59. Sitting exactly on the 90-day cap,
+  // that inflation made every second request fail.
+  const env = makeEnv();
+  await seedOrg(env);
+
+  const first = await coverageHandler(req("/api/compliance/coverage"), env);
+  const a = await first.json();
+  expect(first.status === 200, "the first load, which sends no dates, succeeds");
+  expect(a.period.end - a.period.start <= MAX_PERIOD_SECONDS,
+    "and the default period it picks is inside the cap");
+
+  const echoed = `/api/compliance/coverage?from=${a.period.startOn}&to=${a.period.endOn}`;
+  const second = await coverageHandler(req(echoed), env);
+  const b = await second.json();
+  expect(second.status === 200,
+    "handing that period straight back is accepted — the endpoint is a fixed point over its own output");
+  expect(b.period && b.period.startOn === a.period.startOn && b.period.endOn === a.period.endOn,
+    "and answers with the identical window rather than a wider one");
+  expect(b.period && b.period.start === a.period.start && b.period.end === a.period.end,
+    "down to the second, so a third call cannot drift either");
+
+  // The reported symptom: switching framework re-sends the same dates.
+  const switched = await coverageHandler(
+    req(echoed + "&framework=cra-annex1-ii"), env);
+  expect(switched.status === 200, "switching framework with the echoed period succeeds");
+  const c = await switched.json();
+  expect(c.framework && c.framework.id === "cra-annex1-ii",
+    "and returns the framework that was asked for");
+
+  // Publishing sends the same stored dates through the same parser.
+  await env.DB.prepare(
+    `INSERT INTO monitors (monitor_id, org_id, repo_url, branch, schedule, created_at)
+     VALUES (?, ?, ?, 'main', 'daily', ?)`,
+  ).bind("mon_echo", "org_1", "https://github.com/acme/api", NOW - DAY).run();
+  const published = await publishAuditHandler(req("/api/compliance/audits", {
+    method: "POST",
+    body: { frameworkId: "ssdf-1.1", monitorId: "mon_echo",
+            from: a.period.startOn, to: a.period.endOn },
+  }), env, null);
+  expect(published.status === 201, "and publishing with the echoed period succeeds too");
+
+  // The cap still has to bite one day past the limit.
+  const overBy1 = await coverageHandler(req(
+    `/api/compliance/coverage?from=${isoDayOf(NOW - 90 * DAY)}&to=${isoDayOf(NOW)}`), env);
+  expect(overBy1.status === 400,
+    "91 calendar days is still refused — the fix widens nothing");
+}
+
 {
   const env = makeEnv();
   await seedOrg(env);

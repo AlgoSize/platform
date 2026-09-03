@@ -60,6 +60,7 @@ export const PACK_DISCLAIMER =
  * of false negatives is not.
  */
 export const MAX_PERIOD_SECONDS = RUN_TTL_SECONDS;
+export const MAX_PERIOD_DAYS = Math.floor(MAX_PERIOD_SECONDS / 86400);
 
 // ---------------------------------------------------------------------------
 // GET /api/compliance/frameworks
@@ -89,7 +90,7 @@ export async function listFrameworksHandler(request, env) {
   return jsonResponse({
     frameworks,
     catalogVersion: CATALOG_VERSION,
-    maxPeriodDays: Math.floor(MAX_PERIOD_SECONDS / 86400),
+    maxPeriodDays: MAX_PERIOD_DAYS,
     disclaimer: PACK_DISCLAIMER,
   });
 }
@@ -106,12 +107,28 @@ export async function listFrameworksHandler(request, env) {
  * and end on different days for different people looking at the same audit.
  */
 function parsePeriod(url) {
-  const now = nowSec();
   const rawFrom = url.searchParams.get("from");
   const rawTo = url.searchParams.get("to");
 
-  const end = rawTo ? parseDay(rawTo, true) : now;
-  const start = rawFrom ? parseDay(rawFrom, false) : end - MAX_PERIOD_SECONDS;
+  // BOTH ENDS ARE DAY-ALIGNED, ALWAYS.
+  //
+  // This endpoint speaks in YYYY-MM-DD, and the page stores the period it
+  // returns and echoes it back on every later call — a framework switch, a
+  // retry, a publish. So the period a request answers with has to be one the
+  // next request accepts unchanged.
+  //
+  // A default computed in raw seconds is not: returned as day strings and
+  // re-parsed, it becomes start-of-day → end-of-day, up to 23:59:59 WIDER than
+  // what was returned. With the default sitting exactly on the cap there was no
+  // headroom to absorb that, so every second request was refused for exceeding
+  // a limit the first request had just chosen.
+  const endOn = rawTo || isoDay(nowSec());
+  const end = parseDay(endOn, true);
+  // Inclusive, because a period expressed in days is inclusive of both: "the
+  // last 90 days" is today plus the 89 before it, not today plus 90.
+  const startOn = rawFrom ||
+    (end === null ? null : isoDay(end - (MAX_PERIOD_DAYS - 1) * 86400));
+  const start = startOn === null ? null : parseDay(startOn, false);
 
   if (end === null || start === null) {
     return { error: { code: "invalid_period", message: "Dates must be YYYY-MM-DD." } };
@@ -124,7 +141,7 @@ function parsePeriod(url) {
       error: {
         code: "period_too_long",
         message:
-          `An evidence period cannot exceed ${Math.floor(MAX_PERIOD_SECONDS / 86400)} days. ` +
+          `An evidence period cannot exceed ${MAX_PERIOD_DAYS} days. ` +
           "Scan results stop being readable after that, so a longer window would render " +
           "every automated control as unevidenced when the evidence merely aged out.",
       },
