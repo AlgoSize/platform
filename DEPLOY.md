@@ -594,7 +594,8 @@ watch the green check land in **Actions**.
 
 ## 3. Cloudflare secrets
 
-The Worker reads four secrets at runtime. Set each one separately;
+The Worker reads four secrets at runtime, plus the optional ones covered in
+§3.5–§3.8. Set each one separately;
 `wrangler secret put` opens an interactive prompt for the value (so the
 secret never appears on your shell history).
 
@@ -979,7 +980,62 @@ flow locally, put both values in `worker/.dev.vars` and register
 `http://localhost:8787/api/auth/google/callback` as an additional
 redirect URI on the same client.
 
+### 3.8 GitHub read credential (`GITHUB_TOKEN`) — optional, strongly recommended
+
+**Symptom this fixes:** a Service scorecard where most columns read
+*NOT MEASURED · GitHub rate-limited the request*, and monitor sweeps that
+record `github_throttled` skips night after night.
+
+The monitor sweep reads committed files from **public** repositories: git-tree
+listings from `api.github.com`, file contents from `raw.githubusercontent.com`.
+Both go out anonymously unless this is set, and GitHub allows unauthenticated
+callers **60 requests per hour per IP**. A Cloudflare Worker's egress IP is
+shared far past one account, so a sweep can arrive at a quota someone else has
+already spent — through no fault of the repository being watched. Every
+analyzer downstream of the failed read then skips, and every cell it feeds
+renders as not measured.
+
+Authenticated, the budget is roughly **5,000 requests per hour** and belongs to
+this account alone.
+
+Mint a **fine-grained** personal access token
+(GitHub → Settings → Developer settings → Personal access tokens → Fine-grained):
+
+| Setting | Value |
+|---|---|
+| Repository access | **Public repositories (read-only)** |
+| Account permissions | none |
+| Repository permissions | none beyond the implied public read |
+| Expiry | your policy; the sweep degrades to anonymous when it lapses, it does not break |
+
+Nothing in the sweep writes to GitHub, and nothing reads a private repository —
+there is no mechanism for either — so a token with more reach than the row
+above buys no capability and adds real risk.
+
+```bash
+cd worker
+./node_modules/.bin/wrangler secret put GITHUB_TOKEN --config wrangler.toml --env production
+# (paste at the prompt — never commit it, and never put it in wrangler.toml)
+```
+
+Verify with `wrangler secret list --config wrangler.toml --env production`.
+
+**Unset is a supported state.** Every read still happens, anonymously, exactly
+as before — and when the shared quota runs out the sweep says
+`github_throttled` rather than reporting an unread repository as clean. That
+honesty is the reason a missing token shows up as blank cells instead of
+silently wrong ones.
+
+If the token is set but **rejected** (revoked, expired, or mistyped), the sweep
+reports `github_unauthorized`, whose copy says plainly that this is a
+deployment setting on our side and not a problem with the customer's
+repository. It is also captured to Sentry, tagged
+`reason=github_unauthorized` — a 401 used to fall through the same path as a
+404, which made every repository on the platform look as though it had been
+deleted.
+
 ---
+
 
 ## 4. DNS — point `algosize.com/api/*` at the Worker
 

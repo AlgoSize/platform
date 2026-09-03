@@ -37,6 +37,7 @@ import { getActiveOrg } from "./_orgs.js";
 import { storeReportFor } from "../reports/render.js";
 import { captureException } from "../observability.js";
 import { analyzerVersion } from "../analyzer-version.js";
+import { fetchRepoTree, fetchRawFile } from "../github.js";
 
 // After a 200 from any analyzer, queue a non-blocking write to the per-user
 // run-history KV. Skipped when there's no logged-in user (e.g. an unauth'd
@@ -330,26 +331,41 @@ const VENDORED_RE = /(^|\/)(node_modules|vendor|bundle|\.git|dist|build|_site|fi
  * caller falls back to the root-name fetch rather than reporting a private
  * or renamed repository as having no dependencies.
  */
-async function discoverLockfiles({ owner, repo }, fetchImpl, env) {
-  const headers = { "User-Agent": "algosize-audit", Accept: "application/vnd.github+json" };
-  if (env && env.GITHUB_TOKEN) headers.Authorization = `Bearer ${env.GITHUB_TOKEN}`;
+async function discoverLockfiles({ owner, repo, branch }, fetchImpl, env, cache = null) {
+  const tree = await fetchRepoTree({ owner, repo, branch }, fetchImpl, env, cache);
 
-  for (const branch of ["main", "master"]) {
-    const url = `https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`;
-    let res;
-    try { res = await fetchImpl(url, { headers }); } catch { continue; }
-    if (res.status === 429 || res.status === 403) {
-      const e = new Error(
-        "GitHub is rate-limiting our requests for this repo's lockfiles. Wait a minute and try again.",
-      );
-      e.fetchError = true; e.code = "github_rate_limited"; e.status = 503;
-      throw e;
-    }
-    if (!res.ok) continue;
+  // Quota exhaustion is fatal for this repository: raw.githubusercontent.com
+  // draws on the same budget, so the root-name fallback below would only spend
+  // requests to fail the same way, and reporting "no lockfiles" after being
+  // refused is the confident-wrong answer this whole path exists to prevent.
+  if (tree.throttled && (tree.status === 403 || tree.status === 429)) {
+    const e = new Error(
+      "GitHub is rate-limiting our requests for this repo's lockfiles. Wait a minute and try again.",
+    );
+    e.fetchError = true; e.code = "github_rate_limited"; e.status = 503;
+    throw e;
+  }
+  // A 5xx is NOT fatal, and deliberately falls through to the root-name fetch.
+  // api.github.com and raw.githubusercontent.com are different services with
+  // different failure modes; when the tree API is having a bad minute the CDN
+  // usually still serves a root package-lock.json, and a shallower audit is
+  // worth more than none. If raw is down too, its own error says so — with
+  // the right words, which "rate-limited" would not have been.
+  if (tree.throttled) return null;
+  // A rejected credential is ours to fix, and it used to arrive here as a
+  // silent `continue` — indistinguishable from a repository that is not there.
+  if (tree.unauthorized) {
+    const e = new Error(
+      "Our GitHub credential was rejected, so this repository could not be read. " +
+      "This is a deployment setting on our side, not a problem with your repository.",
+    );
+    e.fetchError = true; e.code = "github_unauthorized"; e.status = 503;
+    throw e;
+  }
+  if (!Array.isArray(tree.entries)) return null;
 
-    let body;
-    try { body = await res.json(); } catch { continue; }
-    const entries = Array.isArray(body && body.tree) ? body.tree : [];
+  {
+    const entries = tree.entries;
 
     const wanted = entries
       .filter((e) => e && e.type === "blob" && typeof e.path === "string")
@@ -365,21 +381,19 @@ async function discoverLockfiles({ owner, repo }, fetchImpl, env) {
     if (!wanted.length) return [];
 
     const results = await Promise.all(wanted.map(async ({ path }) => {
-      const raw = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${encodeURI(path)}`;
-      let r;
-      try { r = await fetchImpl(raw); } catch { return null; }
-      if (r.status === 429 || r.status === 403) return null;
-      if (!r.ok) return null;
-      const text = await r.text();
-      if (text.length > MAX_LOCKFILE_BYTES) return null;
+      const raw = await fetchRawFile(
+        { owner, repo, branch: tree.branch, path }, fetchImpl, env, MAX_LOCKFILE_BYTES);
+      if (!raw || raw.throttled) return null;
       // `filename` keeps the full path so an advisory can be traced to the
       // tree it came from - two package-lock.json files are two answers.
-      return { filename: path, content: text };
+      return { filename: path, content: raw.text };
     }));
     const found = results.filter(Boolean);
-    if (found.length > 0) return found;
+    // Null, not [], when the tree listed lockfiles we then failed to read:
+    // "there are none" and "we could not read the ones there are" are
+    // different answers, and only the first is safe to report as clean.
+    return found.length > 0 ? found : null;
   }
-  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -466,23 +480,17 @@ const MAX_SOURCE_TOTAL_BYTES = 3 * 1024 * 1024;
  * branch, or a throttle must never be reported as "we read your code and it
  * was clean". The caller renders the two differently.
  */
-async function discoverSourceFiles({ owner, repo }, fetchImpl, env) {
-  const headers = { "User-Agent": "algosize-sast", Accept: "application/vnd.github+json" };
-  if (env && env.GITHUB_TOKEN) headers.Authorization = `Bearer ${env.GITHUB_TOKEN}`;
+async function discoverSourceFiles({ owner, repo, branch }, fetchImpl, env, cache = null) {
+  const tree = await fetchRepoTree({ owner, repo, branch }, fetchImpl, env, cache);
+  // Throttled, unauthorized and absent all collapse to null here, on purpose:
+  // this function's whole contract is "null is not an empty list", and the
+  // caller's copy already says the repository could not be read rather than
+  // guessing why. The distinction is drawn upstream, by the lockfile fetch,
+  // which runs first and throws a reason.
+  if (!Array.isArray(tree.entries)) return null;
 
-  for (const branch of ["main", "master"]) {
-    let res;
-    try {
-      res = await fetchImpl(
-        `https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`,
-        { headers });
-    } catch { continue; }
-    if (res.status === 429 || res.status === 403) return null;
-    if (!res.ok) continue;
-
-    let body;
-    try { body = await res.json(); } catch { continue; }
-    const entries = Array.isArray(body && body.tree) ? body.tree : [];
+  {
+    const entries = tree.entries;
 
     const blobs = entries.filter((e) => e && e.type === "blob" && typeof e.path === "string");
 
@@ -511,13 +519,10 @@ async function discoverSourceFiles({ owner, repo }, fetchImpl, env) {
     let budget = MAX_SOURCE_TOTAL_BYTES;
     const results = await Promise.all(wanted.map(async ({ path }) => {
       if (budget <= 0) return null;
-      let r;
-      try {
-        r = await fetchImpl(`https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${encodeURI(path)}`);
-      } catch { return null; }
-      if (!r.ok) return null;
-      const content = await r.text();
-      if (content.length > MAX_SOURCE_FILE_BYTES) return null;
+      const r = await fetchRawFile(
+        { owner, repo, branch: tree.branch, path }, fetchImpl, env, MAX_SOURCE_FILE_BYTES);
+      if (!r || r.throttled) return null;
+      const content = r.text;
       budget -= content.length;
       if (budget < 0) return null;
       return { path, content };
@@ -542,43 +547,38 @@ async function discoverSourceFiles({ owner, repo }, fetchImpl, env) {
         profile: enriched,
       };
     }
+    // The tree listed files we could not then read. Null, not an empty scan.
+    return null;
   }
-  return null;
 }
 
-async function fetchLockfilesFromGithub({ owner, repo }, fetchImpl, env) {
-  const discovered = await discoverLockfiles({ owner, repo }, fetchImpl, env);
+async function fetchLockfilesFromGithub({ owner, repo, branch }, fetchImpl, env, cache = null) {
+  const discovered = await discoverLockfiles({ owner, repo, branch }, fetchImpl, env, cache);
   if (discovered !== null && discovered.length > 0) return discovered;
 
-  for (const branch of ["main", "master"]) {
+  for (const b of branch ? [branch] : ["main", "master"]) {
     const fetches = LOCKFILE_NAMES.map(async (filename) => {
-      const url = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filename}`;
-      let res;
-      try { res = await fetchImpl(url); }
-      catch { return { filename, status: 0, content: null }; }
-      if (res.status === 404) return { filename, status: 404, content: null };
+      const r = await fetchRawFile(
+        { owner, repo, branch: b, path: filename }, fetchImpl, env, MAX_LOCKFILE_BYTES);
       // 429/403 is GitHub throttling us, not "this repo has no lockfiles".
       // Treating them as a miss produced a confident `no_lockfiles_found`
       // 404 — telling the user their repo has no dependencies to audit when
       // in truth we were rate-limited and never looked.
-      if (res.status === 429 || res.status === 403) {
+      if (r && r.throttled) {
+        if (r.status >= 500) {
+          const e = new Error(`GitHub raw content unavailable (HTTP ${r.status})`);
+          e.fetchError = true; e.code = "github_unavailable"; e.status = 502;
+          throw e;
+        }
         const e = new Error(
           "GitHub is rate-limiting our requests for this repo's lockfiles. Wait a minute and try again.",
         );
         e.fetchError = true; e.code = "github_rate_limited"; e.status = 503;
         throw e;
       }
-      if (res.status >= 500) {
-        const e = new Error(`GitHub raw content unavailable (HTTP ${res.status})`);
-        e.fetchError = true; e.code = "github_unavailable"; e.status = 502;
-        throw e;
-      }
-      if (!res.ok) return { filename, status: res.status, content: null };
-      const text = await res.text();
-      if (text.length > MAX_LOCKFILE_BYTES) {
-        return { filename, status: 413, content: null }; // skip silently — too big
-      }
-      return { filename, status: 200, content: text };
+      // Absent, or over MAX_LOCKFILE_BYTES — both skip silently, as before.
+      if (!r) return { filename, content: null };
+      return { filename, content: r.text };
     });
     const results = await Promise.all(fetches);
     const found = results.filter((r) => r.content !== null).map((r) => ({ filename: r.filename, content: r.content }));
@@ -594,8 +594,9 @@ async function fetchLockfilesFromGithub({ owner, repo }, fetchImpl, env) {
  *
  *   { repoUrl: "https://github.com/owner/repo" }
  *     Lockfile audit (Task #15): fetches package-lock.json / yarn.lock /
- *     requirements.txt / Gemfile.lock / go.sum from the repo's default
- *     branch (main → master fallback), parses them, queries OSV.dev for
+ *     requirements.txt / Gemfile.lock / go.sum from `branch` when the body
+ *     names one, else the repo's default branch (main → master fallback),
+ *     parses them, queries OSV.dev for
  *     known vulnerabilities, and returns severity counts + a top-10
  *     advisory list with CVE IDs and fix versions.
  *
@@ -673,7 +674,7 @@ function countSeverities(advisories) {
  * produces; the consumer reads the JSON body back out. `request` is only
  * used for observability context and may be null.
  */
-export async function runLockfileAudit(body, env, request, ctx) {
+export async function runLockfileAudit(body, env, request, ctx, { treeCache = null } = {}) {
   const repo = parseGithubUrl(body.repoUrl);
   if (!repo) {
     return json({
@@ -687,7 +688,14 @@ export async function runLockfileAudit(body, env, request, ctx) {
 
   let manifests;
   try {
-    manifests = await fetchLockfilesFromGithub(repo, fetchImpl, env);
+    // `branch` was accepted in the body and then ignored: the sweep passed the
+    // monitor's branch, and this read main anyway. A monitor watching `develop`
+    // therefore had its architecture X-rayed on develop and its dependencies
+    // audited on main — two analyzers describing two different commits under
+    // one row. Honouring it also makes the tree cache key line up, which is
+    // what turns three listings per sweep into one.
+    manifests = await fetchLockfilesFromGithub(
+      { ...repo, branch: body.branch || undefined }, fetchImpl, env, treeCache);
   } catch (err) {
     // Observability (Task #22): both 502 paths capture so an upstream
     // GitHub outage is visible in Sentry even though we return a clean
@@ -737,7 +745,8 @@ export async function runLockfileAudit(body, env, request, ctx) {
   // source must degrade to "we could not read the code" beside a complete
   // advisory list, never to a 502 that loses both. `status` carries which of
   // those happened so the UI never renders an unread repository as clean.
-  const source = await runSourceScan(repo, fetchImpl, env, ctx, request, userId);
+  const source = await runSourceScan(
+    { ...repo, branch: body.branch || undefined }, fetchImpl, env, ctx, request, userId, treeCache);
 
   return json({
     repoUrl: `https://github.com/${repo.owner}/${repo.repo}`,
@@ -756,10 +765,10 @@ export async function runLockfileAudit(body, env, request, ctx) {
  * list reads as "your code is clean" — and both are wrong when what actually
  * happened is that the tree could not be listed. Every path sets `status`.
  */
-async function runSourceScan(repo, fetchImpl, env, ctx, request, userId) {
+async function runSourceScan(repo, fetchImpl, env, ctx, request, userId, treeCache = null) {
   let discovered;
   try {
-    discovered = await discoverSourceFiles(repo, fetchImpl, env);
+    discovered = await discoverSourceFiles(repo, fetchImpl, env, treeCache);
   } catch (err) {
     try {
       await captureException(env || {}, ctx, err, {

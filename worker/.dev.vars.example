@@ -54,3 +54,13 @@ STRIPE_PRICE_ID=price_replace_me
 # or Google fails with redirect_uri_mismatch before the Worker is reached.
 # GOOGLE_CLIENT_ID=<id>.apps.googleusercontent.com
 # GOOGLE_CLIENT_SECRET=GOCSPX-replace_me
+
+# GitHub read credential for the monitor sweep — optional, and the one to set
+# if a local sweep keeps skipping with `github_throttled`.
+# The sweep reads committed files from PUBLIC repositories only: git-tree
+# listings from api.github.com and file contents from raw.githubusercontent.com.
+# Unauthenticated that is 60 requests/hour per IP, which one repository with a
+# few analyzers can spend in a single sweep. With a token it is ~5,000/hour.
+# Mint a FINE-GRAINED token with "Public repositories (read-only)" and no
+# account permissions — nothing here needs write access or private scope.
+# GITHUB_TOKEN=github_pat_replace_me

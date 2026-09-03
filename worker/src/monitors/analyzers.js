@@ -29,6 +29,7 @@
 // emails about configuration are exactly the noise that gets a monitor
 // muted.
 
+import { fetchRepoTree, fetchRawFile } from "../github.js";
 import { analyzeArchitecture, validateArchitectureInput } from "../analyzers/architecture.js";
 import { runOptimizer, extractFunction } from "../analyzers/optimizer.js";
 import { estimateHandler } from "../handlers/estimate.js";
@@ -86,19 +87,16 @@ const MAX_FILE_BYTES = 512 * 1024;
  * advancing baselines — GitHub saying "slow down" must not read as "these
  * files no longer exist".
  */
-export async function fetchRepoFilesByName({ owner, repo, branch }, names, fetchImpl) {
+export async function fetchRepoFilesByName({ owner, repo, branch }, names, fetchImpl, env) {
   const branches = branch ? [branch] : ["main", "master"];
   for (const b of branches) {
     let throttled = false;
     const results = await Promise.all(names.map(async (filename) => {
-      const url = `https://raw.githubusercontent.com/${owner}/${repo}/${b}/${encodeURI(filename)}`;
-      let res;
-      try { res = await fetchImpl(url); } catch { return null; }
-      if (res.status === 429 || res.status === 403 || res.status >= 500) { throttled = true; return null; }
-      if (!res.ok) return null;
-      const text = await res.text();
-      if (text.length > MAX_FILE_BYTES) return null;   // skip silently — too big
-      return { path: filename, content: text };
+      const r = await fetchRawFile(
+        { owner, repo, branch: b, path: filename }, fetchImpl, env, MAX_FILE_BYTES);
+      if (r && r.throttled) { throttled = true; return null; }
+      if (!r) return null;                              // absent, or too big
+      return { path: filename, content: r.text };
     }));
     if (throttled) return { files: [], throttled: true };
     const found = results.filter(Boolean);
@@ -161,26 +159,17 @@ function archTreeCategory(path) {
  * own read token for public content and raises the API rate limit; it is
  * never required and never logged.
  */
-export async function discoverArchFiles({ owner, repo, branch }, fetchImpl, env) {
-  const headers = {
-    "User-Agent": "algosize-monitor",
-    Accept: "application/vnd.github+json",
-  };
-  if (env && env.GITHUB_TOKEN) headers.Authorization = `Bearer ${env.GITHUB_TOKEN}`;
+export async function discoverArchFiles({ owner, repo, branch }, fetchImpl, env, cache = null) {
+  // The tree comes from the shared fetcher so the three analyzers in one sweep
+  // pay for ONE listing between them. See src/github.js for why that matters.
+  const tree = await fetchRepoTree({ owner, repo, branch }, fetchImpl, env, cache);
+  if (tree.throttled)    return { files: [], throttled: true };
+  if (tree.unauthorized) return { files: [], unauthorized: true };
+  if (tree.unavailable)  return { files: [], throttled: false, unavailable: true };
 
-  const branches = branch ? [branch] : ["main", "master"];
-  for (const b of branches) {
-    const url = `https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(b)}?recursive=1`;
-    let res;
-    try { res = await fetchImpl(url, { headers }); } catch { continue; }
-    if (res.status === 429 || res.status === 403 || res.status >= 500) {
-      return { files: [], throttled: true };
-    }
-    if (!res.ok) continue;
-
-    let body;
-    try { body = await res.json(); } catch { continue; }
-    const entries = Array.isArray(body && body.tree) ? body.tree : [];
+  {
+    const b = tree.branch;
+    const entries = tree.entries;
 
     const wanted = entries
       .filter((e) => e && e.type === "blob" && typeof e.path === "string")
@@ -194,19 +183,14 @@ export async function discoverArchFiles({ owner, repo, branch }, fetchImpl, env)
 
     let throttled = false;
     const results = await Promise.all(wanted.map(async ({ path }) => {
-      const raw = `https://raw.githubusercontent.com/${owner}/${repo}/${b}/${encodeURI(path)}`;
-      let r;
-      try { r = await fetchImpl(raw); } catch { return null; }
-      if (r.status === 429 || r.status === 403 || r.status >= 500) { throttled = true; return null; }
-      if (!r.ok) return null;
-      const text = await r.text();
-      if (text.length > MAX_FILE_BYTES) return null;
-      return { path, content: text };
+      const r = await fetchRawFile({ owner, repo, branch: b, path }, fetchImpl, env, MAX_FILE_BYTES);
+      if (r && r.throttled) { throttled = true; return null; }
+      if (!r) return null;
+      return { path, content: r.text };
     }));
     if (throttled) return { files: [], throttled: true };
     return { files: results.filter(Boolean), throttled: false };
   }
-  return { files: [], throttled: false, unavailable: true };
 }
 
 export function parseGithubRepoUrl(repoUrl) {
@@ -235,7 +219,7 @@ export function archFindingKey(f) {
  *   { status: "no_manifests" }           nothing at root the X-ray can read
  *   { status: "skipped", reason }        transient — baseline must not move
  */
-export async function runArchForMonitor(monitor, env, fetchImpl) {
+export async function runArchForMonitor(monitor, env, fetchImpl, cache = null) {
   const repo = parseGithubRepoUrl(monitor.repoUrl);
   if (!repo) return { status: "skipped", reason: "bad_repo_url" };
 
@@ -245,10 +229,12 @@ export async function runArchForMonitor(monitor, env, fetchImpl) {
     // The tree could not be listed (private repo, rename, API outage that
     // read as 404). Fall back to the root-name fetch so this path never does
     // worse than it did before discovery existed.
-    fetched = await fetchRepoFilesByName(
-      { ...repo, branch: monitor.branch }, ARCH_MANIFEST_NAMES, fetchImpl);
+    fetched = await fetchRepoFilesByName({ ...repo, branch: monitor.branch }, ARCH_MANIFEST_NAMES, fetchImpl, env);
   }
   if (fetched.throttled) return { status: "skipped", reason: "github_throttled" };
+  // A rejected token is a deployment problem of ours. Reporting it as
+  // "no manifests" blamed the customer's repository for our expired secret.
+  if (fetched.unauthorized) return { status: "skipped", reason: "github_unauthorized" };
   if (!fetched.files.length) return { status: "no_manifests" };
 
   const v = validateArchitectureInput({ files: fetched.files });
@@ -403,8 +389,7 @@ export async function runCostForMonitor(monitor, env, ctx, fetchImpl) {
   const repo = parseGithubRepoUrl(monitor.repoUrl);
   if (!repo) return { status: "skipped", reason: "bad_repo_url" };
 
-  const cfgFetch = await fetchRepoFilesByName(
-    { ...repo, branch: monitor.branch }, [BUDGET_CONFIG_NAME], fetchImpl);
+  const cfgFetch = await fetchRepoFilesByName({ ...repo, branch: monitor.branch }, [BUDGET_CONFIG_NAME], fetchImpl, env);
   if (cfgFetch.throttled) return { status: "skipped", reason: "github_throttled" };
   if (!cfgFetch.files.length) return { status: "no_cur" };
 
@@ -415,8 +400,7 @@ export async function runCostForMonitor(monitor, env, ctx, fetchImpl) {
   const curPath = cfg && typeof cfg.cur === "string" ? cfg.cur.trim() : "";
   if (!curPath) return { status: "no_cur" };
 
-  const curFetch = await fetchRepoFilesByName(
-    { ...repo, branch: monitor.branch }, [curPath], fetchImpl);
+  const curFetch = await fetchRepoFilesByName({ ...repo, branch: monitor.branch }, [curPath], fetchImpl, env);
   if (curFetch.throttled) return { status: "skipped", reason: "github_throttled" };
   // Named but not committed is a DIFFERENT answer from never named, and the
   // reader needs to know which: one is a repo that opted out, the other is a
@@ -453,8 +437,7 @@ export async function runEstimateForMonitor(monitor, env, ctx, fetchImpl) {
   const repo = parseGithubRepoUrl(monitor.repoUrl);
   if (!repo) return { status: "skipped", reason: "bad_repo_url" };
 
-  const fetched = await fetchRepoFilesByName(
-    { ...repo, branch: monitor.branch }, COMPOSE_NAMES, fetchImpl);
+  const fetched = await fetchRepoFilesByName({ ...repo, branch: monitor.branch }, COMPOSE_NAMES, fetchImpl, env);
   if (fetched.throttled) return { status: "skipped", reason: "github_throttled" };
   if (!fetched.files.length) return { status: "no_compose" };
 
@@ -564,8 +547,7 @@ export async function runAlgoForMonitor(monitor, env, fetchImpl) {
   const repo = parseGithubRepoUrl(monitor.repoUrl);
   if (!repo) return { status: "skipped", reason: "bad_repo_url" };
 
-  const cfgFetch = await fetchRepoFilesByName(
-    { ...repo, branch: monitor.branch }, [OPTIMIZER_CONFIG_NAME], fetchImpl);
+  const cfgFetch = await fetchRepoFilesByName({ ...repo, branch: monitor.branch }, [OPTIMIZER_CONFIG_NAME], fetchImpl, env);
   if (cfgFetch.throttled) return { status: "skipped", reason: "github_throttled" };
   if (!cfgFetch.files.length) return { status: "no_config" };
 
@@ -589,8 +571,7 @@ export async function runAlgoForMonitor(monitor, env, fetchImpl) {
   const wantedFiles = [...new Set(capped
     .map((e) => e && typeof e.file === "string" ? e.file : null)
     .filter(Boolean))];
-  const srcFetch = await fetchRepoFilesByName(
-    { ...repo, branch: monitor.branch }, wantedFiles, fetchImpl);
+  const srcFetch = await fetchRepoFilesByName({ ...repo, branch: monitor.branch }, wantedFiles, fetchImpl, env);
   if (srcFetch.throttled) return { status: "skipped", reason: "github_throttled" };
   const sources = {};
   for (const f of srcFetch.files) sources[f.path] = f.content;

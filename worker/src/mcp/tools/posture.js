@@ -23,10 +23,13 @@ export const POSTURE_TOOLS = [
       "`cost` prices a committed compose file against published list rates, and `spend` reads a " +
       "committed cost export and reports what is actually being paid. " +
       "Each cell reports its own kind: `grade` is a real result, `stale` is an old one, `pending` " +
-      "means the first run has not finished, `unmeasured` means the sweep ran and this analyzer " +
-      "produced nothing, and `off` means that analyzer is not enabled — treat those five as " +
-      "genuinely different, never as a missing score. A cell that is not a grade may also carry a " +
-      "`fix`: the one change that would turn it into one.",
+      "means the first run has not finished, `unmeasured` means the sweep tried and could not read " +
+      "what it needed, `not_applicable` means this repository has nothing of that kind to measure " +
+      "(no compose file to price, no cost export to read) and never will, and `off` means that " +
+      "analyzer is not enabled — treat those six as genuinely different, never as a missing score. " +
+      "`unmeasured` and `not_applicable` are the pair most worth keeping apart: the first is a " +
+      "failure, the second is not. A cell that is not a grade may also carry a `fix`: the one " +
+      "change that would turn it into one.",
     scope: SCOPES.READ,
     paidOnly: false,
     metered: false,

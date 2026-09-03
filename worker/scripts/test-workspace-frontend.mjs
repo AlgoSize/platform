@@ -529,7 +529,12 @@ group("the new classes are styled, and none are dead");
     ...matchAll(dashJs, /class:\s*"([^"]+)"/g).flatMap((c) => c.split(/\s+/)),
     ...matchAll(html,  /class="([^"]+)"/g).flatMap((c) => c.split(/\s+/)),
   ]).filter((c) => PREFIX.test(c));
-  const styled = new Set(matchAll(css, /\.((?:ws-page|ws-card|ws-sort|ws-scorecard|ws-pulse|ws-tool|scorecard-|mc-|dash-avatar|dash-account|dash-tab-glyph|dash-crumb|panel-empty-rich|ws-tools|deeplink-)[a-zA-Z0-9-]*)/g));
+  const styled = new Set(matchAll(css, /\.((?:ws-page|ws-card|ws-sort|ws-scorecard|ws-pulse|ws-tool|scorecard-|mc-|dash-avatar|dash-account|dash-tab-glyph|dash-crumb|panel-empty-rich|ws-tools|deeplink-)[a-zA-Z0-9_-]*)/g));
+  // `_` belongs in that character class: cell kinds come from the API, where
+  // `not_applicable` sits beside `no_compose` and the compliance model's
+  // `not_covered`, and the class is composed from the kind. Without it the
+  // extractor read `.scorecard-cell-not_applicable` as `scorecard-cell-not`
+  // and reported a rule nobody wrote as dead.
   // Two families are composed at runtime — "scorecard-cell-" + cell.kind and
   // "route-row-" + (wired ? "on" : "off"). The extractor sees the stem, so
   // the stem is checked against the variants that actually exist rather than
@@ -539,8 +544,12 @@ group("the new classes are styled, and none are dead");
   // here. The literal that used to sit in this slot went stale the moment a
   // fifth kind was added, and it failed in the unhelpful direction: it named
   // the new rule as dead CSS instead of naming the kind nobody had styled.
-  const CELL_KINDS = uniq(matchAll(scorecard, /kind:\s*"([a-z]+)"/g)
-    .concat(matchAll(scorecard, /kind:\s*stale \? "([a-z]+)" : "([a-z]+)"/g)));
+  // [a-z_]+, not [a-z]+. `not_applicable` was the first kind with an
+  // underscore in it, and the narrower class silently dropped it from the
+  // derived list — which is the exact staleness the comment above promises
+  // this derivation prevents. A derivation is only as good as its pattern.
+  const CELL_KINDS = uniq(matchAll(scorecard, /kind:\s*"([a-z_]+)"/g)
+    .concat(matchAll(scorecard, /kind:\s*stale \? "([a-z_]+)" : "([a-z_]+)"/g)));
   const RUNTIME = {
     "scorecard-cell-": CELL_KINDS.concat(["grade", "stale"]).filter(
       (k, i, a) => a.indexOf(k) === i),
@@ -564,6 +573,65 @@ group("the new classes are styled, and none are dead");
   const orphans = [...styled].filter((c) => !sources.includes(c) && !composed.has(c));
   expect(orphans.length === 0,
     `no new rule is dead${orphans.length ? " — orphaned: " + orphans.join(", ") : ""}`);
+}
+
+// ===========================================================================
+group("\"nothing to measure\" does not look like \"we tried and failed\"");
+// ===========================================================================
+{
+  // Five of the six columns on our own repository read NOT MEASURED, and two
+  // of them — Infra cost and Cloud spend — never had anything to measure:
+  // Algosize runs on Cloudflare, so there is no compose file to price and no
+  // AWS cost export to read. Rendered identically to three columns that were
+  // genuinely rate-limited, the whole grid looked broken.
+  //
+  // This is a STYLESHEET-level check, not a rendered-pixel one: it reads the
+  // declarations the two states resolve to and asserts they differ. It cannot
+  // prove what a browser paints; it can prove the two states were not given
+  // the same treatment, which is the regression worth catching.
+  const decl = (sel) => {
+    const m = css.match(new RegExp("\\" + sel + "\\s*\\{([^}]*)\\}"));
+    return m ? m[1] : null;
+  };
+  const prop = (body, name) => {
+    const m = body && body.match(new RegExp("(?:^|;)\\s*" + name + "\\s*:\\s*([^;]+)"));
+    return m ? m[1].trim() : null;
+  };
+
+  const na  = decl(".scorecard-na");
+  const unm = decl(".scorecard-unmeasured");
+  expect(na && unm, "both states have a rule of their own");
+
+  expect(prop(na, "color") !== prop(unm, "color"),
+    `they do not share a colour (${prop(na, "color")} vs ${prop(unm, "color")})`);
+
+  // Colour alone is not a distinction a reader who cannot separate two hues
+  // can use, and this pair is precisely the one that must survive that: one
+  // says a thing failed and the other says there was never anything there.
+  // The compliance page settled on dashed-vs-solid borders for the same
+  // reason, between not-covered and insufficient-evidence.
+  expect(/dashed/.test(na || "") && !/dashed/.test(unm || ""),
+    "and the difference is carried by a second, non-colour cue — a dashed rule");
+
+  expect(decl(".scorecard-cell-not_applicable"),
+    "the cell itself carries a kind class, so the whole cell can be dimmed");
+
+  // The words differ too. "not measured" is an accusation of failure and
+  // "not applicable" is not, and the sentence a reader actually reads is the
+  // one that has to be right.
+  expect(/"not applicable"/.test(wsJs) && /"not measured"/.test(wsJs),
+    "the two branches print different words, not one word in two colours");
+
+  // A legend that names five states and renders six teaches the reader the
+  // sixth is a bug.
+  expect(/scorecard-key-na/.test(wsJs) && /scorecard-key-na/.test(css),
+    "the key under the grid names the new state, and that term is styled");
+
+  // The classification lives in ONE place. Two lists would drift, and the
+  // drift would be invisible: a reason in neither list still renders, just
+  // wrongly.
+  expect(/NOT_APPLICABLE_REASONS/.test(scorecard),
+    "the scorecard classifies from the shared reason set, not a local copy");
 }
 
 // ===========================================================================

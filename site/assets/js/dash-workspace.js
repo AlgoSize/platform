@@ -138,6 +138,10 @@
         // rolling it into the graded total would inflate the one number a
         // reader uses to judge how much of the grid is real.
         if (cells[k].kind === "unmeasured") pending++;
+        // not_applicable is counted in NEITHER. "Awaiting a first run" is a
+        // backlog — a list of cells that will eventually carry a number — and
+        // a repository with no compose file will never produce one, so putting
+        // it there would show a backlog that can never reach zero.
       });
     });
 
@@ -276,6 +280,7 @@
     [
       ["scorecard-key-pending",    "first run pending", "enabled; no sweep has produced a result yet"],
       ["scorecard-key-unmeasured", "not measured",      "the sweep ran and found nothing it could read"],
+      ["scorecard-key-na",         "not applicable",    "this repository has no such thing to measure"],
       ["scorecard-key-off",        "not watched",       "the analyzer is switched off for this repo"],
     ].forEach(function (k, i) {
       if (i) key.appendChild(el("span", { class: "scorecard-key-sep", "aria-hidden": "true" }, " \u00b7 "));
@@ -421,6 +426,21 @@
     // for a repository nothing ever read.
     if (cell.kind === "unmeasured") {
       wrap.appendChild(el("span", { class: "scorecard-unmeasured mono" }, "not measured"));
+      wrap.appendChild(note(cell.note || ""));
+      appendFix(wrap, cell);
+      return wrap;
+    }
+
+    // There is nothing here to measure and there never was. Held apart from
+    // "not measured" on purpose: that one means the sweep tried and could
+    // not, and reads as a failure, which is exactly wrong for a repository
+    // with no docker-compose.yml to price or no cost export to read. Two of
+    // the six columns are in this state permanently on any Cloudflare-hosted
+    // repository, and rendering them as failures made the whole grid look
+    // broken. The fix line stays — it says what would make the column
+    // measurable — but the word does not accuse anything of having failed.
+    if (cell.kind === "not_applicable") {
+      wrap.appendChild(el("span", { class: "scorecard-na mono" }, "not applicable"));
       wrap.appendChild(note(cell.note || ""));
       appendFix(wrap, cell);
       return wrap;

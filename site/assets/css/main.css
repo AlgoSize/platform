@@ -5041,6 +5041,7 @@ a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
 .scorecard-key-term { font-weight: 700; }
 .scorecard-key-pending    { color: var(--accent); }
 .scorecard-key-unmeasured { color: var(--sev-medium); }
+.scorecard-key-na         { color: var(--text-dim); }
 .scorecard-key-off        { color: var(--text-muted); }
 .scorecard-key-gloss { color: var(--text-dim); }
 
@@ -5164,6 +5165,26 @@ a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
   overflow: hidden;
 }
 .scorecard-cell-unmeasured .scorecard-fix { border-left-color: var(--accent-warm); }
+
+/* "Nothing to measure here" must not look like "we tried and failed".
+   NOT MEASURED is warm and solid, because something is wrong and someone can
+   act on it. NOT APPLICABLE is dim and DASHED — the same border language the
+   compliance page uses for a control we do not cover — because the honest
+   answer is that this tool has nothing to say about this repository. Two cues,
+   colour and border style, so the distinction survives a reader who cannot
+   tell the two hues apart. */
+.scorecard-cell-not_applicable { opacity: 0.72; }
+.scorecard-cell-not_applicable .scorecard-fix {
+  border-left-style: dashed;
+  border-left-color: var(--border);
+}
+.scorecard-na {
+  font-size: var(--fs-xs); color: var(--text-dim);
+  text-transform: uppercase; letter-spacing: 0.04em;
+  white-space: nowrap;
+  border-bottom: 1px dashed var(--border);
+  padding-bottom: 1px;
+}
 .scorecard-pending { font-size: 0.72rem; font-weight: 600; color: var(--accent); white-space: nowrap; }
 .scorecard-off     { font-size: 0.72rem; font-weight: 600; color: var(--text-dim); white-space: nowrap; }
 .scorecard-enable  {

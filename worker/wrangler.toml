@@ -567,6 +567,27 @@ dead_letter_queue = "algosize-scans-staging-dlq"
 #                          redirects to /?auth=google_not_configured and
 #                          the rest of the worker keeps working — only the
 #                          Google sign-in option is disabled.
+#   GITHUB_TOKEN           Optional, and the single highest-value secret on
+#                          this list for anyone whose scorecard is blank.
+#                          Every repository read — git-tree listings and raw
+#                          file contents alike — is anonymous without it, and
+#                          GitHub allows 60 requests per hour PER IP to
+#                          unauthenticated callers. A Cloudflare Worker's
+#                          egress IP is shared far past this account, so the
+#                          hourly sweep can arrive at a quota someone else
+#                          already spent, skip with `github_throttled`, and
+#                          leave every scorecard cell downstream reading
+#                          NOT MEASURED. Authenticated, the budget is ~5,000
+#                          requests an hour and belongs to us alone.
+#                          Mint a FINE-GRAINED personal access token with
+#                          "Public repositories (read-only)" and no account
+#                          permissions: the sweep only ever reads committed
+#                          files from public repositories, and a token with
+#                          more reach than that is a liability, not a
+#                          convenience. It is never logged and never sent
+#                          anywhere but github.com.
+#                          Unset, everything still works exactly as before —
+#                          anonymously, and rate-limited accordingly.
 #
 # Local dev: put these in `worker/.dev.vars` (gitignored). See
 # `worker/.dev.vars.example` for the template.
@@ -580,6 +601,7 @@ dead_letter_queue = "algosize-scans-staging-dlq"
 #   cd worker && wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON --config wrangler.toml --env production
 #   cd worker && wrangler secret put GOOGLE_CLIENT_ID            --config wrangler.toml --env production
 #   cd worker && wrangler secret put GOOGLE_CLIENT_SECRET        --config wrangler.toml --env production
+#   cd worker && wrangler secret put GITHUB_TOKEN                --config wrangler.toml --env production   # optional, strongly recommended
 #
 # Staging: same names, different values (Stripe TEST mode keys, separate
 # Sentry project DSN, etc.). Set them with `--env staging`:
