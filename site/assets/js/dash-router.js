@@ -29,7 +29,8 @@
   if (!core) return;
 
   var VIEWS = ["workspace", "scanner", "cost", "arch", "optimizer", "estimate",
-               "monitors", "team", "report", "account", "mcp", "pipeline", "models"];
+               "monitors", "team", "report", "account", "mcp", "pipeline", "models",
+               "compliance"];
 
   function parseHash() {
     var h = window.location.hash || "";
@@ -92,6 +93,7 @@
     if (h === "#/mcp")       return { view: "mcp" };
     if (h === "#/pipeline")  return { view: "pipeline" };
     if (h === "#/models")    return { view: "models" };
+    if (h === "#/compliance") return { view: "compliance" };
     return { view: "workspace" };
   }
 
@@ -112,7 +114,7 @@
     // the strip is concerned: a tool page reached from a Workspace card is
     // somewhere inside Workspace, and marking neither tab current there
     // would read as "you are nowhere".
-    var UNDER_WORKSPACE = ["report", "scanner", "cost", "arch", "optimizer", "estimate", "mcp", "pipeline", "models"];
+    var UNDER_WORKSPACE = ["report", "scanner", "cost", "arch", "optimizer", "estimate", "mcp", "pipeline", "models", "compliance"];
     document.querySelectorAll(".dash-tab").forEach(function (tab) {
       var current = tab.dataset.view === route.view ||
         (UNDER_WORKSPACE.indexOf(route.view) !== -1 && tab.dataset.view === "workspace");
@@ -152,6 +154,7 @@
     if (route.view === "mcp"       && window.DashMcp)       window.DashMcp.load();
     if (route.view === "pipeline"  && window.DashPipeline)  window.DashPipeline.load();
     if (route.view === "models"    && window.DashModels)    window.DashModels.load();
+    if (route.view === "compliance" && window.DashCompliance) window.DashCompliance.load();
 
     // A fresh view starts at the top — otherwise switching tabs keeps the
     // previous tab's scroll depth, which reads as a broken page.

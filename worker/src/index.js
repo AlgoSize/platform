@@ -150,6 +150,18 @@ import { makeRateLimit, makeApiKeyRateLimit } from "./middleware/rate-limit.js";
 import { captureException } from "./observability.js";
 import { generateFixHandler, proposeFixHandler, validateFixHandler, explainRuleHandler, importSarifHandler } from "./handlers/fix.js";
 import { handoffFindingsHandler, applyPatchHandler } from "./handlers/handoff.js";
+import { expiredAttestations } from "./compliance/store.js";
+import {
+  listFrameworksHandler,
+  coverageHandler,
+  listAttestationsHandler,
+  createAttestationHandler,
+  revokeAttestationHandler,
+  listAuditsHandler,
+  publishAuditHandler,
+  getAuditHandler,
+  downloadPackHandler,
+} from "./handlers/compliance.js";
 import { stageModelsHandler, estimateStageCostHandler, validateStageConfigHandler } from "./handlers/ai.js";
 import { runPipelineHandler } from "./handlers/pipeline.js";
 import { estimateHandler, estimateProvidersHandler } from "./handlers/estimate.js";
@@ -505,6 +517,27 @@ router.get(   "/api/monitors/:id/result/:analyzer", requireAuth, monitorResultHa
 // never a passing grade. See handlers/scorecard.js.
 router.get(   "/api/scorecard",              requireAuth, scorecardHandler);
 
+// ---- Compliance & release audit (migrations/0028) ------------------------
+// The coverage map is computed live from stored runs and attestations; nothing
+// is persisted by the read path and nothing is defaulted. Every control's
+// answer goes through compliance/resolve.js, which can only weaken a verdict,
+// so a control cannot read as met without an artifact behind it.
+//
+// Deliberately NOT behind enforceQuota: publishing an audit consumes runs the
+// customer was already metered for.
+//
+// Static segments are registered before the :param routes below them — itty
+// matches in registration order.
+router.get(   "/api/compliance/frameworks",   requireAuth, listFrameworksHandler);
+router.get(   "/api/compliance/coverage",     requireAuth, coverageHandler);
+router.get(   "/api/compliance/attestations", requireAuth, listAttestationsHandler);
+router.post(  "/api/compliance/attestations", requireAuth, createAttestationHandler);
+router.post(  "/api/compliance/attestations/:id/revoke", requireAuth, revokeAttestationHandler);
+router.get(   "/api/compliance/audits",       requireAuth, listAuditsHandler);
+router.post(  "/api/compliance/audits",       requireAuth, publishAuditHandler);
+router.get(   "/api/compliance/audits/:id",       requireAuth, getAuditHandler);
+router.get(   "/api/compliance/audits/:id/pack",  requireAuth, downloadPackHandler);
+
 // ---- Architecture history (migrations/0018) ------------------------------
 // Every X-ray run — manual, CI or nightly — records a versioned snapshot of
 // the graph it built. These read that history back. Phase 1 ships the reads
@@ -650,6 +683,19 @@ export default {
     try {
       const summary = await sweepDueMonitors(env, ctx, { cron: event && event.cron });
       console.log("monitors: sweep", JSON.stringify({ cron: event && event.cron, ...summary }));
+
+      // Lapsed compliance attestations. This is a VISIBILITY pass only —
+      // expiry is already enforced read-side by compliance/resolve.js, which
+      // every control goes through, so a sweep that never ran could not make
+      // an expired claim keep counting. It exists so a lapse is noticed here
+      // rather than by whoever opens the page next quarter.
+      const lapsed = await expiredAttestations(env);
+      if (lapsed.length) {
+        console.log("compliance: attestations expired", JSON.stringify({
+          count: lapsed.length,
+          controls: lapsed.slice(0, 20).map((a) => `${a.frameworkId}:${a.controlId}`),
+        }));
+      }
     } catch (err) {
       // A cron handler that throws is a sweep that silently didn't happen —
       // capture so a broken nightly run is visible rather than just absent.
