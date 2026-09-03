@@ -14,6 +14,7 @@
 // transient GitHub or OSV outage retries just the monitor it hit.
 
 import { runLockfileAudit } from "../handlers/analyze.js";
+import { newTreeCache } from "../github.js";
 import { persistRun } from "../handlers/runs.js";
 import { resolveMonitorRoute, monitorSlackText } from "./routing.js";
 import { postToSlack } from "../slack.js";
@@ -208,11 +209,24 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
   // pause should win.
   if (monitor.pausedAt !== null) return { status: "paused", monitorId };
 
+  // One tree listing for the whole sweep.
+  //
+  // Three analyzers used to list the SAME tree at the SAME commit: the
+  // dependency audit, the source scanner, and the architecture X-ray. Against
+  // GitHub's anonymous 60-requests-per-hour-per-IP — and a Cloudflare Worker's
+  // egress IP is shared far past this account — that is roughly twenty
+  // monitors an hour deployment-wide before the budget is gone, after which
+  // every cell downstream reads NOT MEASURED. This cache lives for exactly one
+  // monitor's sweep and is then discarded: a tree held across sweeps would be
+  // a stale answer presented as a fresh measurement.
+  const treeCache = newTreeCache();
+
   const response = await runLockfileAudit(
     { repoUrl: monitor.repoUrl, branch: monitor.branch || undefined },
     env,
     null,          // no request — this is a scheduled run, not an HTTP call
     ctx,
+    { treeCache },
   );
 
   let result;
@@ -303,7 +317,7 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
 
   let archDiff = null, archBaseline, archScope;
   if (analyzers.includes("arch")) {
-    const arch = await runArchForMonitor(monitor, env, fetchImpl);
+    const arch = await runArchForMonitor(monitor, env, fetchImpl, treeCache);
     if (arch.status === "ok") {
       archDiff = diffArchFindings(arch.findings, arch.keys, monitor.lastArchKeys);
       archBaseline = archDiff.currentKeys;

@@ -30,7 +30,9 @@
 // are different problems with different fixes, and a single grey dash for
 // both would hide the second one forever.
 
-import { requireOrgContext, explainUnavailable, fixUnavailable } from "./monitors.js";
+import {
+  requireOrgContext, explainUnavailable, fixUnavailable, NOT_APPLICABLE_REASONS,
+} from "./monitors.js";
 import { listMonitors } from "../monitors/_store.js";
 import { gradeForScore, scoreForCounts, worstSeverity } from "../analyzers/audit.js";
 import { formatMicroUsd, bigORank } from "../monitors/analyzers.js";
@@ -161,6 +163,28 @@ function pending(note, fix = null) { return { kind: "pending", note, fix, value:
 function unmeasured(note, fix = null) { return { kind: "unmeasured", note, fix, value: null, rank: null }; }
 
 /**
+ * There is nothing here to measure, and there was never going to be.
+ *
+ * `unmeasured` says "we tried and could not". This says "this repository has
+ * no such thing" — no docker-compose.yml to price, no cost export to read, no
+ * manifests to map. On our own repository two of the six columns are in this
+ * state permanently: Algosize runs on Cloudflare, so there is no AWS Cost &
+ * Usage Report and no compose stack, and both cells read NOT MEASURED beside
+ * three that were genuinely rate-limited. The reader cannot tell a column that
+ * failed from a column that has nothing to say, so all five look broken.
+ *
+ * This is the distinction the compliance catalog already draws between
+ * `not_covered` (a fact about the tool) and `insufficient_evidence` (a finding
+ * about the customer). The scorecard predates that model and never got it.
+ *
+ * `fix` is still carried, and deliberately so: "Commit a docker-compose.yml,
+ * or point `compose` in algosize.budget.json at the one you already use" is
+ * exactly what a reader with a compose stack elsewhere needs. Nothing to
+ * measure HERE is not nothing the reader could ever do.
+ */
+function notApplicable(note, fix = null) { return { kind: "not_applicable", note, fix, value: null, rank: null }; }
+
+/**
  * Why this analyzer produced nothing in the last sweep, or null if it did.
  *
  * `lastSkips` is null on a monitor swept before migration 0022 — unknown, not
@@ -171,7 +195,24 @@ function skipFor(m, analyzer) {
   if (!Array.isArray(m.lastSkips)) return null;
   const hit = m.lastSkips.find((s) => s && s.analyzer === analyzer);
   if (!hit) return null;
-  return { note: explainUnavailable(hit.reason), fix: fixUnavailable(hit.reason) };
+  return { note: explainUnavailable(hit.reason), fix: fixUnavailable(hit.reason), reason: hit.reason };
+}
+
+/**
+ * The cell for a recorded skip, in the kind the reason deserves — or null when
+ * the analyzer did produce something.
+ *
+ * One place, so the five columns cannot drift apart on which reasons count as
+ * a failure. NOT_APPLICABLE_REASONS is the list, and it lives beside the copy
+ * tables in handlers/monitors.js rather than here, because the sentence and
+ * its classification are the same decision.
+ */
+function skipCell(m, analyzer) {
+  const skipped = skipFor(m, analyzer);
+  if (!skipped) return null;
+  return NOT_APPLICABLE_REASONS.has(skipped.reason)
+    ? notApplicable(skipped.note, skipped.fix)
+    : unmeasured(skipped.note, skipped.fix);
 }
 /**
  * The movement since the previous sweep, for the ONE column that stores it.
@@ -269,8 +310,8 @@ function securityCell(m, on, stale) {
 // whose code is clean.
 function codeCell(m, on, stale) {
   if (!on.includes("vuln")) return off();          // not reachable: vuln is mandatory
-  const skipped = skipFor(m, "source");
-  if (skipped) return unmeasured(skipped.note, skipped.fix);
+  const skipped = skipCell(m, "source");
+  if (skipped) return skipped;
 
   const src = m.lastSource;
   if (!src) return pending("No source scan recorded yet.");
@@ -305,8 +346,8 @@ const SEVERITY_WEIGHT = Object.freeze({
 // ---------------------------------------------------------------------------
 function costCell(m, on, stale) {
   if (!on.includes("estimate")) return off();
-  const skipped = skipFor(m, "estimate");
-  if (skipped) return unmeasured(skipped.note, skipped.fix);
+  const skipped = skipCell(m, "estimate");
+  if (skipped) return skipped;
   const est = m.lastEstimate;
   if (!est) return pending("No estimate recorded yet.");
 
@@ -314,9 +355,10 @@ function costCell(m, on, stale) {
   if (!entries.length) {
     // A recorded-but-empty baseline is the sweep's way of saying it looked
     // and found no compose file. That is a real answer, not a missing one.
-    // (Rows swept since migration 0022 take the skipFor branch above; this
-    // is the pre-0022 path, and it gets the same fix line either way.)
-    return pending("No compose file found in the repository.", fixUnavailable("no_compose"));
+    // (Rows swept since migration 0022 take the skipCell branch above; this
+    // is the pre-0022 path, and it lands in the same kind either way, so an
+    // old row and a new row describing the same repository read alike.)
+    return notApplicable("No compose file found in the repository.", fixUnavailable("no_compose"));
   }
   entries.sort((a, b) => a[1] - b[1]);
   const [providerId, micro] = entries[0];
@@ -333,14 +375,14 @@ function costCell(m, on, stale) {
 // ---------------------------------------------------------------------------
 function complexityCell(m, on, stale) {
   if (!on.includes("algo")) return off();
-  const skipped = skipFor(m, "algo");
-  if (skipped) return unmeasured(skipped.note, skipped.fix);
+  const skipped = skipCell(m, "algo");
+  if (skipped) return skipped;
   const algo = m.lastAlgo;
   if (!algo) return pending("No complexity run recorded yet.");
 
   const names = Object.keys(algo.byName || {});
   if (!names.length) {
-    return pending("No optimizer.config.json in the repository.", fixUnavailable("no_config"));
+    return notApplicable("No optimizer.config.json in the repository.", fixUnavailable("no_config"));
   }
 
   let worstLabel = null, worstRank = -1;
@@ -362,8 +404,8 @@ function complexityCell(m, on, stale) {
 // ---------------------------------------------------------------------------
 function architectureCell(m, on, stale) {
   if (!on.includes("arch")) return off();
-  const skipped = skipFor(m, "arch");
-  if (skipped) return unmeasured(skipped.note, skipped.fix);
+  const skipped = skipCell(m, "arch");
+  if (skipped) return skipped;
   const keys = m.lastArchKeys;
   if (keys === null) return pending("No architecture run recorded yet.");
   return graded(
@@ -413,8 +455,8 @@ function archNote(count, scope) {
 // recoverable, and the biggest recoverable number sorts to the top.
 function spendCell(m, on, stale) {
   if (!on.includes("cost")) return off();
-  const skipped = skipFor(m, "cost");
-  if (skipped) return unmeasured(skipped.note, skipped.fix);
+  const skipped = skipCell(m, "cost");
+  if (skipped) return skipped;
 
   const c = m.lastCost;
   // No stored figure and no recorded skip. Either the sweep predates

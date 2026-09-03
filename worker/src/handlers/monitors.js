@@ -658,6 +658,30 @@ export async function monitorResultHandler(request, env, ctx) {
  * "not measured" has to say why, and two independently-worded lists is how
  * the panel and the grid end up disagreeing about the same sweep.
  */
+/**
+ * Reasons that mean "there is nothing here to measure", as opposed to
+ * "we tried and could not".
+ *
+ * The distinction matters because these five are FACTS ABOUT THE REPOSITORY
+ * and are permanent: a repo with no compose file will never have an infra-cost
+ * forecast, and rendering that identically to a sweep that was rate-limited
+ * tells a reader something is broken when nothing is. It is the same split the
+ * compliance catalog already draws between "not covered" and "insufficient
+ * evidence", and for the same reason — one is a limit of the tool, the other
+ * is a gap in what we know.
+ *
+ * Everything NOT in this set stays "not measured": transient outages, a
+ * rejected credential, an invalid config. Those are somebody's to fix, which
+ * is why they keep a remedy line and these do not.
+ */
+export const NOT_APPLICABLE_REASONS = Object.freeze(new Set([
+  "no_compose",       // no docker-compose.yml to price
+  "no_cur",           // no cost export named — absent config is consent
+  "no_config",        // no optimizer.config.json, so nothing is watched
+  "no_manifests",     // nothing for the X-ray to map
+  "no_source_files",  // no files in a language the code scanner reads
+]));
+
 export function explainUnavailable(reason) {
   const MAP = {
     no_manifests:       "No manifests or config files were found in this repository, so there is nothing to map.",
@@ -673,6 +697,12 @@ export function explainUnavailable(reason) {
     config_invalid:     "optimizer.config.json is present but is not valid JSON.",
     no_entries_ran:     "Every entry in optimizer.config.json was skipped. Each one's reason is listed below.",
     github_throttled:   "GitHub rate-limited the request. This clears on its own; try again shortly.",
+    // Ours, and it says so. This used to fall through the same branch as a
+    // 404, so an expired deployment token made every repository on the
+    // platform read as though it did not exist.
+    github_unauthorized:
+      "Our GitHub credential was rejected, so the repository could not be read. This is a " +
+      "deployment setting on our side, not a problem with your repository.",
     sandbox_unreachable:"The measurement sandbox is unreachable right now. The nightly sweep will retry.",
     // Deliberately says whose problem it is. The previous behaviour reported
     // this as every entry in the config failing, which reads as "your config

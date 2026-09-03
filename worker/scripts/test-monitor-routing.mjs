@@ -546,14 +546,29 @@ console.log("\na skipped analyzer is never graded as a zero\n");
   const row  = body.rows.find((r) => /noman/.test(r.repo));
   expect(Boolean(row), "the monitored repo appears in the scorecard");
 
-  expect(row.cells.architecture.kind === "unmeasured",
-    `a skipped X-ray reads as unmeasured, not a grade (got ${row.cells.architecture.kind})`);
+  // These three reasons — no_manifests, no_compose, no_config — are facts
+  // about the REPOSITORY, not failures of the sweep, so they land in
+  // `not_applicable`. This assertion used to read `unmeasured`, and both the
+  // old and new values honour the rule this group exists to protect: never a
+  // grade, never a number. What changed is that "we tried and could not" and
+  // "there is nothing here of that kind" stopped sharing one word, because
+  // rendering a Cloudflare-hosted repository's absent compose file as a
+  // failure made five of six columns look broken.
+  expect(row.cells.architecture.kind === "not_applicable",
+    `a repository with no manifests reads as not applicable, not as a grade (got ${row.cells.architecture.kind})`);
   expect(row.cells.architecture.value === null,
     `…and carries no number at all (got ${JSON.stringify(row.cells.architecture.value)})`);
   expect(/manifests/i.test(row.cells.architecture.note || ""),
     `…and says why, in the same words the analyzer panel uses (got "${row.cells.architecture.note}")`);
-  expect(row.cells.cost.kind === "unmeasured" && row.cells.complexity.kind === "unmeasured",
+  expect(row.cells.cost.kind === "not_applicable" && row.cells.complexity.kind === "not_applicable",
     "the estimator and optimizer get the same treatment — one rule, not three");
+  // The rule underneath both kinds, stated once so a future reclassification
+  // cannot quietly turn any of these into a number.
+  ["architecture", "cost", "complexity"].forEach(function (k) {
+    const c = row.cells[k];
+    expect(c.kind !== "grade" && c.value === null && c.rank === null,
+      `${k} carries no grade, no value and no rank (got ${c.kind}/${JSON.stringify(c.value)})`);
+  });
 
   // Security genuinely ran: its zero is a measurement and must survive.
   expect(row.cells.security.kind === "grade",
@@ -667,8 +682,11 @@ console.log("\nevery analyzer you can schedule has a column, and every empty cel
     "the Infra cost column stays its own analyzer — a monitor watching spend is not estimating");
 
   const waitRow = body.rows.find((r) => /waiting/.test(r.repo));
-  expect(waitRow.cells.spend.kind === "unmeasured",
-    `an unnamed CUR reads as not measured (got ${waitRow.cells.spend.kind})`);
+  // `no_cur` is the same class of fact: this repository does not commit a cost
+  // export, and on anything not hosted on AWS it never will. Not a failure —
+  // but still not a zero, which is what the third assertion below pins.
+  expect(waitRow.cells.spend.kind === "not_applicable",
+    `an unnamed CUR reads as not applicable, never as a bill (got ${waitRow.cells.spend.kind})`);
   expect(/algosize\.budget\.json/.test(waitRow.cells.spend.fix || ""),
     `…and names the file to change (got "${waitRow.cells.spend.fix}")`);
   expect(waitRow.cells.spend.value === null,
