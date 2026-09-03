@@ -20,6 +20,7 @@
 // control reads "insufficient evidence" for a reason the page cannot explain.
 
 import { RUN_TTL_SECONDS } from "../handlers/runs.js";
+import { normaliseRepo } from "../repo-key.js";
 import { inPeriod, isoDay } from "./resolve.js";
 
 /** Analyzers a collector might need. Queried once each, not once per control. */
@@ -123,15 +124,10 @@ function matchesRepo(run, repoUrl) {
   return candidates.some((c) => normaliseRepo(c) === target);
 }
 
-/** `owner/name`, lowercased. Enough to match a URL against a bare slug. */
-function normaliseRepo(raw) {
-  if (typeof raw !== "string") return "";
-  const trimmed = raw.trim().replace(/\.git$/, "").replace(/\/+$/, "");
-  const m = trimmed.match(/github\.com[/:]([\w.-]+)\/([\w.-]+)$/i);
-  if (m) return `${m[1]}/${m[2]}`.toLowerCase();
-  const bare = trimmed.match(/^([\w.-]+)\/([\w.-]+)$/);
-  return bare ? `${bare[1]}/${bare[2]}`.toLowerCase() : trimmed.toLowerCase();
-}
+// `normaliseRepo` moved to ../repo-key.js when the accepted-risk register
+// became its second caller. Re-exported so this module's own callers are
+// untouched, and so there is exactly one definition of the repository key.
+export { normaliseRepo };
 
 /** Patches an external agent reported applying inside the period. Seconds. */
 export async function gatherPatches(env, { orgId, period }) {
@@ -390,17 +386,43 @@ export function secureCoding({ runs }) {
   }
 
   const findings = Array.isArray(source.findings) ? source.findings : [];
-  const high = findings.filter((f) => f.severity === "critical" || f.severity === "high");
+  // OPEN critical/high, not all of them. A finding a named person has signed
+  // for, with a written reason and a date it runs out, is not an unremediated
+  // defect — and PW.5.1 asking "did you follow secure coding practice" is
+  // answered by the acceptance as much as by the absence. What keeps that
+  // honest is that the acceptance TRAVELS: every accepted high is named
+  // below, with its owner and expiry, into the rationale a published pack
+  // carries. A count would be skimmable into a lie; a list is not.
+  const isSevere = (f) => f.severity === "critical" || f.severity === "high";
+  const high = findings.filter((f) => isSevere(f) && !f.accepted);
+  const acceptedHigh = findings.filter((f) => isSevere(f) && f.accepted);
   const shallow = shallowness(source);
   const coverage = source.coverage || {};
 
+  const acceptedNote = acceptedHigh.length
+    ? " " + acceptedHigh.map((f) =>
+        `${f.path} (${f.ruleId}) accepted by ${f.acceptance.ownerEmail} until ${f.acceptance.expiresOn}`).join("; ") + "."
+    : "";
+
   return baseFrom(run, {
     verdict: high.length === 0 ? "met" : "not_met",
-    asserted: `${findings.length} finding${findings.length === 1 ? "" : "s"} across ${coverage.filesScanned || 0} files`,
-    rationale: high.length === 0
-      ? `No critical or high-severity code finding was raised across ${coverage.filesScanned || 0} scanned files.`
-      : `${high.length} critical or high-severity code finding${high.length === 1 ? "" : "s"} remained open at the last scan in the period.`,
-    qualifiers: shallow.any ? ["shallow_coverage"] : [],
+    asserted: `${findings.length} finding${findings.length === 1 ? "" : "s"} across ${coverage.filesScanned || 0} files` +
+      (acceptedHigh.length
+        ? ` · ${acceptedHigh.length} accepted` : ""),
+    rationale: (high.length === 0
+      ? `No critical or high-severity code finding was open across ${coverage.filesScanned || 0} scanned files.`
+      : `${high.length} critical or high-severity code finding${high.length === 1 ? "" : "s"} remained open at the last scan in the period.`) +
+      (acceptedHigh.length
+        ? ` ${acceptedHigh.length} ${acceptedHigh.length === 1 ? "was" : "were"} signed for as an accepted risk:${acceptedNote}`
+        : ""),
+    // `accepted_risk` does NOT weaken the result. A named owner, a written
+    // reason and an expiry IS the answer this control asks for; what would be
+    // dishonest is the acceptance not travelling with it, which is why the
+    // rationale above names every one.
+    qualifiers: [
+      ...(shallow.any ? ["shallow_coverage"] : []),
+      ...(acceptedHigh.length ? ["accepted_risk"] : []),
+    ],
     rationaleShallow: shallowRationale(shallow),
   });
 }

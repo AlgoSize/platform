@@ -52,6 +52,12 @@ export const AUDIT_ACTIONS = Object.freeze({
   COMPLIANCE_ATTESTATION_REVOKED: "compliance.attestation_revoked",
   COMPLIANCE_AUDIT_PUBLISHED:     "compliance.audit_published",
   COMPLIANCE_AUDIT_SUPERSEDED:    "compliance.audit_superseded",
+
+  // An accepted risk is a named person deciding a true finding will not be
+  // fixed. It is the only mechanism in the product that can move a number a
+  // report reads, so its absence from the log would be noticed exactly once.
+  RISK_ACCEPTED:                  "risk.accepted",
+  RISK_ACCEPTANCE_REVOKED:        "risk.acceptance_revoked",
   PLAN_CHANGED:      "billing.plan_changed",
   FLAG_UPDATED:      "flag.updated",
   // Distinct from FLAG_UPDATED: this changes ONE subject against the flag's

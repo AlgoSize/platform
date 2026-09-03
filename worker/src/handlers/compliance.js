@@ -13,6 +13,9 @@
 // product, and the reading side costs a handful of indexed SELECTs.
 
 import { requireOrgContext } from "./monitors.js";
+import { applyAcceptedRisks } from "../risk/accept.js";
+import { acceptancesFor } from "../risk/store.js";
+import { repoKeyFor } from "../repo-key.js";
 import { getMonitor, listMonitors } from "../monitors/_store.js";
 import { RUN_TTL_SECONDS } from "./runs.js";
 import { AUDIT_ACTIONS, auditFromRequest } from "../audit.js";
@@ -162,12 +165,45 @@ function parseDay(raw, endOfDay) {
  * The one place a coverage map is assembled, shared by the live endpoint and by
  * publish, so a published pack cannot disagree with the page it was cut from.
  */
+/**
+ * Apply the org's accepted risks to the source findings of every vuln run.
+ *
+ * Mutates the in-memory run objects only. The stored `result_json` is never
+ * rewritten: what the scanner found is a fact about that moment, and the
+ * acceptance is a fact about now. Keeping them apart is what makes revocation
+ * instantaneous across all history, and what leaves nothing to bypass.
+ */
+async function decorateRunsWithAcceptances(env, runs, { orgId, repoUrl }) {
+  const repoKey = repoKeyFor(repoUrl);
+  if (!repoKey) return;
+  const vuln = (runs && runs.vuln) || [];
+  if (!vuln.length) return;
+
+  const acceptances = await acceptancesFor(env, orgId, repoKey);
+  if (!acceptances.length) return;
+
+  const now = nowSec();
+  for (const run of vuln) {
+    const source = run && run.result && run.result.source;
+    if (!source || !Array.isArray(source.findings)) continue;
+    source.findings = applyAcceptedRisks(source.findings, acceptances, { repoKey, now });
+  }
+}
+
 export async function buildCoverage(env, { orgId, monitor, frameworkId, period }) {
   const framework = getFramework(frameworkId);
   if (!framework) return null;
 
   const repoUrl = monitor ? monitor.repoUrl : null;
   const runs = await gatherRuns(env, { orgId, repoUrl, period });
+
+  // Accepted risks are applied HERE, between gathering the runs and running the
+  // collectors, so that PW.5.1 counts what is open rather than what was ever
+  // found. Not inside gatherRuns, which also serves the arch collectors and
+  // has no findings to decorate; and never written back to the stored run, so
+  // a revocation reaches every historical run on the next read.
+  await decorateRunsWithAcceptances(env, runs, { orgId, repoUrl });
+
   const patches = await gatherPatches(env, { orgId, period });
   const attestations = await attestationsByControl(env, orgId, frameworkId);
   const evidence = runCollectors(collectorsFor(frameworkId), {
@@ -378,7 +414,11 @@ export async function createAttestationHandler(request, env, ctx) {
   return jsonResponse({ attestation: created }, 201);
 }
 
-function parseExpiry(raw) {
+/** `YYYY-MM-DD` -> unix seconds at end of that UTC day, or null when it is not
+ *  a date or is not in the future. Exported because the accepted-risk register
+ *  makes exactly the same promise ("there are no perpetual ones") and two
+ *  implementations of a rule like that drift. */
+export function parseExpiry(raw) {
   if (typeof raw !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
   const ms = Date.parse(`${raw}T23:59:59Z`);
   if (!Number.isFinite(ms)) return null;

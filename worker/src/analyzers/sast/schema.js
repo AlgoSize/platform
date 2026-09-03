@@ -13,6 +13,7 @@
 // able to change what an old reader sees.
 
 import { rulesForTypes, DEFAULT_RULE } from "./registry.js";
+import { acceptanceSummary } from "../../risk/accept.js";
 
 export const SEVERITIES  = Object.freeze(["critical", "high", "medium", "low", "info"]);
 export const CONFIDENCES = Object.freeze(["high", "medium", "low"]);
@@ -182,6 +183,16 @@ const TEST_CODE_SEVERITY_CAP = "medium";
  * the test that runs the engines over the fixture corpus and asserts the
  * marker never appears.
  */
+// Acceptance is deliberately absent from everything below.
+//
+// normalizeFindings and dedupeFindings answer "what is in this code", and that
+// answer must never be a function of what somebody signed. Acceptance is
+// applied to this function's OUTPUT (risk/accept.js), for four reasons that
+// are each load-bearing: it matches on the fingerprint, which does not exist
+// until this function computes it; dedupe collapses a group to its strongest
+// claim, so accepting before it would accept a row nobody ever saw; the
+// test-code cap can lower a severity, and an acceptance must key on the
+// severity that was actually displayed; and `id` is positional.
 export function normalizeFindings(rawFindings, { dedupe = true } = {}) {
   const byType = rulesForTypes();
   const occurrenceCount = new Map();
@@ -299,7 +310,22 @@ export function sortFindings(findings) {
   return findings;
 }
 
-/** The counts the UI's chips read. Every severity present even at zero. */
+/**
+ * The counts the UI's chips read. Every severity present even at zero.
+ *
+ * `total` and `bySeverity` are the honest total of everything found, and they
+ * do not change when a finding is accepted. `open` and `accepted` are the
+ * split, and they are additive: when nothing is accepted, `open.bySeverity`
+ * deep-equals `bySeverity`.
+ *
+ * THE RULE FOR ANYTHING THAT GATES: read `open.bySeverity`, never
+ * `bySeverity`. Gating on `bySeverity` would block on findings a named owner
+ * has already signed for; showing `open` without also showing `accepted`
+ * would gate honestly and report dishonestly. Both, or neither.
+ *
+ * Acceptance is applied by risk/accept.js, strictly AFTER normalizeFindings —
+ * see the note there. This function only counts what it is handed.
+ */
 export function summarizeFindings(findings) {
   const bySeverity = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
   const byCategory = {};
@@ -309,7 +335,10 @@ export function summarizeFindings(findings) {
     byCategory[f.category] = (byCategory[f.category] || 0) + 1;
     byModule[f.module] = (byModule[f.module] || 0) + 1;
   }
-  return { total: findings.length, bySeverity, byCategory, byModule };
+  return {
+    total: findings.length, bySeverity, byCategory, byModule,
+    ...acceptanceSummary(findings),
+  };
 }
 
 /**
