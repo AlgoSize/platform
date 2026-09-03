@@ -315,11 +315,23 @@ function detectDangerousEval(file) {
     // of the most common calls in JS, so the scanner drowned real findings
     // in noise on any real repo (this very file has three of them).
     //
+    // The lookbehind alone was not enough. It excludes `db.exec(sql)` but not
+    // `async exec(sql) {` — a method DEFINITION named `exec`, where the
+    // preceding character is a space. Defining a method called `exec` spawns
+    // nothing; it is a name. Three sites on this repository alone were
+    // reported that way (a D1 stub, a SQLite adapter, a test double), none of
+    // which can execute a process: no `child_process` import exists anywhere
+    // in the scanned tree.
+    //
+    // So a definition keyword before the name disqualifies the match, as does
+    // a `{`/`,` immediately after the closing paren, which is the shape of a
+    // method body rather than a call.
+    //
     // What stays flagged: a bare `exec(` — Python's built-in, or a
     // destructured `const { exec } = require("child_process")` — plus the
     // explicit child_process/os/subprocess spellings.
     const execMatch =
-      outsideLiteral(/(?<![.\w$])exec\s*\(/.exec(code)) ||
+      outsideLiteral(/(?<!(?:function|async|get|set|def)\s+)(?<![.\w$])exec\s*\([^)]*\)(?!\s*[{,])/.exec(code)) ||
       outsideLiteral(/\b(?:child_process|cp)\.execS?y?n?c?\s*\(/.exec(code)) ||
       outsideLiteral(/\bexecSync\s*\(/.exec(code)) ||
       outsideLiteral(/\bos\.system\s*\(/.exec(code)) ||
@@ -337,7 +349,15 @@ function detectDangerousEval(file) {
     }
     if (execMatch) {
       findings.push({
-        severity: "high",
+        // Medium, not high. This is a shape match with no flow evidence: the
+        // analyzer sees a call named `exec` and cannot see whether its
+        // argument is attacker-influenced. The registry grades its confidence
+        // `low`, and this codebase already settled that a low-confidence shape
+        // must not carry the same severity as a traced one — grading both the
+        // same would mean confidence carries no information. The
+        // concatenation-fed variant (`command_injection`) keeps its critical,
+        // because a command assembled from a variable IS the evidence.
+        severity: "medium",
         type: "use_of_exec",
         path: file.path,
         line: i + 1,
@@ -895,7 +915,15 @@ function detectMissingTenantScope(file) {
   return candidates
     .filter((c) => scopedTables.has(c.table))
     .map((c) => ({
-      severity: "high",
+      // Medium, for the same reason as `use_of_exec` above, and the comment at
+      // the head of this detector already concedes it: "the analyzer cannot
+      // see whether scoping happens in a wrapper". It cannot, and on this
+      // repository every one of the nine it raised was a query it had no way
+      // to understand — an auth lookup that ESTABLISHES the tenant, updates
+      // keyed on their own primary key, a retention sweep with only a time
+      // predicate, and one deliberately cross-org admin route. All still worth
+      // a human's thirty seconds. None worth a red build.
+      severity: "medium",
       type: "missing_tenant_scope",
       path: file.path,
       line: c.line,

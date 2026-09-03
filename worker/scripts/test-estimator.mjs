@@ -318,7 +318,7 @@ console.log("\nsecret rejection\n");
   // Terraform plans routinely contain credential-shaped fields.
   const planWithSecret = JSON.stringify({
     planned_values: { root_module: { resources: [
-      { address: "aws_instance.x", type: "aws_instance", name: "x", values: { instance_type: "t3.micro", private_key: "-----BEGIN KEY-----" } },
+      { address: "aws_instance.x", type: "aws_instance", name: "x", values: { instance_type: "t3.micro", private_key: "fixture:-----BEGIN KEY-----" } },
     ] } },
   });
   const e = throws(() => adaptTerraformPlan(planWithSecret), "SecretDetectedError", "a plan containing private_key is rejected");

@@ -80,7 +80,7 @@ function makeEnv(overrides = {}) {
     ADMIN_EMAILS: ADMIN_EMAIL,
     ENVIRONMENT_NAME: "test",
     STRIPE_SECRET_KEY: "sk_test_abc",
-    STRIPE_WEBHOOK_SECRET: "whsec_abc",
+    STRIPE_WEBHOOK_SECRET: "whsec_test_abc",
     STRIPE_PRICE_SOLO_MONTHLY:     "price_solo_monthly",
     STRIPE_PRICE_PRACTICE_MONTHLY: "price_practice_monthly",
     STRIPE_PRICE_FIRM_ANNUAL:      "price_firm_annual",
@@ -695,7 +695,7 @@ group("settings");
   expect(stripe.configured === true && body.environment.stripeMode === "test",
     "the Stripe key MODE is reported from its prefix");
   const raw = JSON.stringify(body);
-  expect(!raw.includes("sk_test_abc") && !raw.includes("whsec_abc"),
+  expect(!raw.includes("sk_test_abc") && !raw.includes("whsec_test_abc"),
     "and no secret value appears anywhere in the response — this endpoint says yes or no, " +
     "and a config report that echoes secrets is a way to exfiltrate them");
 

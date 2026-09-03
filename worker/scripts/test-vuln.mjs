@@ -177,11 +177,49 @@ console.log("\nDetector: dangerous eval / exec\n");
   expect(f && f.severity === "high", "new Function() flagged");
 }
 
-// 16. Python exec → high
+// 16. Python exec → still raised, now at the severity its evidence supports
 {
   const out = analyzeVuln({ files: [{ path: "run.py", content: 'exec(open(path).read())' }] });
   const f = out.findings.find(x => x.type === "use_of_exec");
-  expect(f && f.severity === "high", "exec() flagged high");
+  // This asserted `high` until the registry's own `confidence: "low"` was taken
+  // seriously. The rule matches a call SHAPE and cannot see whether the
+  // argument is attacker-influenced, which is the same reason the pattern SQL
+  // rules were graded down: if a traced finding and a shape match carry the
+  // same severity, confidence carries no information. The finding is still
+  // raised, still listed, still says what to check.
+  expect(f && f.severity === "medium", "a bare Python exec() is still raised, at medium");
+  // The concatenation-fed variant IS the evidence, and keeps its critical.
+  const inj = analyzeVuln({ files: [{ path: "img.js", content: 'exec(`convert ${userFile} out.png`)' }] });
+  expect(inj.findings.some(x => x.type === "command_injection" && x.severity === "critical"),
+    "…while a command assembled from a variable stays critical");
+}
+
+// 16b. A method DEFINITION named `exec` spawns nothing.
+{
+  // The lookbehind added for `regex.exec()` did not cover `async exec(sql) {`,
+  // where the preceding character is a space. Three sites on this repository
+  // were reported that way — a D1 stub, a SQLite adapter, a test double — none
+  // of which can execute a process. Defining a method called `exec` is a name.
+  const defs = [
+    'async exec(sql) {\n  db.exec(sql);\n}',
+    '  exec(sql) {\n    return this.db.exec(sql);\n  }',
+    'function exec(a) { return a; }',
+    'def exec(self):\n    pass',
+  ];
+  for (const content of defs) {
+    const out = analyzeVuln({ files: [{ path: "a.js", content }] });
+    expect(!out.findings.some(x => x.type === "use_of_exec"),
+      `a definition is not a call: ${JSON.stringify(content.split("\n")[0])}`);
+  }
+  // …and the true positives the lookbehind must never swallow.
+  const py = analyzeVuln({ files: [{ path: "run.py", content: 'exec(open(path).read())' }] });
+  expect(py.findings.some(x => x.type === "use_of_exec"), "a bare Python exec() still fires");
+  const cp = analyzeVuln({ files: [{ path: "a.js",
+    content: 'const { exec } = require("child_process");\nexec(cmd);' }] });
+  expect(cp.findings.some(x => x.type === "use_of_exec"),
+    "a destructured child_process exec still fires");
+  const re = analyzeVuln({ files: [{ path: "a.js", content: 'const m = FRAME_RE.exec(line);' }] });
+  expect(!re.findings.some(x => x.type === "use_of_exec"), "RegExp.prototype.exec stays quiet");
 }
 
 // 17. Comment containing eval is NOT flagged

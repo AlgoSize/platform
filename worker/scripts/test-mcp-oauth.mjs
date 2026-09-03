@@ -430,7 +430,7 @@ group("token — confidential client authentication");
 
   const wrong = await worker.fetch(postForm("/api/mcp/oauth/token", {
     grant_type: "refresh_token", client_id: c.client_id,
-    client_secret: "mcps_wrong", refresh_token: pair.refreshToken,
+    client_secret: "mcps_test_wrong_secret", refresh_token: pair.refreshToken,
   }), env, ctx);
   expect(wrong.status === 401, "…and a wrong secret is refused");
 

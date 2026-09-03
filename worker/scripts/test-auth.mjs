@@ -24,7 +24,7 @@ import {
 
 // 32+ chars required by requireSecret().
 const SECRET       = "test-secret-please-do-not-use-in-prod-xxxxxxxx";
-const OTHER_SECRET = "another-secret-also-32-or-more-characters-yyyy";
+const OTHER_SECRET = "other-test-secret-also-32-or-more-chars-yyyy";
 
 let failures = 0;
 const ok   = (msg) => console.log(`  \x1b[32m✓\x1b[0m ${msg}`);
