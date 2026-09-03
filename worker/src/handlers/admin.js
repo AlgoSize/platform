@@ -601,6 +601,15 @@ const MIGRATIONS = Object.freeze([
     // has nowhere to record that an external agent fixed a finding, so the
     // patch history reads empty when it is merely unstored.
     checks: [{ table: "scan_patches", column: "patch_hash" }] },
+  { id: "0028", name: "compliance",
+    // Compliance & release audit. Absent, an attestation has nowhere to be
+    // stored and publishing an audit fails outright — but the coverage map
+    // still renders, so the page looks healthy while every human claim about
+    // the controls no analyzer can see silently disappears. That is the exact
+    // shape of failure this manifest exists to make visible.
+    checks: [{ table: "compliance_attestations",   column: "expires_at" },
+             { table: "compliance_audits",         column: "retain_until" },
+             { table: "compliance_audit_controls", column: "evidence_state" }] },
 ]);
 
 /** Plain SQLite identifier — the only shape we will interpolate into a PRAGMA. */

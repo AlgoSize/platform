@@ -70,6 +70,15 @@
       glyph: "◎", route: "#/models", analyzer: null,
       answers: "Which model this platform routes each job to, what it costs per million tokens, and why.",
       cta: "Compare the models" },
+    // No analyzer, and deliberately no scorecard column. Compliance reads the
+    // scans this org already stored rather than producing a grade of its own,
+    // and inventing a column for it would be exactly the overclaim the page
+    // exists to prevent.
+    { id: "compliance", name: "Compliance & release audit", short: "the audit",
+      glyph: "§", route: "#/compliance", analyzer: null,
+      answers: "Which framework controls your scans can evidence, which need a human to attest, and which this tool cannot see at all.",
+      emptyLine: "Read from the scans already stored, so there is no separate compliance scan to schedule.",
+      cta: "Open the coverage map" },
   ];
 
   // ------------------------------------------------------------------ load
@@ -536,7 +545,10 @@
 
     if (!t.analyzer) {
       box.appendChild(el("span", { class: "ws-tool-label mono" }, "Not scheduled"));
-      box.appendChild(el("p", { class: "ws-tool-empty" },
+      // Per-tool where the generic line would be untrue. The default describes
+      // the upload-and-forget tools; a card that works differently says so
+      // rather than inheriting a sentence that does not apply to it.
+      box.appendChild(el("p", { class: "ws-tool-empty" }, t.emptyLine ||
         "This one reads a file you upload and keeps nothing, so there is no standing result to show."));
       return box;
     }

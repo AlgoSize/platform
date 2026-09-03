@@ -103,6 +103,19 @@ You represent and warrant that you have the rights needed to submit Customer Con
 - **Monitors are best-effort scheduled checks**, not a guarantee of detection or of uninterrupted nightly execution. A skipped night (upstream throttling, outages) leaves your baselines unchanged and is not a breach of these Terms.
 - **CI integrations are designed to fail safe:** a missing API key makes our workflows skip with a notice rather than fail your build. You remain responsible for your own CI configuration.
 
+### 8.1 Compliance and release evidence
+
+The Compliance & Release Audit feature produces **evidence about a codebase**. It does not certify conformity with anything.
+
+- **Algosize is not an audit firm, a certification body, or a notified body.** Nothing in the product is an audit opinion, a certificate, or a conformity assessment, and no output should be presented as one.
+- **Framework names are references, not endorsements.** Where a control from a published framework (for example NIST SP 800-218, or Annex I of the EU Cyber Resilience Act) is named, it is named to describe what a given artifact maps onto. It does not imply that Algosize is accredited by, affiliated with, or acting on behalf of any standards body or regulator, nor that your use of the product satisfies that framework.
+- **Your auditor decides what is sufficient.** We show which controls we hold an artifact for, which rest on a claim someone at your organization signed, and which this platform has no artifact for at all. Whether that evidence is sufficient for your obligations is a judgment for your auditor, your counsel, or your regulator — not for this tool.
+- **A control marked "not covered" is a statement about our coverage, not a finding about you.** It means a repository scan produces nothing bearing on that control. It is not an assessment that you fail it.
+- **Attestations are your statements.** Where you attest a control, the statement, the named owner, and the expiry date are yours. We store and display them; we do not verify them. An attestation that lapses stops counting.
+- **Published records freeze what was known then.** A published evidence record preserves each control's wording, verdict, and the numbers behind it as of its publication date. Underlying scan results stop being readable after 90 days; the frozen record does not update itself, and it is not a live statement about your codebase today.
+
+This section narrows, and does not replace, the "not legal, security, or compliance advice" statement above.
+
 ## 9. AI Features
 
 Where the Service offers AI-generated content (currently the optimizer's refactor suggestion):

@@ -44,6 +44,14 @@ export const AUDIT_ACTIONS = Object.freeze({
   // log can prove what happened without becoming a second copy of anyone's
   // source code (see fix/schemas.js).
   FIX_PROPOSED:      "fix.proposed",
+  // Compliance. An attestation is a named person putting their name to a claim
+  // an analyzer cannot check, and a published audit is a frozen assertion
+  // somebody may hand to an auditor. Both are exactly the kind of event whose
+  // absence from the log would be noticed only when it mattered most.
+  COMPLIANCE_ATTESTED:            "compliance.attested",
+  COMPLIANCE_ATTESTATION_REVOKED: "compliance.attestation_revoked",
+  COMPLIANCE_AUDIT_PUBLISHED:     "compliance.audit_published",
+  COMPLIANCE_AUDIT_SUPERSEDED:    "compliance.audit_superseded",
   PLAN_CHANGED:      "billing.plan_changed",
   FLAG_UPDATED:      "flag.updated",
   // Distinct from FLAG_UPDATED: this changes ONE subject against the flag's

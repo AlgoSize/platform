@@ -1335,6 +1335,22 @@ permalink: /dashboard/
       <div id="models-body"><div class="panel-empty">Loading…</div></div>
     </div>
 
+    <!-- Compliance & release audit ---------------------------------------
+         Reached from a Workspace tool card, not a tab: the header stays at
+         two tabs, and this is a tool like the scanner or the X-ray. -->
+    <div id="view-compliance" class="dash-view" hidden>
+      <div class="dash-head">
+        <span class="eyebrow">Compliance &amp; release audit</span>
+        <h2 class="dash-view-title">Which framework controls your scans can evidence — and which they cannot.</h2>
+        <p class="lede">
+          Every control in the framework is listed, and each carries two separate answers: how we know,
+          and what the answer is. Nothing renders as passing without an artifact behind it, and the
+          controls this platform has no artifact for say so plainly rather than reading as failures.
+        </p>
+      </div>
+      <div id="compliance-body"><div class="panel-empty">Loading…</div></div>
+    </div>
+
     <div id="view-account" class="dash-view" hidden>
       <div class="dash-head">
         <span class="eyebrow">Account</span>
@@ -1548,4 +1564,5 @@ permalink: /dashboard/
     <script src="{{ '/assets/js/dash-mcp.js' | relative_url }}" defer></script>
     <script src="{{ '/assets/js/dash-pipeline.js' | relative_url }}" defer></script>
     <script src="{{ '/assets/js/dash-models.js' | relative_url }}" defer></script>
+    <script src="{{ '/assets/js/dash-compliance.js' | relative_url }}" defer></script>
 <script src="{{ '/assets/js/dash-router.js' | relative_url }}" defer></script>
