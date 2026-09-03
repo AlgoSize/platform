@@ -54,6 +54,10 @@
     { id: "cost",      name: "Cloud cost analyzer",   short: "the analyzer",
       glyph: "◴", route: "#/cost", analyzer: null,
       answers: "Where an existing AWS bill is going, and the savings ranked by size.",
+      // The one card the generic default was actually written about. Stated
+      // explicitly now that every sibling carries its own line, so the default
+      // is a fallback rather than a description of any particular tool.
+      emptyLine: "This one reads a file you upload and keeps nothing, so there is no standing result to show.",
       cta: "Read a CUR file" },
     // Not an analyzer, and deliberately in the same grid anyway: connecting an
     // assistant is something you do to the whole workspace, and burying it in
@@ -61,14 +65,17 @@
     { id: "mcp",       name: "MCP connections",      short: "MCP",
       glyph: "⇄", route: "#/mcp", analyzer: null,
       answers: "Run every tool on this page from Claude Code, Claude Desktop, Claude.ai or Cursor.",
+      emptyLine: "A connection, not a scan. Once an assistant is connected it runs the tools on this page itself.",
       cta: "Connect an assistant" },
     { id: "pipeline",  name: "Fix pipeline",         short: "the pipeline",
       glyph: "⚙", route: "#/pipeline", analyzer: null,
       answers: "Pick a model for each fix stage, see the per-finding cost, or route the fix to your own agent.",
+      emptyLine: "Configuration, not a measurement. What is set here decides how the next fix run is routed.",
       cta: "Tune the pipeline" },
     { id: "models",    name: "Model explorer",       short: "the models",
       glyph: "◎", route: "#/models", analyzer: null,
       answers: "Which model this platform routes each job to, what it costs per million tokens, and why.",
+      emptyLine: "A registry view. It reads the same routing table the platform uses, so there is nothing of your own to show here.",
       cta: "Compare the models" },
     // No analyzer, and deliberately no scorecard column. Compliance reads the
     // scans this org already stored rather than producing a grade of its own,
