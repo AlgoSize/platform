@@ -226,6 +226,32 @@ export function toSarif(result, { runId = null, siteOrigin = "" } = {}) {
       // unrelated edits move it down the file, instead of closing it and
       // opening a new one on every commit.
       partialFingerprints: { algosizeFinding: f.fingerprint },
+      // An accepted risk is SUPPRESSED here, not omitted.
+      //
+      // SARIF has a word for this and GitHub renders it: the alert shows as
+      // closed-and-suppressed with the justification attached, rather than
+      // silently absent from the Security tab. Dropping the result would make
+      // the export disagree with the report, and would make an acceptance
+      // indistinguishable from a fix.
+      //
+      // The `level` and the rule's security-severity are UNTOUCHED: accepting
+      // a risk does not make it less severe, only differently owned. And no
+      // suffixed rule id is minted (unlike the test-code cap, which changes
+      // severity and therefore must fork the rule) — a second id would fork
+      // GitHub's alert history for no gain.
+      //
+      // A drifted or expired acceptance emits nothing here. Both are open.
+      ...(f.accepted && f.acceptance ? {
+        suppressions: [{
+          kind: "external",
+          status: "accepted",
+          justification: f.acceptance.rationale,
+          properties: {
+            owner: f.acceptance.ownerEmail,
+            ...(f.acceptance.expiresOn ? { expiresOn: f.acceptance.expiresOn } : {}),
+          },
+        }],
+      } : {}),
       properties: {
         confidence: f.confidence,
         category: f.category,

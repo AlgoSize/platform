@@ -233,6 +233,101 @@ group("the frozen constants are registered");
 }
 
 // ===========================================================================
+group("an accepted finding is suppressed in SARIF, never absent");
+// ===========================================================================
+{
+  const { toSarif } = await import("../src/analyzers/sarif.js");
+
+  const base = {
+    ...finding(),
+    title: "Request data reaches dynamic code evaluation",
+    recommendation: "Remove the dynamic evaluation.",
+    confidence: "high", module: "ast-analyzer", cwe: ["CWE-95"],
+  };
+  const [acceptedF] = apply([base], [acceptance()]);
+  const [expiredF]  = apply([base], [acceptance({ expiresAt: NOW - 1 })]);
+
+  const sarifOf = (f) => toSarif({ source: { findings: [f] }, advisories: [] });
+  const resultOf = (doc) => doc.runs[0].results[0];
+
+  const a = resultOf(sarifOf(acceptedF));
+  expect(Array.isArray(a.suppressions) && a.suppressions.length === 1,
+    "an accepted finding carries a SARIF suppression");
+  expect(a.suppressions[0].justification === acceptedF.acceptance.rationale,
+    "…with the written reason as its justification, so the Security tab shows why");
+  expect(a.suppressions[0].properties.owner === "owner@acme.test",
+    "…and the accountable owner");
+  expect(a.level === "error",
+    "…while the level is untouched: accepting a risk does not make it less severe");
+  expect(a.partialFingerprints.algosizeFinding === base.fingerprint,
+    "…and the fingerprint is unchanged, so GitHub keeps one alert rather than opening a second");
+  expect(!/\.accepted$/.test(a.ruleId),
+    "…and no suffixed rule id is minted, which would fork the alert history");
+
+  const e = resultOf(sarifOf(expiredF));
+  expect(!e.suppressions,
+    "an EXPIRED acceptance emits no suppression — the finding is open again");
+
+  const plain = resultOf(sarifOf(base));
+  expect(!plain.suppressions, "and a finding nobody signed for carries none");
+}
+
+// ===========================================================================
+group("the dashboard shows what is open AND what was signed for");
+// ===========================================================================
+{
+  const SITE = join(__dirname, "..", "..", "site");
+  const dash = readFileSync(join(SITE, "assets", "js", "dashboard.js"), "utf8");
+  const css = readFileSync(join(SITE, "assets", "css", "main.css"), "utf8");
+
+  // The stat row must read the OPEN count. Reading `summary.bySeverity` there
+  // would show the total and call it open.
+  expect(/summary\.open && src\.summary\.open\.bySeverity/.test(dash),
+    "the severity cards read summary.open.bySeverity");
+
+  // The pairing. "0 open" without "1 accepted" beside it is the lie this
+  // feature must not become, so both come out of the same block — a future
+  // edit cannot drop one and keep the other without noticing.
+  // The pairing, checked by PROXIMITY rather than by a quoted literal: the
+  // accepted card must be built in the same run of code as the severity cards,
+  // close enough that an edit removing one cannot plausibly miss the other.
+  // Anchored on the open-count read, because `result-stats-4` appears in
+  // several renderers and the first one is not this one.
+  const openAt = dash.indexOf("src.summary.open.bySeverity");
+  const statsAt = dash.indexOf("result-stats result-stats-4", openAt);
+  const acceptedAt = dash.indexOf("sast-stat-accepted", openAt);
+  expect(openAt > 0 && statsAt > openAt && acceptedAt > statsAt && acceptedAt - statsAt < 600,
+    "…and the accepted card is emitted beside the severity cards, not in a branch of its own");
+
+  // A credential is not acceptable, and the UI says why rather than silently
+  // omitting the button and leaving the reader to wonder.
+  expect(/f\.category === "secrets" \|\| f\.category === "dependency"/.test(dash),
+    "no accept affordance is offered for a secret or a dependency advisory");
+  expect(/rotated\./.test(dash) && /upgraded\./.test(dash),
+    "…and each refusal says what to do instead");
+
+  // Drifted and expired are OPEN findings, and the card must not read as calm.
+  // The class is composed at runtime ("sast-accept-" + state), so the check is
+  // that each state is a named case with its own words and its own style —
+  // not that a literal class string appears in the source.
+  expect(/"sast-accept sast-accept-" \+ state/.test(dash),
+    "the acceptance panel takes its class from the state");
+  for (const state of ["drifted", "expired"]) {
+    expect(new RegExp(`${state}:\\s*"`).test(dash),
+      `the ${state} state has a label of its own, not a shared one`);
+    expect(css.includes(`.sast-accept-${state}`), `…and its own style`);
+  }
+  expect(/counted as open/.test(dash),
+    "both say in words that the finding is still counted as open");
+
+  // Every class the renderer emits has a rule behind it.
+  const emitted = [...dash.matchAll(/class: "(sast-accept[a-z-]*)"/g)].map((m) => m[1]);
+  const unstyled = [...new Set(emitted)].filter((c) => !css.includes("." + c));
+  expect(unstyled.length === 0,
+    "every acceptance class is styled" + (unstyled.length ? ` — ${unstyled.join(", ")}` : ""));
+}
+
+// ===========================================================================
 console.log();
 if (failures === 0) {
   console.log("\x1b[32m  all accepted-risk tests passed\x1b[0m\n");

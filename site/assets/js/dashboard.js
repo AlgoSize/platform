@@ -578,6 +578,17 @@
     if (cov.suppressedInTests) {
       meta += " · " + cov.suppressedInTests + " in test files not shown";
     }
+    // Same reasoning as the line above: a reader deciding whether a clean
+    // result means anything has to know what was deliberately moved out of it.
+    var acc = (src.summary && src.summary.accepted) || null;
+    if (acc && acc.total) meta += " · " + acc.total + " accepted risk" + (acc.total === 1 ? "" : "s");
+    if (src.summary && src.summary.drifted) {
+      meta += " · " + src.summary.drifted + " acceptance" +
+        (src.summary.drifted === 1 ? "" : "s") + " no longer matching the code";
+    }
+    if (src.summary && src.summary.expiredAcceptances) {
+      meta += " · " + src.summary.expiredAcceptances + " expired";
+    }
     wrap.appendChild(el("p", { class: "result-item-meta mono" }, meta));
 
     if (!findings.length) {
@@ -585,12 +596,22 @@
       return;
     }
 
-    var counts = (src.summary && src.summary.bySeverity) || {};
+    // OPEN counts, not total. A finding a named person has signed for, with a
+    // written reason and a date it runs out, is not an unremediated defect —
+    // but "0 open" without "1 accepted" beside it is the lie this must never
+    // become, so both come out of ONE loop. No future edit can drop half of a
+    // pairing that is not built as a pair.
+    var open = (src.summary && src.summary.open && src.summary.open.bySeverity)
+      || (src.summary && src.summary.bySeverity) || {};
+    var acceptedCount = (src.summary && src.summary.accepted && src.summary.accepted.total) || 0;
     var stats = el("div", { class: "result-stats result-stats-4" });
     SEV_ORDER.forEach(function (sev) {
-      if (sev === "info" && !counts.info) return;
-      stats.appendChild(statCard(sev, String(counts[sev] || 0), "sev-" + sev));
+      if (sev === "info" && !open.info) return;
+      stats.appendChild(statCard(sev, String(open[sev] || 0), "sev-" + sev));
     });
+    if (acceptedCount) {
+      stats.appendChild(statCard("accepted", String(acceptedCount), "sast-stat-accepted"));
+    }
     wrap.appendChild(stats);
 
     // Filters. Built from what is actually present rather than from a fixed
@@ -734,8 +755,116 @@
     // rule to validate against, so they are read-only here too.
     if (fixCtx && fixCtx.repoUrl && f.fingerprint && f.module !== "sarif-import") {
       card.appendChild(sastFixZone(f, fixCtx.repoUrl));
+      card.appendChild(sastAcceptZone(f, fixCtx.repoUrl));
     }
     return card;
+  }
+
+  /**
+   * The accepted-risk affordance, and the record when one exists.
+   *
+   * Deliberately SECONDARY to "Generate validated fix": accepting a risk is
+   * the answer when fixing is not available, not an equally good alternative
+   * to it. The button is ghost-styled and sits below.
+   *
+   * Three states carry a record, and only one of them grants anything:
+   *   accepted  the finding is out of the open count. Say who, why, until when.
+   *   drifted   an acceptance was signed here and the code has since changed.
+   *             The finding is OPEN. Say so, and say what to re-confirm.
+   *   expired   the date passed. OPEN, at full severity, still naming who let
+   *             it lapse — which is more useful than the acceptance vanishing.
+   */
+  function sastAcceptZone(f, repoUrl) {
+    var a = f.acceptance || null;
+
+    if (a) {
+      var state = a.state || "accepted";
+      var box = el("div", { class: "sast-accept sast-accept-" + state });
+      var LABEL = {
+        accepted: "Accepted risk",
+        drifted:  "Acceptance no longer matches this code",
+        expired:  "Acceptance expired",
+      };
+      box.appendChild(el("span", { class: "sast-accept-tag mono" }, LABEL[state] || LABEL.accepted));
+      box.appendChild(el("p", { class: "sast-accept-why" }, a.rationale || ""));
+      box.appendChild(el("p", { class: "sast-accept-meta mono" },
+        "signed by " + (a.ownerEmail || "unknown") +
+        (a.expiresOn ? " · " + (state === "expired" ? "expired " : "expires ") + a.expiresOn : "")));
+      if (a.documentUrl) {
+        box.appendChild(el("a", {
+          class: "sast-accept-doc mono", href: a.documentUrl,
+          target: "_blank", rel: "noopener noreferrer",
+        }, "supporting document →"));
+      }
+      if (state === "drifted") {
+        box.appendChild(el("p", { class: "sast-accept-note" },
+          "This finding is counted as open. The code changed under the signature, " +
+          "so somebody has to look again rather than the old decision carrying over."));
+      }
+      if (state === "expired") {
+        box.appendChild(el("p", { class: "sast-accept-note" },
+          "This finding is counted as open, at its full severity. Renew the acceptance or fix it."));
+      }
+      return box;
+    }
+
+    // A committed credential is not a risk you accept. Say why, rather than
+    // silently omitting the control and leaving the reader to wonder.
+    if (f.category === "secrets" || f.category === "dependency") {
+      return el("p", { class: "sast-accept-refused mono" },
+        f.category === "secrets"
+          ? "A committed credential cannot be accepted as a risk — it is rotated."
+          : "A dependency advisory cannot be accepted as a risk — it is upgraded.");
+    }
+
+    var zone = el("div", { class: "sast-accept-zone" });
+    var btn = el("button", { class: "btn btn-ghost btn-sm", type: "button" }, "Accept this risk");
+    var form = el("div", { class: "sast-accept-form", hidden: "hidden" });
+
+    var why = el("textarea", {
+      class: "input", rows: "3",
+      placeholder: "Why this will not be fixed, and what bounds it.",
+    });
+    var owner = el("input", { class: "input", type: "email", placeholder: "accountable owner's email" });
+    var until = el("input", { class: "input", type: "date" });
+    var doc = el("input", { class: "input", type: "url", placeholder: "https://… supporting document (optional)" });
+    var msg = el("p", { class: "sast-accept-msg mono" });
+
+    [["Why", why], ["Owner", owner], ["Expires", until], ["Document", doc]].forEach(function (pair) {
+      var row = el("label", { class: "sast-accept-field" });
+      row.appendChild(el("span", { class: "sast-accept-label mono" }, pair[0]));
+      row.appendChild(pair[1]);
+      form.appendChild(row);
+    });
+
+    var save = el("button", { class: "btn btn-sm", type: "button" }, "Sign acceptance");
+    save.addEventListener("click", function () {
+      msg.textContent = "";
+      callApi("/api/accepted-risks", {
+        repoUrl: repoUrl,
+        ruleId: f.ruleId,
+        path: f.path,
+        fingerprint: f.fingerprint,
+        severity: f.severity,
+        rationale: why.value.trim(),
+        ownerEmail: owner.value.trim(),
+        expiresAt: until.value,
+        documentUrl: doc.value.trim() || undefined,
+      }, "POST").then(function () {
+        msg.textContent = "Signed. Re-run the scan to see it applied.";
+      }).catch(function (err) {
+        // The API's refusals are written to be read by a person; show them
+        // rather than replacing them with a generic failure.
+        msg.textContent = (err && err.message) || "The acceptance could not be stored.";
+      });
+    });
+    form.appendChild(save);
+    form.appendChild(msg);
+
+    btn.addEventListener("click", function () { form.hidden = !form.hidden; });
+    zone.appendChild(btn);
+    zone.appendChild(form);
+    return zone;
   }
 
   /**
