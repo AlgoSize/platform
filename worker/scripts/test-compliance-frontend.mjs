@@ -385,6 +385,17 @@ group("Wiring");
     "with no analyzer — there is no scorecard grade to invent for it");
   expect(ws.includes("t.emptyLine ||"),
     "and the card's empty line is per-tool, so it does not inherit a sentence that is untrue of it");
+
+  // Every card with no analyzer must say what it IS. The shared default was
+  // written about the CUR uploader and is false of a connection surface, a
+  // config screen and a registry view; leaving any of them on it puts a
+  // sentence on the screen that is not true of the thing beside it.
+  const tools = ws.slice(ws.indexOf("var TOOLS = ["), ws.indexOf("];", ws.indexOf("var TOOLS = [")));
+  const missing = tools.split(/\{\s*id:/).slice(1)
+    .filter((chunk) => /analyzer:\s*null/.test(chunk) && !/emptyLine:/.test(chunk))
+    .map((chunk) => (chunk.match(/^\s*"([\w-]+)"/) || [, "?"])[1]);
+  expect(missing.length === 0,
+    `every analyzer-less card carries its own empty line${missing.length ? " — missing: " + missing.join(", ") : ""}`);
 }
 
 // ---------------------------------------------------------------------------
