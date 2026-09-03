@@ -5,7 +5,7 @@ description: Every NIST SSDF v1.1 practice mapped to the Algosize document or sc
 permalink: /security/compliance/ssdf-mapping/
 ---
 
-**Last updated: 3 September 2026** · Catalog version `2026-09-02.1`
+**Last updated: 3 September 2026** · Catalog version `2026-09-03.1`
 
 Every practice in **NIST SSDF SP 800-218 v1.1** — all 41 — mapped to
 the document or artifact that evidences it. Part of the
@@ -49,7 +49,7 @@ product itself asserts.
 | **PS.3.1** | Securely archive the files and supporting data for each software release | `not covered` | [PS-02]({{ '/security/compliance/ps-02-release-integrity/' | relative_url }}) | Document only | Release archives are outside the scan. |
 | **PS.3.2** | Collect, safeguard, maintain and share provenance data for all components of each release | `automated` | [PS-02]({{ '/security/compliance/ps-02-release-integrity/' | relative_url }}) | Scan artifact | Evidenced from stored scan runs. |
 | **PW.1.1** | Use forms of risk modeling — threat modeling, attack modeling — to assess risk | `not covered` | [PW-01]({{ '/security/compliance/pw-01-design-risk/' | relative_url }}) | Document only | Threat modelling is a design activity. No analyzer here performs or detects it. |
-| **PW.1.2** | Track and maintain the software's security requirements, risks and design decisions | `automated` | [PW-01]({{ '/security/compliance/pw-01-design-risk/' | relative_url }}) | Scan artifact | Evidenced from stored scan runs. |
+| **PW.1.2** | Track and maintain the software's security requirements, risks and design decisions | `attested` | [PW-01a]({{ '/security/compliance/pw-01a-threat-model/' | relative_url }}) | Signed statement | A records practice, not a scan output. Was `automated` on the architecture map, which describes what the system IS rather than which risks were weighed against it. |
 | **PW.1.3** | Build in support for standardized security features and services | `not covered` | [PW-01]({{ '/security/compliance/pw-01-design-risk/' | relative_url }}) | Document only | Whether a design chose standard features is a review judgment, not a scan output. |
 | **PW.2.1** | Have one or more qualified people review the software design | `not covered` | [PW-02]({{ '/security/compliance/pw-02-design-review/' | relative_url }}) | Document only | Design review leaves no artifact the analyzer reads. |
 | **PW.4.1** | Acquire and maintain well-secured software components from third parties | `automated` | [PO-01]({{ '/security/compliance/po-01-security-requirements/' | relative_url }}), [RV-02]({{ '/security/compliance/rv-02-vuln-response/' | relative_url }}) | Scan artifact | Evidenced from stored scan runs. |
@@ -77,8 +77,8 @@ product itself asserts.
 
 | Coverage | Count |
 |---|---|
-| `automated` | 12 |
-| `attested` | 6 |
+| `automated` | 11 |
+| `attested` | 7 |
 | `not covered` | 23 |
 | **Total** | **41** |
 

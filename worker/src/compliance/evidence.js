@@ -515,29 +515,23 @@ export function secureBaseline({ runs }) {
   });
 }
 
-/**
- * PW.1.2 — track the software's security requirements, risks and design.
- *
- * The architecture map is real supporting material and is attached as such. It
- * is still a dependency graph, and a dependency graph is not a threat model, so
- * this caps below `met` by construction — the control needs an attestation to
- * go further, and the rationale says so rather than leaving the reader to guess.
- */
-export function designRecord({ runs }) {
-  const { run, missing } = newest(runs, "arch", "an architecture record");
-  if (missing) return missing;
-
-  const summary = (run.result && run.result.summary) || {};
-  const nodes = summary.nodes || 0;
-  const edges = summary.edges || 0;
-
-  return baseFrom(run, {
-    verdict: "insufficient_evidence",
-    asserted: `${nodes} components · ${edges} relationships mapped`,
-    rationale:
-      `An architecture map of ${nodes} components and ${edges} relationships was captured, and is attached as supporting material. It records what the system is, not which risks were considered or which design decisions were taken against them — attest this control to say who owns that record.`,
-  });
-}
+// PW.1.2's `designRecord` collector was RETIRED here, and the reason is worth
+// keeping where the next person will look for it.
+//
+// It read the architecture map, hardcoded `insufficient_evidence`, and told
+// the reader to "attest this control to say who owns that record" — while
+// PW.1.2 was classified `automated`, which means the resolver never reads an
+// attestation for it and the API refuses to create one ("An attestation cannot
+// override a measurement"). The remedy it printed was one the product forbade.
+//
+// The collector's sentence was right and the classification was wrong. PW.1.2
+// is now `attested`: a dependency graph describes what the system IS, not
+// which risks were weighed against it, and that is a records practice no
+// analyzer can evidence. The standing threat model at site/compliance/ is what
+// an attestation now points to.
+//
+// Nothing replaced it. A collector that can only ever say "insufficient" is
+// not evidence, it is a placeholder that looks like evidence.
 
 /**
  * RV.1.1 — gather information about vulnerabilities from public sources.
@@ -707,7 +701,6 @@ export const COLLECTORS = Object.freeze({
   secureCoding,
   codeAnalysisPerformed,
   secureBaseline,
-  designRecord,
   advisoryIntake,
   repeatedReview,
   riskInformation,

@@ -5,7 +5,7 @@ description: EU Cyber Resilience Act Annex I Part II obligations mapped to the A
 permalink: /security/compliance/cra-mapping/
 ---
 
-**Last updated: 3 September 2026** · Catalog version `2026-09-02.1`
+**Last updated: 3 September 2026** · Catalog version `2026-09-03.1`
 
 All 8 vulnerability-handling obligations of **EU Cyber Resilience Act,
 Annex I, Part II**, mapped to the document or artifact that evidences each. Part

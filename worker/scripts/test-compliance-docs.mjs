@@ -69,6 +69,27 @@ group("the mapping tables cannot drift from the product's own catalog");
       (wrong.length ? ` — wrong on ${wrong.join(", ")}` : ""));
     expect(doc.includes(String(fw.controls.length)),
       `${name}: the table states its own control count (${fw.controls.length})`);
+
+    // The per-coverage summary, derived from the catalog rather than trusted.
+    //
+    // The per-row coverage words above cannot drift, because each is read from
+    // the catalog. The SUMMARY table underneath them was a different story: it
+    // hardcodes "automated | 12", "attested | 6", and nothing checked it.
+    // Reclassifying one control left those numbers stale and every test green,
+    // which is the exact shape of failure this suite exists to catch — a
+    // document quietly describing a product that has moved.
+    const counts = {};
+    for (const c of fw.controls) counts[c.coverage] = (counts[c.coverage] || 0) + 1;
+    const stale = [];
+    for (const [coverage, n] of Object.entries(counts)) {
+      const row = new RegExp(`\\|\\s*\`${LABEL[coverage]}\`\\s*\\|\\s*(\\d+)\\s*\\|`);
+      const m = doc.match(row);
+      if (!m) continue;             // a table without a summary is allowed
+      if (Number(m[1]) !== n) stale.push(`${LABEL[coverage]}: says ${m[1]}, catalog has ${n}`);
+    }
+    expect(stale.length === 0,
+      `${name}: the coverage summary matches the catalog` +
+      (stale.length ? ` — ${stale.join("; ")}` : ""));
   }
 
   // A catalog bump changes what the product asserts, so it has to force a doc
