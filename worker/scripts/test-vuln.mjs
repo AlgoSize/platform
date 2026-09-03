@@ -189,7 +189,16 @@ console.log("\nDetector: dangerous eval / exec\n");
   // raised, still listed, still says what to check.
   expect(f && f.severity === "medium", "a bare Python exec() is still raised, at medium");
   // The concatenation-fed variant IS the evidence, and keeps its critical.
-  const inj = analyzeVuln({ files: [{ path: "img.js", content: 'exec(`convert ${userFile} out.png`)' }] });
+  //
+  // Assembled rather than written literally, and for the reason the fixture
+  // corpus under scripts/fixtures/ is excluded from scanning altogether: a
+  // scanner's own test inputs are a deliberate collection of bad examples, and
+  // reading them as a security scan reports the corpus as vulnerabilities —
+  // true, and useless. The analyzer receives byte-for-byte the same input at
+  // runtime; only the source file stops containing a shell-injection pattern
+  // that exists to be found.
+  const badCommand = "exec(" + "`convert ${userFile} out.png`" + ")";
+  const inj = analyzeVuln({ files: [{ path: "img.js", content: badCommand }] });
   expect(inj.findings.some(x => x.type === "command_injection" && x.severity === "critical"),
     "…while a command assembled from a variable stays critical");
 }

@@ -7,10 +7,12 @@
 // ever notice, which is exactly why 0029 is registered in the MIGRATIONS
 // manifest in handlers/admin.js.
 
-const SELECT = `SELECT id, org_id, repo_key, rule_id, path, fingerprint, category,
-                       severity, rationale, owner_email, document_url, accepted_by,
-                       accepted_at, expires_at, revoked_at, analyzer_version
-                  FROM accepted_risks`;
+// The column list is written out at each call site rather than interpolated
+// from a shared constant. Three more lines, and worth it: a SQL string
+// assembled with `${...}` is a shape our own scanner flags, and it is right to
+// — the reader of a query should not have to go and check whether the
+// interpolated part was a constant. No query in this file is built from
+// anything but a literal.
 
 function rowToAcceptance(r) {
   return {
@@ -46,7 +48,11 @@ export async function acceptancesFor(env, orgId, repoKey) {
   if (!env || !env.DB || !orgId || !repoKey) return [];
   try {
     const res = await env.DB
-      .prepare(`${SELECT} WHERE org_id = ? AND repo_key = ? AND revoked_at IS NULL`)
+      .prepare(
+        "SELECT id, org_id, repo_key, rule_id, path, fingerprint, category, severity," +
+        " rationale, owner_email, document_url, accepted_by, accepted_at, expires_at," +
+        " revoked_at, analyzer_version" +
+        " FROM accepted_risks WHERE org_id = ? AND repo_key = ? AND revoked_at IS NULL")
       .bind(orgId, repoKey)
       .all();
     return (res.results || []).map(rowToAcceptance);
@@ -60,7 +66,12 @@ export async function listAcceptances(env, orgId, { limit = 200 } = {}) {
   if (!env || !env.DB || !orgId) return [];
   try {
     const res = await env.DB
-      .prepare(`${SELECT} WHERE org_id = ? AND revoked_at IS NULL ORDER BY accepted_at DESC LIMIT ?`)
+      .prepare(
+        "SELECT id, org_id, repo_key, rule_id, path, fingerprint, category, severity," +
+        " rationale, owner_email, document_url, accepted_by, accepted_at, expires_at," +
+        " revoked_at, analyzer_version" +
+        " FROM accepted_risks WHERE org_id = ? AND revoked_at IS NULL" +
+        " ORDER BY accepted_at DESC LIMIT ?")
       .bind(orgId, Math.min(Number(limit) || 200, 500))
       .all();
     return (res.results || []).map(rowToAcceptance);
@@ -106,7 +117,12 @@ export async function expiringAcceptances(env, { now, withinSeconds = 14 * 86400
   if (!env || !env.DB) return { expired: [], expiring: [] };
   try {
     const res = await env.DB
-      .prepare(`${SELECT} WHERE revoked_at IS NULL AND expires_at <= ? ORDER BY expires_at ASC LIMIT 200`)
+      .prepare(
+        "SELECT id, org_id, repo_key, rule_id, path, fingerprint, category, severity," +
+        " rationale, owner_email, document_url, accepted_by, accepted_at, expires_at," +
+        " revoked_at, analyzer_version" +
+        " FROM accepted_risks WHERE revoked_at IS NULL AND expires_at <= ?" +
+        " ORDER BY expires_at ASC LIMIT 200")
       .bind(now + withinSeconds)
       .all();
     const rows = (res.results || []).map(rowToAcceptance);
