@@ -449,20 +449,48 @@ entitlement and price id — the columns are storage, not permission — so a
 lapsed Firm subscription stops white-labelling on its next report without
 anyone clearing the row.
 
-#### 2.5.10 Apply the remaining migrations (0009 – 0014)
+#### 2.5.10 Apply the remaining migrations (0009 onward)
 
 Everything from 0009 onward is applied as a block. Sections 2.5.3 and 2.5.9
 each documented a single migration, which does not scale — the authority on
 what a database is missing is `GET /api/admin/schema-check`, not this list.
 
+> **This section was wrong, and it was wrong in the direction that hides
+> things.** The heading said "0009 – 0014" and the glob read
+> `migrations/0009_*.sql migrations/001*.sql`, which stops at 0019. Nine
+> migrations — 0020 through 0028: flag overrides, MCP session refs, monitor
+> skips, scorecard evidence, source findings, AI usage, the fix pipeline, scan
+> patches, compliance — had no written apply procedure at all. Each of them
+> fails quietly when absent: the page renders, the feature is simply not there.
+> That is exactly why the `MIGRATIONS` manifest in `worker/src/handlers/admin.js`
+> exists and why `schema-check` is the authority. **Ask it first.**
+
 ```bash
 cd worker
-for f in migrations/0009_*.sql migrations/001*.sql; do
+
+# 1. What is actually missing? This queries the live database; nothing in the
+#    repository can tell you.
+curl -s -H "Cookie: $ADMIN_SESSION" \
+  https://algosize.com/api/admin/schema-check | jq '.missing'
+
+# 2. Apply everything from 0009 on. Re-applying is safe — every migration is
+#    written with IF NOT EXISTS — so when in doubt, run the whole block.
+for f in $(ls migrations/*.sql | sort); do
+  case "$(basename "$f")" in 000[0-8]_*) continue ;; esac
   echo "--- $f"
   ./node_modules/.bin/wrangler d1 execute algosize --config wrangler.toml \
     --env production --remote --file="$f"
 done
+
+# 3. Confirm. `missing` must come back empty.
+curl -s -H "Cookie: $ADMIN_SESSION" \
+  https://algosize.com/api/admin/schema-check | jq '.missing'
 ```
+
+The glob is `ls migrations/*.sql | sort` with the pre-0009 files skipped, rather
+than a hand-written pattern, so a new migration is picked up by existing.
+`0029_accepted_risks.sql` is the most recent; it does not need adding here, and
+neither will the next one.
 
 Every statement is `CREATE TABLE IF NOT EXISTS` or a single `ALTER TABLE …
 ADD COLUMN`, so re-running the block is safe except for the two `ALTER`

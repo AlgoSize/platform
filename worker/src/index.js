@@ -162,6 +162,9 @@ import {
   getAuditHandler,
   downloadPackHandler,
 } from "./handlers/compliance.js";
+import {
+  listAcceptedRisksHandler, createAcceptedRiskHandler, revokeAcceptedRiskHandler,
+} from "./handlers/accepted_risks.js";
 import { stageModelsHandler, estimateStageCostHandler, validateStageConfigHandler } from "./handlers/ai.js";
 import { runPipelineHandler } from "./handlers/pipeline.js";
 import { estimateHandler, estimateProvidersHandler } from "./handlers/estimate.js";
@@ -537,6 +540,15 @@ router.get(   "/api/compliance/audits",       requireAuth, listAuditsHandler);
 router.post(  "/api/compliance/audits",       requireAuth, publishAuditHandler);
 router.get(   "/api/compliance/audits/:id",       requireAuth, getAuditHandler);
 router.get(   "/api/compliance/audits/:id/pack",  requireAuth, downloadPackHandler);
+
+// ---- Accepted risks (migrations/0029) ------------------------------------
+// A named person signing for a true finding that will not be fixed, with a
+// written reason and a date it runs out. The finding stays in every report
+// and every export; only the OPEN count changes. See src/risk/accept.js for
+// what keeps that from becoming a way to make the scanner lie.
+router.get(   "/api/accepted-risks",            requireAuth, listAcceptedRisksHandler);
+router.post(  "/api/accepted-risks",            requireAuth, createAcceptedRiskHandler);
+router.post(  "/api/accepted-risks/:id/revoke", requireAuth, revokeAcceptedRiskHandler);
 
 // ---- Architecture history (migrations/0018) ------------------------------
 // Every X-ray run — manual, CI or nightly — records a versioned snapshot of

@@ -610,6 +610,15 @@ const MIGRATIONS = Object.freeze([
     checks: [{ table: "compliance_attestations",   column: "expires_at" },
              { table: "compliance_audits",         column: "retain_until" },
              { table: "compliance_audit_controls", column: "evidence_state" }] },
+  { id: "0029", name: "accepted_risks",
+    // Accepted risks. Absent, POST /api/accepted-risks 503s by name, which is
+    // loud and fine. The dangerous half is the READ: risk/store.js catches and
+    // returns empty, so every finding reads as OPEN. That is the safe
+    // direction — nothing is ever wrongly hidden — and therefore the one
+    // nobody would report, which is precisely why it is checked here.
+    checks: [{ table: "accepted_risks", column: "expires_at" },
+             { table: "accepted_risks", column: "fingerprint" },
+             { table: "accepted_risks", column: "owner_email" }] },
 ]);
 
 /** Plain SQLite identifier — the only shape we will interpolate into a PRAGMA. */

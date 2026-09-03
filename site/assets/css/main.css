@@ -5883,6 +5883,52 @@ a.ws-pulse-item:hover { background: var(--bg-card); color: var(--text); }
 }
 /* Severity on the left edge: scannable down a long list without reading. */
 .sast-card-critical { border-left-color: var(--danger); }
+
+/* ---------------------------------------------------------------------------
+   Accepted risks
+   ---------------------------------------------------------------------------
+   An accepted finding must never look like a fixed one. The card keeps its
+   severity rail — the finding is still true, and still that severe — and the
+   acceptance is a panel INSIDE it rather than a restyling of it. Three states,
+   and only the first is out of the open count, so only the first is calm:
+   drifted and expired take the warning colour because both are open findings
+   wearing an out-of-date signature. */
+.sast-accept, .sast-accept-zone { margin-top: var(--s-2); }
+.sast-accept {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: var(--s-2) var(--s-3);
+  display: flex; flex-direction: column; gap: var(--s-1);
+  background: var(--bg);
+}
+.sast-accept-drifted, .sast-accept-expired { border-color: var(--accent-warm); }
+.sast-accept-tag {
+  font-size: var(--fs-xs); font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.sast-accept-drifted .sast-accept-tag,
+.sast-accept-expired .sast-accept-tag { color: var(--accent-warm); }
+.sast-accept-why { margin: 0; font-size: var(--fs-sm); text-wrap: pretty; }
+.sast-accept-meta { font-size: var(--fs-xs); color: var(--text-dim); margin: 0; }
+.sast-accept-note { margin: 0; font-size: var(--fs-xs); color: var(--accent-warm); text-wrap: pretty; }
+.sast-accept-doc { font-size: var(--fs-xs); color: var(--accent); }
+.sast-accept-refused {
+  margin-top: var(--s-2); font-size: var(--fs-xs); color: var(--text-dim);
+}
+.sast-accept-form {
+  margin-top: var(--s-2); display: flex; flex-direction: column; gap: var(--s-2);
+  border-left: 2px solid var(--border); padding-left: var(--s-3);
+}
+.sast-accept-field { display: flex; flex-direction: column; gap: 3px; }
+.sast-accept-label {
+  font-size: var(--fs-xs); text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--text-dim);
+}
+.sast-accept-msg { margin: 0; font-size: var(--fs-xs); color: var(--text-muted); }
+/* The accepted count sits in the same stat row as the severities and must read
+   as a different KIND of number, not a sixth severity. */
+.sast-stat-accepted .stat-value { color: var(--text-muted); }
 .sast-card-high     { border-left-color: var(--accent-warm); }
 .sast-card-medium   { border-left-color: var(--accent); }
 .sast-card-low      { border-left-color: var(--border); }

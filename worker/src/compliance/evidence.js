@@ -20,6 +20,7 @@
 // control reads "insufficient evidence" for a reason the page cannot explain.
 
 import { RUN_TTL_SECONDS } from "../handlers/runs.js";
+import { normaliseRepo } from "../repo-key.js";
 import { inPeriod, isoDay } from "./resolve.js";
 
 /** Analyzers a collector might need. Queried once each, not once per control. */
@@ -123,15 +124,10 @@ function matchesRepo(run, repoUrl) {
   return candidates.some((c) => normaliseRepo(c) === target);
 }
 
-/** `owner/name`, lowercased. Enough to match a URL against a bare slug. */
-function normaliseRepo(raw) {
-  if (typeof raw !== "string") return "";
-  const trimmed = raw.trim().replace(/\.git$/, "").replace(/\/+$/, "");
-  const m = trimmed.match(/github\.com[/:]([\w.-]+)\/([\w.-]+)$/i);
-  if (m) return `${m[1]}/${m[2]}`.toLowerCase();
-  const bare = trimmed.match(/^([\w.-]+)\/([\w.-]+)$/);
-  return bare ? `${bare[1]}/${bare[2]}`.toLowerCase() : trimmed.toLowerCase();
-}
+// `normaliseRepo` moved to ../repo-key.js when the accepted-risk register
+// became its second caller. Re-exported so this module's own callers are
+// untouched, and so there is exactly one definition of the repository key.
+export { normaliseRepo };
 
 /** Patches an external agent reported applying inside the period. Seconds. */
 export async function gatherPatches(env, { orgId, period }) {
@@ -390,17 +386,43 @@ export function secureCoding({ runs }) {
   }
 
   const findings = Array.isArray(source.findings) ? source.findings : [];
-  const high = findings.filter((f) => f.severity === "critical" || f.severity === "high");
+  // OPEN critical/high, not all of them. A finding a named person has signed
+  // for, with a written reason and a date it runs out, is not an unremediated
+  // defect — and PW.5.1 asking "did you follow secure coding practice" is
+  // answered by the acceptance as much as by the absence. What keeps that
+  // honest is that the acceptance TRAVELS: every accepted high is named
+  // below, with its owner and expiry, into the rationale a published pack
+  // carries. A count would be skimmable into a lie; a list is not.
+  const isSevere = (f) => f.severity === "critical" || f.severity === "high";
+  const high = findings.filter((f) => isSevere(f) && !f.accepted);
+  const acceptedHigh = findings.filter((f) => isSevere(f) && f.accepted);
   const shallow = shallowness(source);
   const coverage = source.coverage || {};
 
+  const acceptedNote = acceptedHigh.length
+    ? " " + acceptedHigh.map((f) =>
+        `${f.path} (${f.ruleId}) accepted by ${f.acceptance.ownerEmail} until ${f.acceptance.expiresOn}`).join("; ") + "."
+    : "";
+
   return baseFrom(run, {
     verdict: high.length === 0 ? "met" : "not_met",
-    asserted: `${findings.length} finding${findings.length === 1 ? "" : "s"} across ${coverage.filesScanned || 0} files`,
-    rationale: high.length === 0
-      ? `No critical or high-severity code finding was raised across ${coverage.filesScanned || 0} scanned files.`
-      : `${high.length} critical or high-severity code finding${high.length === 1 ? "" : "s"} remained open at the last scan in the period.`,
-    qualifiers: shallow.any ? ["shallow_coverage"] : [],
+    asserted: `${findings.length} finding${findings.length === 1 ? "" : "s"} across ${coverage.filesScanned || 0} files` +
+      (acceptedHigh.length
+        ? ` · ${acceptedHigh.length} accepted` : ""),
+    rationale: (high.length === 0
+      ? `No critical or high-severity code finding was open across ${coverage.filesScanned || 0} scanned files.`
+      : `${high.length} critical or high-severity code finding${high.length === 1 ? "" : "s"} remained open at the last scan in the period.`) +
+      (acceptedHigh.length
+        ? ` ${acceptedHigh.length} ${acceptedHigh.length === 1 ? "was" : "were"} signed for as an accepted risk:${acceptedNote}`
+        : ""),
+    // `accepted_risk` does NOT weaken the result. A named owner, a written
+    // reason and an expiry IS the answer this control asks for; what would be
+    // dishonest is the acceptance not travelling with it, which is why the
+    // rationale above names every one.
+    qualifiers: [
+      ...(shallow.any ? ["shallow_coverage"] : []),
+      ...(acceptedHigh.length ? ["accepted_risk"] : []),
+    ],
     rationaleShallow: shallowRationale(shallow),
   });
 }
@@ -493,29 +515,23 @@ export function secureBaseline({ runs }) {
   });
 }
 
-/**
- * PW.1.2 — track the software's security requirements, risks and design.
- *
- * The architecture map is real supporting material and is attached as such. It
- * is still a dependency graph, and a dependency graph is not a threat model, so
- * this caps below `met` by construction — the control needs an attestation to
- * go further, and the rationale says so rather than leaving the reader to guess.
- */
-export function designRecord({ runs }) {
-  const { run, missing } = newest(runs, "arch", "an architecture record");
-  if (missing) return missing;
-
-  const summary = (run.result && run.result.summary) || {};
-  const nodes = summary.nodes || 0;
-  const edges = summary.edges || 0;
-
-  return baseFrom(run, {
-    verdict: "insufficient_evidence",
-    asserted: `${nodes} components · ${edges} relationships mapped`,
-    rationale:
-      `An architecture map of ${nodes} components and ${edges} relationships was captured, and is attached as supporting material. It records what the system is, not which risks were considered or which design decisions were taken against them — attest this control to say who owns that record.`,
-  });
-}
+// PW.1.2's `designRecord` collector was RETIRED here, and the reason is worth
+// keeping where the next person will look for it.
+//
+// It read the architecture map, hardcoded `insufficient_evidence`, and told
+// the reader to "attest this control to say who owns that record" — while
+// PW.1.2 was classified `automated`, which means the resolver never reads an
+// attestation for it and the API refuses to create one ("An attestation cannot
+// override a measurement"). The remedy it printed was one the product forbade.
+//
+// The collector's sentence was right and the classification was wrong. PW.1.2
+// is now `attested`: a dependency graph describes what the system IS, not
+// which risks were weighed against it, and that is a records practice no
+// analyzer can evidence. The standing threat model at site/compliance/ is what
+// an attestation now points to.
+//
+// Nothing replaced it. A collector that can only ever say "insufficient" is
+// not evidence, it is a placeholder that looks like evidence.
 
 /**
  * RV.1.1 — gather information about vulnerabilities from public sources.
@@ -685,7 +701,6 @@ export const COLLECTORS = Object.freeze({
   secureCoding,
   codeAnalysisPerformed,
   secureBaseline,
-  designRecord,
   advisoryIntake,
   repeatedReview,
   riskInformation,

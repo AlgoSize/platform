@@ -60,7 +60,7 @@ group("configuration");
   expect(/dashboard\/#\/account\/keys/.test(none.problems[0]),
     "…and the message says exactly where to get one, rather than just failing");
 
-  const wrong = readConfig({ ALGOSIZE_API_KEY: "sk-not-an-algosize-key" });
+  const wrong = readConfig({ ALGOSIZE_API_KEY: "sk-test-not-an-algosize-key" });
   expect(wrong.problems.length === 1 && /ask_live_/.test(wrong.problems[0]),
     "a key of the wrong shape is caught here, not as a bare 401 later");
 

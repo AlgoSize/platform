@@ -86,7 +86,7 @@ analyzer's component and dependency map for the system as built.
 | Practice | How this document addresses it |
 |---|---|
 | **PW.1.1** Use risk modeling to assess risk | The threat-modelling record above. Our own analyzer marks this not covered — "threat modelling is a design activity; no analyzer here performs or detects it" — so this document is the only evidence. |
-| **PW.1.2** Track security requirements, risks and design decisions | The in-code decision record. The product treats an architecture map as *supporting* material for this control and deliberately refuses to mark it met on that basis, because a dependency graph is not a threat model. |
+| **PW.1.2** Track security requirements, risks and design decisions | The standing threat model at [PW-01a]({{ '/security/compliance/pw-01a-threat-model/' | relative_url }}), plus the in-code decision record. Attested rather than scanned: the product used to answer this from the architecture map and refuse to mark it met, because a dependency graph is not a threat model — and then told the reader to attest, which its own API forbade for an automated control. It is now attested, and the attestation points at a document. |
 | **PW.1.3** Build in support for standardized security features and services | The standard-services table. |
 
 ## CRA mapping
@@ -96,9 +96,9 @@ behind the security properties claimed.
 
 ## Roadmap
 
-- **No standing threat model for the system as a whole.** Decisions are recorded
-  per change; there is no maintained document enumerating assets, trust
-  boundaries and threats across the whole product.
+- **The threat model has no independent reviewer.** [PW-01a]({{ '/security/compliance/pw-01a-threat-model/' | relative_url }})
+  now exists — assets, trust boundaries, threats and the decisions taken — but
+  it is written by the same person who wrote the system it describes.
 - **Decisions in code comments are not indexed.** They are discoverable by
   reading the relevant file, not by searching a register.
 

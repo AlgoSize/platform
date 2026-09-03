@@ -49,7 +49,7 @@ async function sha256Hex(input) {
   return Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-const API_KEY = "ask_live_" + "T".repeat(43);
+const API_KEY = "ask_live_test_" + "T".repeat(38);
 
 async function seed(env) {
   await env.DB.prepare(

@@ -53,7 +53,7 @@ function makeEnv(overrides = {}) {
     SITE_ORIGIN: ORIGIN,
     COOKIE_NAME: "algosize_session",
     ADMIN_EMAILS: ADMIN_EMAIL,
-    STRIPE_SECRET_KEY: "sk_live_abc123",
+    STRIPE_SECRET_KEY: "sk_live_test_fake_key",
     SESSIONS: makeKV(),
     USERS: makeKV(),
     ...overrides,
@@ -138,7 +138,7 @@ console.log("\na correctly configured account\n");
   expect(body.mode === "live", "reports the mode it checked");
   expect(body.checks.portalConfiguration.ok === true, "portal configuration passes");
   expect(body.checks.webhookEndpoint.ok === true, "webhook endpoint passes");
-  expect(!JSON.stringify(body).includes("sk_live_abc123"),
+  expect(!JSON.stringify(body).includes("sk_live_test_fake_key"),
     "the secret key never appears in the response");
 }
 
@@ -292,7 +292,7 @@ console.log("\nmisconfiguration of the deployment itself\n");
     "a 401 from Stripe → 500 stripe_unreachable, not a 200 with ok:false");
   expect(body.mode === "live",
     "and the mode is still reported — it comes from the prefix, not from Stripe");
-  expect(!JSON.stringify(body).includes("sk_live_abc123"),
+  expect(!JSON.stringify(body).includes("sk_live_test_fake_key"),
     "the key is not echoed back even in the error path");
 }
 

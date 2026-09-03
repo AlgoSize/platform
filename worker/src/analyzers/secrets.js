@@ -88,7 +88,8 @@ export const PLACEHOLDER_RE = /(\$\{|process\.env|os\.getenv|getenv\s*\(|import\
 // invoking a real leak pattern, `latest`, `attestation`) proves nothing
 // about the value itself, which is why this is a separate check and not an
 // entry in the line-scoped list above.
-export const PLACEHOLDER_TOKEN_RE = /(?:^|[-_.:/])(?:test|testing|dummy|sample|demo)(?:[-_.:/]|$)/i;
+export const PLACEHOLDER_TOKEN_RE =
+  /(?:^|[-_.:/])(?:test|testing|dummy|sample|demo|fixture|stub|mock|redacted|do[-_.]?not[-_.]?use|not[-_.]?for[-_.]?prod|local[-_.]?dev|dev[-_.]?only)(?:[-_.:/]|$)/i;
 
 /** A secret-ish key assigned a quoted literal of plausible length. */
 export const GENERIC_SECRET_RE = /(?:api[_-]?key|apikey|access[_-]?token|secret[_-]?key|client[_-]?secret|auth[_-]?token)\s*[:=]\s*["']([^"']{8,})["']/i;

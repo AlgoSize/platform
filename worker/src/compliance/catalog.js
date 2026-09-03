@@ -31,7 +31,7 @@
 
 // Bump on ANY wording, coverage or collector-key change. Frozen audits record
 // the version they were cut against.
-export const CATALOG_VERSION = "2026-09-02.1";
+export const CATALOG_VERSION = "2026-09-03.1";
 
 export const EVIDENCE_STATES = Object.freeze(["automated", "attested", "not_covered"]);
 
@@ -119,7 +119,29 @@ const SSDF_CONTROLS = [
   { id: "PW.1.1", group: "PW", coverage: "not_covered",
     title: "Use forms of risk modeling — threat modeling, attack modeling — to assess risk",
     why: "Threat modelling is a design activity. No analyzer here performs or detects it." },
-  { id: "PW.1.2", group: "PW", coverage: "automated", collector: "designRecord",
+  // Attested, not automated — and it took a dead end to notice.
+  //
+  // This was `automated`, on the `designRecord` collector, which read the
+  // architecture map and then hardcoded `insufficient_evidence` with the
+  // rationale "attest this control to say who owns that record". But an
+  // automated control never consults an attestation, and the API refuses to
+  // create one for it: "An attestation cannot override a measurement". The
+  // product was instructing an action it forbids, and the control could not
+  // be answered by anybody, ever.
+  //
+  // The collector's own text had it right and the classification had it
+  // wrong. Tracking requirements, risks and design decisions is a records
+  // practice; a dependency graph describes what the system IS, not which
+  // risks were weighed against it. PW.1.1 next door is already `not_covered`
+  // for exactly this reason. So this joins the controls where a signed human
+  // claim is the evidence — and the claim has something to point at, because
+  // the standing threat model it names now exists.
+  //
+  // Cost, accepted knowingly: the attested branch of the resolver reads only
+  // the attestation, so the architecture map is no longer attached as
+  // supporting material. The map is still one click away in the product; the
+  // threat model is the artifact this control is actually about.
+  { id: "PW.1.2", group: "PW", coverage: "attested",
     title: "Track and maintain the software's security requirements, risks and design decisions" },
   { id: "PW.1.3", group: "PW", coverage: "not_covered",
     title: "Build in support for standardized security features and services",

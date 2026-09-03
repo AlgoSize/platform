@@ -126,7 +126,7 @@ console.log("\nshare links — listing what was minted\n");
 console.log("\nGET /api/runs/:id/shares — routed and ownership-gated\n");
 // ===========================================================================
 {
-  const JWT_SECRET = "integration-gaps-secret-32-or-more-chars";
+  const JWT_SECRET = "integration-gaps-test-secret-32-or-more";
   const db = makeD1();
   const env = {
     JWT_SECRET, COOKIE_NAME: "algosize_session", SITE_ORIGIN: "https://algosize.com",
@@ -153,7 +153,7 @@ console.log("\nGET /api/runs/:id/shares — routed and ownership-gated\n");
 console.log("\ninvite revoke — the token and the seat move together\n");
 // ===========================================================================
 
-const JWT_SECRET = "integration-gaps-secret-32-or-more-chars";
+const JWT_SECRET = "integration-gaps-test-secret-32-or-more";
 
 function orgEnv() {
   const db = makeD1();

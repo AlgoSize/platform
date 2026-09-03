@@ -391,19 +391,43 @@ function vulnRun(overrides = {}) {
 }
 
 {
-  // A dependency graph is not a threat model.
-  const archRun = {
-    runId: "run_a", analyzer: "arch", source: "monitor",
-    capturedAt: PERIOD.start + 86400, input: {}, result: { summary: { nodes: 12, edges: 30 } },
-  };
-  const ev = COLLECTORS.designRecord({ runs: { vuln: [], arch: [archRun] }, period: PERIOD });
-  expect(ev.verdict === "insufficient_evidence",
-    "designRecord caps below met — an architecture map is supporting material, not a threat model");
-  const r = resolveControlResult({
-    control: getControl("ssdf-1.1", "PW.1.2"), evidence: ev, attestation: null,
-    period: PERIOD, now: NOW,
+  // A dependency graph is not a threat model — and the product used to say so
+  // in a way nobody could act on. PW.1.2 was `automated`, its collector
+  // hardcoded `insufficient_evidence`, and its rationale told the reader to
+  // attest — which the API refuses for an automated control and the resolver
+  // would ignore. A remedy the product forbids is worse than no remedy.
+  const control = getControl("ssdf-1.1", "PW.1.2");
+  expect(control.coverage === "attested",
+    "PW.1.2 is attested: tracking risks and design decisions is a records practice, not a scan output");
+  expect(!control.collector,
+    "…and carries no collector, because a collector that can only say 'insufficient' is a placeholder wearing evidence's clothes");
+  expect(!COLLECTORS.designRecord,
+    "the dead-end collector is retired, not left dangling");
+
+  // Unattested it is honestly blank, not falsely clean.
+  const blank = resolveControlResult({ control, evidence: null, attestation: null, period: PERIOD, now: NOW });
+  expect(blank.result === "insufficient_evidence" && blank.evidenceState === "not_covered",
+    "with nobody signed, PW.1.2 reads as uncovered rather than met");
+
+  // Attested, it can now actually be answered — which it could not before.
+  const signed = resolveControlResult({
+    control, evidence: null, period: PERIOD, now: NOW,
+    attestation: {
+      id: "att_1", kind: "attested", statement: "The standing threat model is maintained by the named owner.",
+      ownerEmail: "owner@algosize.test", attestedAt: NOW - 86400, expiresAt: NOW + 86400 * 200,
+    },
   });
-  expect(r.result !== "met", "so PW.1.2 needs a human claim to go further");
+  expect(signed.result === "met" && signed.evidenceState === "attested",
+    "a signed, in-date attestation answers it — the path that did not exist before");
+  const lapsed = resolveControlResult({
+    control, evidence: null, period: PERIOD, now: NOW,
+    attestation: {
+      id: "att_1", kind: "attested", statement: "…",
+      ownerEmail: "owner@algosize.test", attestedAt: NOW - 86400, expiresAt: NOW - 1,
+    },
+  });
+  expect(lapsed.result === "attestation_expired",
+    "…and stops answering it the day it lapses");
 }
 
 {

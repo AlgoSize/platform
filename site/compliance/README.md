@@ -5,7 +5,7 @@ description: Algosize's secure-development documentation, mapped to NIST SSDF v1
 permalink: /security/compliance/
 ---
 
-**Last updated: 3 September 2026** · Control catalog version `2026-09-02.1`
+**Last updated: 3 September 2026** · Control catalog version `2026-09-03.1`
 
 This is Algosize's secure-development documentation: what we require, how we
 build, and what we do when something is wrong. It is mapped to
@@ -57,6 +57,7 @@ Roadmap sections first — they are where the real information is.
 | Document | Covers |
 |---|---|
 | [PW-01 Design, risk and security services]({{ '/security/compliance/pw-01-design-risk/' | relative_url }}) | Where design decisions are recorded, and which standard security services we build on |
+| [PW-01a Standing threat model]({{ '/security/compliance/pw-01a-threat-model/' | relative_url }}) | The assets, the trust boundaries around them, the threats considered against each, and the risks knowingly accepted |
 | [PW-02 Design review]({{ '/security/compliance/pw-02-design-review/' | relative_url }}) | When a design must be reviewed before it is built |
 | [PW-06 Build and deployment]({{ '/security/compliance/pw-06-build-security/' | relative_url }}) | The deploy path and the production configuration that carries security weight |
 | [PW-07 Code review and analysis]({{ '/security/compliance/pw-07-code-review/' | relative_url }}) | What runs on every change — and what that analysis does not see |
