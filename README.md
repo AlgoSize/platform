@@ -12,6 +12,13 @@ algosize/
 └── README.md
 ```
 
+## Security and compliance
+
+- [Security page](site/security.md) — what the product stores, for how long, and who else processes it.
+- [Compliance pack](site/compliance/README.md) — how the product is built, mapped to NIST SSDF v1.1
+  and EU CRA Annex I Part II. Every document states its own gaps under **Roadmap**.
+- [Internal roadmap](docs/compliance/ROADMAP-internal.md) — the gaps deliberately not published.
+
 ## Local development
 
 Run each side in its own terminal.
