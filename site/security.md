@@ -14,6 +14,11 @@ end state in the present tense.
 
 Report a vulnerability: **[security@algosize.com](mailto:security@algosize.com)**.
 
+How the product is *built* — secure-development policy, mapped to NIST SSDF
+v1.1 and the EU Cyber Resilience Act — is in the
+[compliance pack]({{ '/security/compliance/' | relative_url }}). This page
+covers what the product does with your data; that pack covers how it is made.
+
 ---
 
 ## 1. What we never store
