@@ -88,6 +88,10 @@ is evidenced by the test and analysis gates above.
 - **No pinned transitive dependencies.** There is no `overrides` block, so a
   transitive dependency can move within its semver range between installs.
 - **The architecture gate does not block.** It is configured to comment only.
+- **No pull request builds the site.** Both site workflows trigger only on a
+  push to the default branch, so a change that breaks the site build is not
+  caught until it is already merged and the production deploy fails. This
+  applies to every change to the site, not only to this documentation.
 
 ## Review & revision
 
