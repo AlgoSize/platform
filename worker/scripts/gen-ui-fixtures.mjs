@@ -78,7 +78,7 @@ function makeKV() {
 }
 
 const env = {
-  JWT_SECRET: "fixture-jwt-secret-that-is-at-least-32-chars",
+  JWT_SECRET: "example-jwt-secret-that-is-at-least-32-chars",
   SITE_ORIGIN: "https://algosize.com",
   COOKIE_NAME: "algosize_session",
   ADMIN_EMAILS: EMAIL,

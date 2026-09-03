@@ -337,6 +337,12 @@ const CREDENTIAL_NAME_RE = /^(?:.*_)?(?:password|passwd|secret|api[_-]?key|apike
 // that it is not real. Deliberately absent: `wrong`, `invalid`, `not-a`. A real
 // secret can contain those; they describe a shape, not a fakeness, and a
 // fixture that relies on one should be renamed instead.
+//
+// One practical note for whoever renames a fixture to satisfy this list: the
+// CI gate posts file contents to the DEPLOYED Worker, so it judges the branch
+// with the previously deployed analyzer. A value marked with a word only the
+// new list knows stays red until deploy. Reach for a long-standing marker —
+// `test`, `example`, `sample` — and the fix works before and after.
 const PLACEHOLDER_VALUE_RE = /^(?:|x{3,}|\*+|changeme|change[_-]?me|placeholder|example|test|todo|fixme|your[_-].*|<.*>|\$\{.*\}|process\.env\..*)$/i;
 const PLACEHOLDER_TOKEN_RE =
   /(?:^|[-_.:/])(?:test|testing|dummy|sample|example|demo|fake|placeholder|changeme|xxx+|fixture|stub|mock|redacted|do[-_.]?not[-_.]?use|not[-_.]?for[-_.]?prod|local[-_.]?dev|dev[-_.]?only)(?:[-_.:/]|$)/i;
