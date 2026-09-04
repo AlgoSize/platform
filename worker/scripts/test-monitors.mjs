@@ -23,7 +23,8 @@ import {
   advisoryKey, advisoryKeySet, hashKeySet, diffAdvisories, groupBySeverity,
 } from "../src/monitors/diff.js";
 import { sweepDueMonitors, runMonitorCheck, handleMonitorQueue, handleMonitorDlq } from "../src/monitors/run.js";
-import { discoverArchFiles, runArchForMonitor, MAX_ARCH_TREE_FILES } from "../src/monitors/analyzers.js";
+import { discoverArchFiles, runArchForMonitor, MAX_ARCH_TREE_FILES,
+         splitPricedProviders } from "../src/monitors/analyzers.js";
 import {
   createMonitor, getMonitorById, listMonitorsDue, isDue, monitorLimitFor, setMonitorPaused,
   normalizeAnalyzers, recordMonitorRun,
@@ -1480,6 +1481,44 @@ console.log("\na sweep survives a database that is behind on migrations\n");
       m.monitorId, { ranAt: NOW, resultHash: "h", advisoryIds: [] });
   } catch { threw = true; }
   expect(threw, "a non-schema failure still throws rather than being swallowed");
+}
+
+// ===========================================================================
+console.log("\na provider that priced nothing is not the cheapest provider\n");
+// ===========================================================================
+{
+  // engine.js sums an empty lineItems array to 0, so "could not price a single
+  // resource" and "genuinely free" arrive at every consumer as the same number.
+  // byProvider is ranked by that number and the first entry wins — on the
+  // scorecard cell, on the nightly watch chip, and in the alert diff. Before
+  // this split, the provider that knew LEAST always won all three.
+  const providers = [
+    { providerId: "aws",          providerName: "AWS",          estimatedTotalMicroUsd: 0, lineItems: [] },
+    { providerId: "digitalocean", providerName: "DigitalOcean", estimatedTotalMicroUsd: 12_340_000,
+      lineItems: [{ estimatedCostMicroUsd: 12_340_000 }] },
+  ];
+  const { byProvider, unpriced } = splitPricedProviders(providers);
+
+  expect(!("aws" in byProvider),
+    "a provider with no line items is kept out of byProvider entirely");
+  expect(unpriced.length === 1 && unpriced[0] === "aws",
+    "and is named as unpriced, because 'we could not read it' is a fact worth keeping");
+  expect(byProvider.digitalocean === 12_340_000 && Object.keys(byProvider).length === 1,
+    "the provider that actually priced something is the only one left to rank");
+
+  // The exact ranking every consumer performs. This is the assertion that
+  // fails if the split is reverted.
+  const cheapest = Object.entries(byProvider).sort((a, b) => a[1] - b[1])[0];
+  expect(cheapest && cheapest[0] === "digitalocean",
+    "so the cheapest provider is one with a price, not one with no information");
+
+  // A real zero is not the same thing and must survive. A provider that priced
+  // a free tier produced a line item; only the empty list is disqualifying.
+  const free = splitPricedProviders([
+    { providerId: "fly", estimatedTotalMicroUsd: 0, lineItems: [{ estimatedCostMicroUsd: 0 }] },
+  ]);
+  expect(free.byProvider.fly === 0 && free.unpriced.length === 0,
+    "a measured zero still counts — line items are the test, not the total");
 }
 
 console.log("");

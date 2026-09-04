@@ -360,7 +360,9 @@ export function diffArchFindings(findings, keys, previousKeys) {
  * Request is the whole integration.
  *
  * Returns:
- *   { status: "ok", byProvider, providers }   byProvider: id → total microUSD
+ *   { status: "ok", byProvider, unpriced, providers }
+ *     byProvider: id → total microUSD, priced providers ONLY
+ *     unpriced:   ids of providers that could price nothing — not a zero
  *   { status: "no_compose" }                  nothing to price
  *   { status: "skipped", reason }             transient or rejected
  */
@@ -433,6 +435,39 @@ export async function runCostForMonitor(monitor, env, ctx, fetchImpl) {
   return { status: "ok", curPath, result: body };
 }
 
+/**
+ * Split an estimate response's providers into the ones that priced something
+ * and the ones that could not.
+ *
+ * Pure and exported so it can be tested without a repository, a fetch or a
+ * pricing catalog — the behaviour it encodes is worth a test of its own.
+ *
+ * A provider whose adapter could price NOTHING still reports
+ * estimatedTotalMicroUsd: 0, because engine.js sums an empty lineItems array.
+ * Every consumer of byProvider ranks by that total and takes the first — the
+ * scorecard cell, the nightly watch chip, the alert diff — so including such a
+ * provider handed all three of them a $0 winner meaning "we know nothing about
+ * this provider". engine.js sorts it last in its own results for exactly this
+ * reason; flattening to a bare number threw that ordering away.
+ *
+ * Line items, not the total, are the test: zero line items is the fact, and
+ * zero dollars is only ever its shadow.
+ */
+export function splitPricedProviders(providers) {
+  const byProvider = {};
+  const unpriced = [];
+  for (const p of Array.isArray(providers) ? providers : []) {
+    if (!p || typeof p.providerId !== "string") continue;
+    if (typeof p.estimatedTotalMicroUsd !== "number") continue;
+    if (Array.isArray(p.lineItems) && p.lineItems.length > 0) {
+      byProvider[p.providerId] = p.estimatedTotalMicroUsd;
+    } else {
+      unpriced.push(p.providerId);
+    }
+  }
+  return { byProvider, unpriced };
+}
+
 export async function runEstimateForMonitor(monitor, env, ctx, fetchImpl) {
   const repo = parseGithubRepoUrl(monitor.repoUrl);
   if (!repo) return { status: "skipped", reason: "bad_repo_url" };
@@ -457,16 +492,23 @@ export async function runEstimateForMonitor(monitor, env, ctx, fetchImpl) {
   }
 
   const providers = Array.isArray(body.providers) ? body.providers : [];
-  const byProvider = {};
-  for (const p of providers) {
-    if (p && typeof p.providerId === "string" && typeof p.estimatedTotalMicroUsd === "number") {
-      byProvider[p.providerId] = p.estimatedTotalMicroUsd;
-    }
-  }
+
+  // `byProvider` is id → total, and every consumer of it ranks by that total
+  // and takes the cheapest: the scorecard cell, the nightly watch chip, and
+  // the alert diff. A provider that could price NOTHING has a total of 0 —
+  // engine.js sums an empty lineItems array — so including it here handed all
+  // three of them a $0 winner meaning "we know nothing about this provider",
+  // rendered as the cheapest option. engine.js already sorts such a provider
+  // last for exactly this reason; flattening to a bare number threw that away.
+  //
+  // So a provider is in byProvider only if it actually priced something, and
+  // the ones that could not are kept beside it by name. Absence is a fact
+  // about the adapter, not a price of zero, and it stays visible as one.
+  const { byProvider, unpriced } = splitPricedProviders(providers);
   // Same reason as the arch pass: `body` is what POST /api/estimate returned,
   // so the estimator page can render a monitored repo through its existing
   // renderer instead of a parallel one.
-  return { status: "ok", byProvider, providers, disclaimer: body.disclaimer || null, result: body };
+  return { status: "ok", byProvider, unpriced, providers, disclaimer: body.disclaimer || null, result: body };
 }
 
 /**

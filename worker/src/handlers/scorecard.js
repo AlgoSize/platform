@@ -352,6 +352,16 @@ function costCell(m, on, stale) {
   if (!est) return pending("No estimate recorded yet.");
 
   const entries = Object.entries(est.byProvider || {});
+  // byProvider carries priced providers only (monitors/analyzers.js). So an
+  // empty one means either "no compose file" or "a compose file whose every
+  // resource this adapter cannot price" — a fact about our catalog, not about
+  // the repository, and therefore not applicable's opposite. Reading them as
+  // the same cell would grade our own coverage gap as the customer's absence.
+  if (!entries.length && Array.isArray(est.unpriced) && est.unpriced.length) {
+    return unmeasured(
+      `Found a configuration, but nothing in it could be priced on ${est.unpriced.join(", ")}.`,
+      fixUnavailable("no_priceable_resources"));
+  }
   if (!entries.length) {
     // A recorded-but-empty baseline is the sweep's way of saying it looked
     // and found no compose file. That is a real answer, not a missing one.

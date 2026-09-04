@@ -846,6 +846,12 @@
       top.appendChild(el("strong", { class: "mono" }, estShortRepo(m.repoUrl)));
 
       var byProvider = m.lastEstimate && m.lastEstimate.byProvider;
+      // Providers the adapter could price NOTHING for. They are kept out of
+      // byProvider on the server (monitors/analyzers.js) precisely because
+      // their total is 0 — the sum of an empty list — and this line ranks by
+      // total and shows totals[0]. "cheapest $0.00/mo" meaning "we could not
+      // read a single resource" is the worst chip on the page.
+      var unpriced = (m.lastEstimate && m.lastEstimate.unpriced) || [];
       var totals = [];
       if (byProvider) {
         Object.keys(byProvider).forEach(function (pid) {
@@ -858,6 +864,10 @@
         top.appendChild(el("span", { class: "chip chip-muted" }, "paused"));
       } else if (!m.lastEstimate) {
         top.appendChild(el("span", { class: "chip chip-muted" }, "first run pending"));
+      } else if (!totals.length && unpriced.length) {
+        // Two different nothings. This one is our catalog's gap, so it does not
+        // say "no compose file" — there was one, and we could not price it.
+        top.appendChild(el("span", { class: "chip chip-warn" }, "could not price"));
       } else if (!totals.length) {
         top.appendChild(el("span", { class: "chip chip-warn" }, "no compose file"));
       } else {
@@ -869,6 +879,10 @@
       var meta = el("p", { class: "night-meta mono" },
         m.paused ? "Paused — resumes against the same baseline."
         : !m.lastEstimate ? "First price within a day; the baseline email lists every provider's total."
+        : (!totals.length && unpriced.length)
+          ? "We read a configuration and could not price a single resource in it on " +
+            unpriced.join(", ") + ". That is a gap in our catalog, not a fact about your repository, " +
+            "and no total is shown because there is none."
         : !totals.length ? "We looked at the repo root and found nothing to price — a fact, not an error. The watch keeps looking nightly."
         : totals.map(function (t) { return t.id + " " + money(t.micro); }).join(" · ") +
           (typeof m.lastEstimate.at === "number"

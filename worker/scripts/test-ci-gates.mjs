@@ -98,6 +98,27 @@ group("the estimator gate cannot reach a cloud account");
     "and every comment it posts repeats that these are list prices, not an invoice");
   expect(/no cloud account was contacted/i.test(yaml),
     "…and says outright that nothing was contacted");
+
+  // The gate picks a winner and compares it to a ceiling. A provider whose
+  // adapter priced NOTHING reports a total of 0 — the sum of an empty line-item
+  // list — so selecting on a non-null total, as this did, always put the
+  // provider that knew least first and compared $0 against the ceiling. A
+  // ceiling that total ignorance always satisfies is not a ceiling.
+  expect(/select\(\(\.lineItems \| length\) > 0\)/.test(yaml),
+    "the gate picks its cheapest from providers that produced line items");
+  expect(!/select\(\.estimatedTotalMicroUsd != null\)/.test(yaml),
+    "and not from any provider whose total merely exists");
+  // Nothing priced anywhere means there is no number. Comparing one you do not
+  // have is the failure this gate exists to prevent, so it must not silently
+  // pass — it says what happened and annotates.
+  expect(/unpriceable=true/.test(yaml) && /Could not price this configuration/.test(yaml),
+    "and when nothing could be priced at all it says so instead of passing on a zero");
+  // Matched against the YAML with line breaks collapsed: the comment body is
+  // built from several echo lines, so the sentence spans two of them.
+  expect(/gap\s+"?\s*echo\s+"?in what Algosize can price, not a finding about your configuration/
+           .test(yaml) ||
+         /in what Algosize can price, not a finding about your configuration/.test(yaml),
+    "…naming it as our catalog's gap rather than the customer's mistake");
 }
 
 // ===========================================================================

@@ -112,7 +112,12 @@ function publicMonitor(m) {
     analyzers: m.analyzers,
     archFindingCount: m.lastArchKeys === null ? null : m.lastArchKeys.length,
     lastEstimate: m.lastEstimate
-      ? { byProvider: m.lastEstimate.byProvider, at: m.lastEstimate.at }
+      ? { byProvider: m.lastEstimate.byProvider,
+          // Providers the adapter could price nothing for. Sent because
+          // byProvider deliberately excludes them, and a watch card with an
+          // empty byProvider has to say WHICH kind of nothing it found.
+          unpriced: m.lastEstimate.unpriced || [],
+          at: m.lastEstimate.at }
       : null,
     lastAlgo: m.lastAlgo
       ? { functions: Object.keys(m.lastAlgo.byName).length, at: m.lastAlgo.at }
@@ -752,6 +757,10 @@ export function fixUnavailable(reason) {
       "Commit a manifest the X-ray can read — package.json, requirements.txt, go.mod, a compose file or Terraform — on the branch this monitor watches.",
     no_compose:
       "Commit a docker-compose.yml, or point `compose` in algosize.budget.json at the one you already use.",
+    // Ours to fix, not theirs. The remedy is a catalog entry on our side, so
+    // the sentence says so rather than asking them to change their file.
+    no_priceable_resources:
+      "Nothing to do on your side — the configuration is readable, but none of the resources in it are in our pricing catalog yet. Tell us which provider and resource types you need and we will add them.",
     no_cur:
       "Set `cur` in algosize.budget.json to the path of a committed Cost & Usage Report export.",
     cur_missing:

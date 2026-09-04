@@ -201,6 +201,24 @@ group("estimator commitments");
          /a fact, not an error/.test(estJs),
     "the watch card keeps 'never priced' and 'nothing to price' distinct");
 
+  // 2b. A fourth state, and the one that used to render as a green
+  // "cheapest $0.00/mo": a configuration we read and could price nothing in.
+  // byProvider excludes such a provider on the server, so an empty totals list
+  // now means one of TWO things and the card has to say which.
+  expect(/could not price/.test(estJs) && /lastEstimate\.unpriced/.test(estJs),
+    "and distinguishes 'no compose file' from 'a compose file we could not price'");
+  expect(/gap in our catalog, not a fact about your repository/.test(estJs),
+    "…naming the second one as our gap rather than the customer's");
+  // The chip for that state must not be the calm one. A green "cheapest" chip
+  // on a repository nothing could be priced for is the whole bug.
+  // Sliced to the end of THIS branch rather than a fixed character count — the
+  // branch carries a comment explaining itself, and a window measured in
+  // characters silently depends on how long that comment is.
+  const branchStart = estJs.indexOf("} else if (!totals.length && unpriced.length) {");
+  const branch = estJs.slice(branchStart, estJs.indexOf("} else if", branchStart + 10));
+  expect(branchStart > -1 && branch.includes("chip-warn") && !branch.includes("chip-ok"),
+    "the could-not-price chip is a warning, never the ok chip");
+
   // 3. The no-credentials line appears on the automation card too.
   expect(/no cloud account, no credentials/.test(estJs),
     "the trust boundary is repeated where the automation is offered");
