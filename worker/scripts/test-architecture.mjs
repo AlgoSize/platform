@@ -517,6 +517,58 @@ console.log("\na committed placeholder is not a leaked credential\n");
 }
 
 // ===========================================================================
+console.log("\nthe map's node total is the sum of its boxes\n");
+// ===========================================================================
+{
+  // The explorer draws one box per cluster plus a "Shared resources" box, each
+  // labelled "<n> NODES", above a stat card reading the total. If those two
+  // disagree the map is quietly hiding nodes, and a reader counting boxes to
+  // check the total would be right to stop trusting the map.
+  //
+  // They agree because graph.js derives one from the other:
+  //   cluster.nodes = nodes.filter((n) => n.cluster === cluster.id)
+  // and the explorer's "Shared resources" box is nodes with no cluster at all.
+  // That is an exact partition — but it is enforced by one line in the builder
+  // and consumed by two independent places in the renderer, which is precisely
+  // the shape that rots silently. So it is asserted here rather than assumed.
+  const { result } = run([
+    repoFile("worker/wrangler.toml"),
+    repoFile("worker-sandbox/wrangler.toml"),
+    repoFile("site/_config.yml"),
+    repoFile("worker/src/index.js"),
+  ]);
+  const { graph, summary } = result;
+
+  const inClusters = graph.clusters.reduce((n, c) => n + (c.nodes || []).length, 0);
+  const loose = graph.nodes.filter((n) => !n.cluster).length;
+  expect(inClusters + loose === graph.nodes.length,
+    `every node is in exactly one box: ${inClusters} clustered + ${loose} shared = ` +
+    `${graph.nodes.length} nodes`);
+  expect(summary.nodes === graph.nodes.length,
+    `and the stat card counts the same nodes the boxes do (${summary.nodes})`);
+
+  // No node claims a cluster the map does not draw. Such a node would be
+  // counted in the total, absent from every box, and invisible on the map.
+  const clusterIds = new Set(graph.clusters.map((c) => c.id));
+  const orphans = graph.nodes.filter((n) => n.cluster && !clusterIds.has(n.cluster));
+  expect(orphans.length === 0,
+    `no node belongs to a cluster that is not on the map${orphans.length ? " — " + orphans.map((n) => n.id + "→" + n.cluster).join(", ") : ""}`);
+
+  // And no node is in two boxes: a resource declared by two clusters is
+  // deliberately demoted to shared (graph.js addNode), not listed under both.
+  const seen = new Map();
+  const doubled = [];
+  for (const c of graph.clusters) {
+    for (const id of c.nodes || []) {
+      if (seen.has(id)) doubled.push(`${id} (${seen.get(id)} and ${c.id})`);
+      else seen.set(id, c.id);
+    }
+  }
+  expect(doubled.length === 0,
+    `no node is listed under two clusters${doubled.length ? " — " + doubled.join(", ") : ` (${seen.size} checked)`}`);
+}
+
+// ===========================================================================
 console.log("\nthe rule catalogue is the real list of rules, not a stale copy of it\n");
 // ===========================================================================
 {

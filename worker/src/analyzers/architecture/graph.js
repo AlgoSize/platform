@@ -750,6 +750,32 @@ export function buildGraph(files) {
   assignSharedResources(b);
 
   const nodes = [...b.nodes.values()];
+
+  // A node may name a cluster we never read. The service-bindings branch above
+  // creates `worker:<name>` with `cluster: id` from nothing but a binding in
+  // SOMEBODY ELSE's wrangler.toml — if that worker's own config was not in the
+  // file set, addCluster was never called for it and no such cluster exists.
+  //
+  // The consequence was arithmetic, and visible: the explorer draws one box per
+  // cluster plus a box for nodes with no cluster at all, so a node pointing at
+  // a cluster that is not on the map appears in NO box while still counting
+  // toward the node total. On this repository that was
+  // `worker:algosize-sandbox-staging` — 15 nodes in boxes above a stat card
+  // reading 16, and the missing one was a real dependency on a Worker we could
+  // not see.
+  //
+  // Clearing the claim is the honest repair, and it is the same statement the
+  // rest of the module makes about shared resources: we did not read that
+  // worker's configuration, so we cannot present it as one of our clusters. It
+  // becomes an ungrouped node — drawn, counted, and visibly outside everything
+  // we mapped, which is what it is.
+  for (const n of nodes) {
+    if (n.cluster && !b.clusters.has(n.cluster)) {
+      n.cluster = null;
+      n.unmappedCluster = true;
+    }
+  }
+
   for (const cluster of b.clusters.values()) {
     cluster.nodes = nodes.filter((n) => n.cluster === cluster.id).map((n) => n.id);
   }
