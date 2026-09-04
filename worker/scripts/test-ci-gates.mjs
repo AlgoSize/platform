@@ -76,6 +76,34 @@ for (const g of GATES) {
 }
 
 // ===========================================================================
+group("a generated workflow prints dollars, not the runner's process id");
+// ===========================================================================
+{
+  // `$$` in a shell script is the PID. Writing a literal dollar before a
+  // variable needs `\$` — and in a JS template literal that has to be written
+  // `\\$`, because `\$` is itself an escape that yields a bare `$` and the
+  // backslash never reaches the file.
+  //
+  // The estimate generator had the single-backslash form and the cost
+  // generator had the double, so for as long as both have shipped, every cost
+  // estimate comment on a pull request has read "Over the 3384CEILING/mo
+  // ceiling" — the runner's PID, then the variable's NAME as text. The parity
+  // test could not see it: it compares the generator's output to the committed
+  // file, and both were equally wrong.
+  //
+  // Checked on the generated text of every workflow, because this is a
+  // property of what ships, not of any one generator.
+  for (const g of GATES) {
+    const bad = g.yaml.split("\n")
+      .map((line, i) => ({ line, n: i + 1 }))
+      .filter(({ line }) => /(^|[^\\])\$\$[A-Za-z_]/.test(line));
+    expect(bad.length === 0,
+      `${g.name}: no "$$VAR" — the shell reads that as its own PID${
+        bad.length ? " — line " + bad[0].n + ": " + bad[0].line.trim().slice(0, 90) : ""}`);
+  }
+}
+
+// ===========================================================================
 group("the estimator gate cannot reach a cloud account");
 // ===========================================================================
 {
@@ -119,6 +147,18 @@ group("the estimator gate cannot reach a cloud account");
            .test(yaml) ||
          /in what Algosize can price, not a finding about your configuration/.test(yaml),
     "…naming it as our catalog's gap rather than the customer's mistake");
+
+  // A ceiling is a line; an estimate with assumptions is a RANGE. Comparing
+  // only the point estimate made an $80-$150 estimate pass a $100 ceiling on
+  // $95 while saying nothing about the $150 — a coin flip wearing a verdict.
+  expect(/lower_usd=/.test(yaml) && /upper_usd=/.test(yaml),
+    "the gate reads the estimate's bounds, not only its midpoint");
+  expect(/\$UPPER <= \$CEILING/.test(yaml),
+    "…passes only when the TOP of the range is under the ceiling");
+  expect(/\$LOWER > \$CEILING/.test(yaml),
+    "…fails only when the BOTTOM of the range is over it");
+  expect(/Cannot say/.test(yaml) && /falls inside the estimate/.test(yaml),
+    "…and says it cannot tell when the ceiling falls inside the range, rather than picking an end");
 }
 
 // ===========================================================================
