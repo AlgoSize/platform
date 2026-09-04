@@ -547,10 +547,25 @@ export async function publishAuditHandler(request, env, ctx) {
     rationale: c.rationale,
   }));
 
-  const packBody = canonicalPack({
-    auditId, coverage, controlRows, monitor, framework, at,
+  // Built through the same function downloadPackHandler uses, and hashed over
+  // the same bytes it will return. `retainedUntil` is computed here rather than
+  // read back from the record because the record does not exist yet — it is the
+  // same arithmetic insertPublishedAudit is about to store.
+  const retainUntil = parsed.period.end + RETENTION_SECONDS;
+  const packBody = packDocument({
+    auditId,
+    generatedOn: isoDay(at),
+    framework,
+    catalogVersion: CATALOG_VERSION,
+    repoUrl: monitor.repoUrl,
+    branch: monitor.branch || null,
+    period: { start: coverage.period.startOn, end: coverage.period.endOn },
+    scans: coverage.scans,
+    summary: coverage.summary,
+    retainedUntil: isoDay(retainUntil),
+    controls: controlRows,
   });
-  const packJson = JSON.stringify(packBody);
+  const packJson = serializePack(packBody);
   const packSha256 = await sha256Hex(packJson);
 
   const audit = {
@@ -567,9 +582,12 @@ export async function publishAuditHandler(request, env, ctx) {
     periodStart: parsed.period.start,
     periodEnd: parsed.period.end,
     summary: coverage.summary,
+    branch: monitor.branch || null,
+    scans: coverage.scans,
     packSha256,
+    packHashScope: PACK_HASH_SCOPE,
     packBytes: new TextEncoder().encode(packJson).length,
-    retainUntil: parsed.period.end + RETENTION_SECONDS,
+    retainUntil,
     createdBy: (request.user && request.user.email) || null,
     createdAt: at,
     publishedAt: at,
@@ -601,7 +619,10 @@ export async function publishAuditHandler(request, env, ctx) {
     targetId: auditId,
     orgId: ctxOrg.orgId,
     metadata: {
-      frameworkId, catalogVersion: CATALOG_VERSION, packSha256,
+      // The scope travels with the hash in the audit log too: a bare checksum
+      // in a log line is the same trap as a bare checksum on the page.
+      frameworkId, catalogVersion: CATALOG_VERSION,
+      packSha256, packHashScope: PACK_HASH_SCOPE,
       periodStart: parsed.period.start, periodEnd: parsed.period.end,
       controls: controlRows.length,
     },
@@ -617,21 +638,51 @@ export async function publishAuditHandler(request, env, ctx) {
  * asserted and the disclaimer, so it still reads as a complete record after
  * every run behind it has aged out of the platform.
  */
-function canonicalPack({ auditId, coverage, controlRows, monitor, framework, at }) {
+/**
+ * The pack document. ONE builder, and the only shape that exists.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS IS ONE FUNCTION AND NOT TWO
+ * ---------------------------------------------------------------------------
+ * It used to be two. Publish hashed `canonicalPack()`; the download served an
+ * object assembled separately in downloadPackHandler. They differed in five
+ * ways — the download had no `scans`, no `subject.branch` and no
+ * `controls[].capturedOn`, and carried two fields the hashed document never
+ * had — and one of those two extra fields was `packSha256` itself. A document
+ * cannot contain its own hash. Add that the hash was taken over compact JSON
+ * while the download was pretty-printed, and the checksum offered to a
+ * recipient "so they can verify the file they were sent is the file that was
+ * published" could not have matched under any circumstances.
+ *
+ * So: one builder, one serializer, and the hash is taken over exactly the bytes
+ * `downloadPackHandler` returns. `packSha256` is NOT a field here. It travels
+ * beside the document — in the audit record and in a response header — because
+ * that is the only place a checksum of a file can live.
+ *
+ * The inputs are the same at publish and at download: publish passes what it
+ * has just computed, download passes what was frozen at publish. Any input
+ * that is live at publish and unavailable at download has to be stored, which
+ * is what `branch` and `scans_json` are for in migration 0030.
+ */
+export function packDocument({
+  auditId, generatedOn, framework, catalogVersion, repoUrl, branch,
+  period, scans, summary, retainedUntil, controls,
+}) {
   return {
     schema: "algosize.compliance.pack/1",
     auditId,
-    generatedAt: isoDay(at),
+    generatedAt: generatedOn,
     disclaimer: PACK_DISCLAIMER,
     framework: {
       id: framework.id, name: framework.name, version: framework.version,
-      catalogVersion: CATALOG_VERSION,
+      catalogVersion,
     },
-    subject: { repoUrl: monitor.repoUrl, branch: monitor.branch || null },
-    period: { start: coverage.period.startOn, end: coverage.period.endOn },
-    scans: coverage.scans,
-    summary: coverage.summary,
-    controls: controlRows.map((c) => ({
+    subject: { repoUrl: repoUrl || null, branch: branch || null },
+    period: { start: period.start, end: period.end },
+    scans: scans ?? null,
+    summary,
+    retainedUntil,
+    controls: controls.map((c) => ({
       id: c.controlId,
       title: c.controlTitle,
       evidenceState: c.evidenceState,
@@ -646,6 +697,19 @@ function canonicalPack({ auditId, coverage, controlRows, monitor, framework, at 
     })),
   };
 }
+
+/** The one serialization. Both the hash and the download go through it, so
+ *  "two spaces or none" can never again be the difference between a checksum
+ *  that verifies and one that does not. */
+export function serializePack(doc) {
+  return JSON.stringify(doc, null, 2);
+}
+
+/** What `pack_hash_scope` says about a stored hash. A row written before
+ *  migration 0030 has NULL: its hash covers a document that was never served
+ *  and cannot be reconstructed, so it verifies nothing about the download and
+ *  must not be offered as if it did. */
+export const PACK_HASH_SCOPE = "document";
 
 export async function listAuditsHandler(request, env) {
   const ctxOrg = await requireOrgContext(request, env);
@@ -708,39 +772,37 @@ export async function downloadPackHandler(request, env) {
 
   const controls = await getAuditControls(env, ctxOrg.orgId, id);
   const framework = getFramework(audit.frameworkId);
-  const body = {
-    schema: "algosize.compliance.pack/1",
-    auditId: audit.id,
-    generatedAt: isoDay(audit.publishedAt || audit.createdAt),
-    disclaimer: PACK_DISCLAIMER,
-    framework: {
-      id: audit.frameworkId,
-      name: framework ? framework.name : audit.frameworkId,
-      version: audit.frameworkVersion,
-      catalogVersion: audit.catalogVersion,
-    },
-    subject: { repoUrl: audit.repoUrl },
-    period: { start: isoDay(audit.periodStart), end: isoDay(audit.periodEnd) },
-    summary: audit.summary,
-    packSha256: audit.packSha256,
-    retainedUntil: isoDay(audit.retainUntil),
-    controls: controls.map((c) => ({
-      id: c.controlId, title: c.controlTitle,
-      evidenceState: c.evidenceState, result: c.result,
-      rationale: c.rationale,
-      asserted: c.evidence ? c.evidence.asserted : null,
-      provenance: c.evidence ? c.evidence.provenance : null,
-      attestedOwner: c.attestedOwner,
-      attestedUntil: c.attestedExpiresAt ? isoDay(c.attestedExpiresAt) : null,
-      documentUrl: c.documentUrl,
-    })),
-  };
 
-  return new Response(JSON.stringify(body, null, 2), {
-    status: 200,
-    headers: {
-      "content-type": "application/json",
-      "content-disposition": `attachment; filename="${audit.id}.json"`,
-    },
+  // Rebuilt through packDocument() — the same function publish hashed — from
+  // the rows that were frozen at publish. Nothing live is consulted, so the
+  // bytes below are the bytes that were hashed.
+  const body = packDocument({
+    auditId: audit.id,
+    generatedOn: isoDay(audit.publishedAt || audit.createdAt),
+    framework: framework || { id: audit.frameworkId, name: audit.frameworkId, version: audit.frameworkVersion },
+    catalogVersion: audit.catalogVersion,
+    repoUrl: audit.repoUrl,
+    branch: audit.branch,
+    period: { start: isoDay(audit.periodStart), end: isoDay(audit.periodEnd) },
+    scans: audit.scans,
+    summary: audit.summary,
+    retainedUntil: isoDay(audit.retainUntil),
+    controls,
   });
+
+  const text = serializePack(body);
+  const headers = {
+    "content-type": "application/json",
+    "content-disposition": `attachment; filename="${audit.id}.json"`,
+  };
+  // The checksum rides beside the document, never inside it. Only offered when
+  // the stored hash actually covers these bytes: a pack published before
+  // migration 0030 carries a hash of a document that was never served, and
+  // sending it here would invite a recipient to run sha256sum and conclude the
+  // file had been tampered with.
+  if (audit.packHashScope === PACK_HASH_SCOPE && audit.packSha256) {
+    headers["x-algosize-pack-sha256"] = audit.packSha256;
+  }
+
+  return new Response(text, { status: 200, headers });
 }

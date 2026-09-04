@@ -160,6 +160,15 @@ function rowToAudit(r) {
   if (!r) return null;
   let summary = null;
   try { summary = r.summary_json ? JSON.parse(r.summary_json) : null; } catch { summary = null; }
+  // Frozen at publish because the download rebuilds the pack from this row and
+  // the coverage.scans block is live data that no longer exists by then. Kept
+  // in whatever shape it was stored in — it is a counts OBJECT, not a list, and
+  // an earlier draft of this line coerced it to [] on the assumption that it
+  // was an array, which changed the rebuilt document and broke the very hash
+  // it exists to keep verifiable. null on absence: a row from before migration
+  // 0030 has no scans block, and saying so beats inventing an empty one.
+  let scans = null;
+  try { scans = r.scans_json ? JSON.parse(r.scans_json) : null; } catch { scans = null; }
   return {
     id: r.id,
     orgId: r.org_id,
@@ -173,7 +182,14 @@ function rowToAudit(r) {
     periodEnd: r.period_end,
     status: r.status,
     summary,
+    branch: r.branch || null,
+    scans,
     packSha256: r.pack_sha256 || null,
+    // NULL on every row written before migration 0030. It is not "unknown" —
+    // it is a definite statement that the stored hash covers a document the
+    // download does not serve, which is why the read maps it rather than
+    // defaulting it to the current scope.
+    packHashScope: r.pack_hash_scope || null,
     packBytes: typeof r.pack_bytes === "number" ? r.pack_bytes : null,
     retainUntil: r.retain_until,
     supersededBy: r.superseded_by || null,
@@ -259,15 +275,17 @@ export async function insertPublishedAudit(env, audit, controlRows) {
   const stmts = [
     env.DB.prepare(
       `INSERT INTO compliance_audits
-         (id, org_id, monitor_id, repo_url, framework_id, framework_version,
+         (id, org_id, monitor_id, repo_url, branch, framework_id, framework_version,
           catalog_version, title, period_start, period_end, status, summary_json,
-          pack_sha256, pack_bytes, retain_until, created_by, created_at, published_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'published', ?, ?, ?, ?, ?, ?, ?)`,
-    ).bind(audit.id, audit.orgId, audit.monitorId, audit.repoUrl, audit.frameworkId,
-           audit.frameworkVersion, audit.catalogVersion, audit.title,
+          scans_json, pack_sha256, pack_hash_scope, pack_bytes, retain_until,
+          created_by, created_at, published_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'published', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(audit.id, audit.orgId, audit.monitorId, audit.repoUrl, audit.branch || null,
+           audit.frameworkId, audit.frameworkVersion, audit.catalogVersion, audit.title,
            audit.periodStart, audit.periodEnd, JSON.stringify(audit.summary || {}),
-           audit.packSha256, audit.packBytes, audit.retainUntil, audit.createdBy,
-           audit.createdAt, audit.publishedAt),
+           JSON.stringify(audit.scans || []),
+           audit.packSha256, audit.packHashScope || null, audit.packBytes,
+           audit.retainUntil, audit.createdBy, audit.createdAt, audit.publishedAt),
   ];
 
   for (const c of controlRows) {

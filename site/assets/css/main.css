@@ -7872,3 +7872,8 @@ textarea.cmp-input { resize: vertical; }
   .cov-split { grid-template-columns: 1fr; }
   .pubs, .sweep-cards { grid-template-columns: 1fr; }
 }
+
+/* A checksum that cannot verify the download is shown struck through and dim:
+   it is a fact about a past publish, not something to paste into sha256sum.
+   See dash-compliance.js and migration 0030. */
+.cmp-sha-stale { color: var(--text-dim); text-decoration: line-through; }

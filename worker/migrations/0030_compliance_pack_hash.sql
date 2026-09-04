@@ -1,0 +1,36 @@
+-- Make the published pack's SHA-256 verifiable against the file we serve.
+--
+-- The promise on the column added in 0028 reads: "SHA-256 over the canonical
+-- frozen JSON, shown in the UI so a recipient can verify the file they were
+-- sent is the file that was published." That promise could not be kept, for
+-- three independent reasons, on the one surface whose entire product claim is
+-- verifiable evidence:
+--
+--   1. Publish hashed canonicalPack(); downloadPackHandler served a different
+--      object — no `scans`, no `subject.branch`, no `controls[].capturedOn`,
+--      and two fields the hashed document never had.
+--   2. The served document carried `packSha256` as one of its own fields. A
+--      document cannot contain its own hash, so even identical shapes could
+--      never have matched.
+--   3. The hash was over compact JSON; the download was pretty-printed.
+--
+-- The fix is one builder and one serializer shared by both paths, hashing the
+-- exact bytes the download returns. Two of the builder's inputs were live at
+-- publish and unavailable at download time, so they are frozen here beside the
+-- rest of the record:
+--
+--   branch      the monitor's branch, in subject.branch.
+--   scans_json  the coverage.scans block: what was scanned, and when. Evidence
+--               about the evidence — dropping it to make the hashes agree
+--               would have been the cheaper fix and the wrong one.
+--
+-- pack_hash_scope says WHAT the stored hash covers, and exists because rows
+-- written before this migration cannot be repaired. Their hash is over a
+-- document that was never served and cannot be reconstructed; recomputing one
+-- at read time would be a fresh hash of a rebuilt file, which verifies nothing
+-- about what was published. NULL therefore means "this hash does not cover the
+-- download", and the UI says so rather than printing a checksum that will
+-- never match. Every row written from now on says 'document'.
+ALTER TABLE compliance_audits ADD COLUMN branch TEXT;
+ALTER TABLE compliance_audits ADD COLUMN scans_json TEXT;
+ALTER TABLE compliance_audits ADD COLUMN pack_hash_scope TEXT;
