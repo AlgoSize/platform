@@ -7891,3 +7891,31 @@ textarea.cmp-input { resize: vertical; }
   display: flex; flex-direction: column; gap: var(--s-2);
 }
 .result-unmeasured .result-section-title { margin: 0; }
+
+/* --- X-ray: what "clear" covers -----------------------------------------
+   Shown under an empty findings panel. Deliberately quiet — it is context for
+   a good result, not a finding — but present, because "nothing found" without
+   a list of what was looked for is an assertion rather than a result. The
+   not-looked-for group takes the warm accent for the same reason the compliance
+   table reserves it: a gap the reader must weigh, and not a severity. */
+.xray-covers {
+  margin-top: var(--s-4);
+  padding-top: var(--s-4);
+  border-top: 1px dashed var(--border);
+  display: flex; flex-direction: column; gap: var(--s-4);
+}
+.xray-covers-title { font-size: var(--fs-sm); color: var(--text-muted); margin: 0; }
+.xray-covers-lens { display: flex; flex-direction: column; gap: var(--s-2); }
+.xray-covers-lens-name {
+  font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+.xray-covers-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s-2); }
+.xray-covers-list li { display: flex; flex-wrap: wrap; gap: var(--s-2); align-items: baseline; }
+.xray-covers-rule { font-size: var(--fs-xs); color: var(--text); white-space: nowrap; }
+.xray-covers-what { font-size: var(--fs-xs); color: var(--text-muted); text-wrap: pretty; flex: 1 1 20ch; }
+.xray-covers-gaps-label {
+  font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--accent-warm); margin-top: var(--s-2);
+}
+.xray-covers-gaps .xray-covers-rule { color: var(--accent-warm); }
