@@ -90,25 +90,44 @@
     // Each read is independent and each failure is local: the catalog failing
     // must not blank the clients list, because they answer different questions
     // and a reader may only care about one of them.
-    callApi("/api/mcp/manifest").then(function (r) {
-      state.manifest = r && r.ok ? r.data : { error: true };
+    //
+    // The METHOD IS EXPLICIT on every call. `callApi(path, body, method)`
+    // defaults to POST, and all four of these routes are registered GET-only
+    // — omitting it sent four POSTs, every one of which 404'd or worse, and
+    // took the entire page down on every load with no error anyone could see.
+    // /api/keys is the "or worse": it is registered for BOTH verbs, so the
+    // bodyless POST reached the key-CREATION handler and was only stopped by
+    // its `request.json()` throwing first. Nothing was minted, but nothing
+    // about that was by design.
+    //
+    // And none of these handlers wraps its reply in {ok, data} — each returns
+    // its object directly, and callApi already throws on a non-2xx. An `r.ok`
+    // test against a body that has no `ok` field is false for a SUCCESSFUL
+    // read, which is the second, independent reason every panel showed its
+    // error string.
+    callApi("/api/mcp/manifest", null, "GET").then(function (r) {
+      state.manifest = r || { error: true };
       render();
     }).catch(function () { state.manifest = { error: true }; render(); });
 
-    callApi("/api/mcp/clients").then(function (r) {
-      state.clients = r && r.ok ? (r.data.connections || []) : { error: true };
+    callApi("/api/mcp/clients", null, "GET").then(function (r) {
+      state.clients = (r && r.connections) || [];
       render();
     }).catch(function () { state.clients = { error: true }; render(); });
 
-    callApi("/api/mcp/usage").then(function (r) {
-      state.usage = r && r.ok ? r.data : { error: true };
+    callApi("/api/mcp/usage", null, "GET").then(function (r) {
+      state.usage = r || { error: true };
       render();
     }).catch(function () { state.usage = { error: true }; render(); });
 
-    callApi("/api/keys").then(function (r) {
-      state.keys = r && r.ok ? (r.data.keys || []) : [];
+    // An unreadable key list is NOT an empty key list. Collapsing the failure
+    // to [] made the page state "This organisation has no API keys yet" to an
+    // org with keys it simply could not read — and the reader's next move is
+    // to go and create a duplicate.
+    callApi("/api/keys", null, "GET").then(function (r) {
+      state.keys = (r && r.keys) || [];
       render();
-    }).catch(function () { state.keys = []; render(); });
+    }).catch(function () { state.keys = { error: true }; render(); });
   }
 
   // ---------------------------------------------------------------- render
@@ -292,7 +311,19 @@
       wrap.appendChild(el("div", { class: "panel-empty" }, "Loading keys…"));
       return wrap;
     }
-    var keys = (state.keys || []).filter(function (k) { return !k.revokedAt; });
+    // Checked BEFORE the empty branch, and it has to be: an org whose key list
+    // failed to load has an unknown number of keys, and "you have none" is the
+    // one answer we know to be unjustified.
+    if (state.keys.error) {
+      var bad = el("div", { class: "mcp-empty" });
+      bad.appendChild(el("p", {}, "Your API keys could not be read, so this list is not "
+        + "showing them — it is not saying you have none."));
+      bad.appendChild(el("a", { href: "#/account/keys", class: "btn btn-ghost btn-sm" },
+        "Open Team → API keys"));
+      wrap.appendChild(bad);
+      return wrap;
+    }
+    var keys = (Array.isArray(state.keys) ? state.keys : []).filter(function (k) { return !k.revokedAt; });
     if (!keys.length) {
       // The empty state is a real state, not an error: a new organisation has
       // no keys, and the fix is one link away.
@@ -571,12 +602,17 @@
     var go = el("button", { type: "button", class: "btn btn-danger btn-sm" }, "Revoke access");
     go.addEventListener("click", function () {
       go.disabled = true; go.textContent = "Revoking…";
-      callApi("/api/mcp/clients/" + encodeURIComponent(c.clientId), { method: "DELETE" })
+      // `{method:"DELETE"}` used to be passed HERE — in the BODY slot — so the
+      // revoke went out as a POST carrying that object as JSON, against a
+      // DELETE-only route. The button could never have worked.
+      callApi("/api/mcp/clients/" + encodeURIComponent(c.clientId), null, "DELETE")
         .then(function (r) {
+          // This handler DOES return {ok:true,...}, unlike the four reads
+          // above — so the test is right here and wrong there.
           if (r && r.ok) { fetchAll(); return; }
           go.disabled = false; go.textContent = "Revoke access";
           box.appendChild(el("p", { class: "field-msg-error" },
-            (r && r.data && r.data.message) || "The revoke did not go through. Try again."));
+            (r && r.message) || "The revoke did not go through. Try again."));
         })
         .catch(function () {
           go.disabled = false; go.textContent = "Revoke access";

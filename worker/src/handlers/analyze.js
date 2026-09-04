@@ -38,6 +38,7 @@ import { storeReportFor } from "../reports/render.js";
 import { captureException } from "../observability.js";
 import { analyzerVersion } from "../analyzer-version.js";
 import { fetchRepoTree, fetchRawFile } from "../github.js";
+import { decorateResultWithAcceptances } from "../risk/decorate.js";
 
 // After a 200 from any analyzer, queue a non-blocking write to the per-user
 // run-history KV. Skipped when there's no logged-in user (e.g. an unauth'd
@@ -119,6 +120,40 @@ async function maybePersist(ctx, env, request, analyzer, input, response) {
     .then((run) => (run ? storeReportFor(env, ctx, run) : null))
     .catch((err) => { console.error("maybePersist: report store failed", err); return null; });
   if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(persisted);
+
+  // Returned so `withAcceptances` below can reuse the org this already
+  // resolved. Two lookups would be a second membership query per scan to
+  // answer a question already answered here, and — worse — could disagree.
+  return orgId;
+}
+
+/**
+ * Re-serialise a 200 with its accepted risks applied.
+ *
+ * ORDER IS THE POINT. This runs strictly AFTER `maybePersist` has awaited its
+ * own `response.clone().json()`, and parses a SECOND, independent clone — so
+ * the object handed to persistence and the object decorated here share no
+ * structure at all. `runs.result_json` keeps what the scanner found; the
+ * acceptance stays a read-side fact, revocable everywhere at once.
+ *
+ * Anything that is not a decorable 200 comes back byte-identical.
+ */
+async function withAcceptances(response, env, { orgId, repoUrl }) {
+  if (!response || response.status !== 200 || !orgId || !repoUrl) return response;
+  let result;
+  try { result = await response.clone().json(); } catch { return response; }
+  let decorated;
+  try {
+    decorated = await decorateResultWithAcceptances(env, result, { orgId, repoUrl });
+  } catch (err) {
+    // A register that cannot be read must not cost the caller the scan. The
+    // failure direction is "nothing is accepted", which can only ever show a
+    // finding that is signed for — never hide one that is not.
+    console.error("withAcceptances: acceptance lookup failed", err);
+    return response;
+  }
+  if (decorated === result) return response;
+  return json(decorated, 200);
 }
 
 // 100 MB cap on uploads. At ~150 bytes per CUR row, this comfortably covers
@@ -617,8 +652,12 @@ export async function analyzeVulnHandler(request, env, ctx) {
 
   if (body && typeof body.repoUrl === "string") {
     const response = await runLockfileAudit(body, env, request, ctx);
-    await maybePersist(ctx, env, request, "vuln", body, response);
-    return response;
+    const orgId = await maybePersist(ctx, env, request, "vuln", body, response);
+    // The only scan path an acceptance can reach: it names a repository, and
+    // an acceptance is scoped to one. The `{code}`/`{files}` path below is
+    // deliberately left alone — pasted content belongs to no repository, so
+    // there is nothing an acceptance could have been signed against.
+    return withAcceptances(response, env, { orgId, repoUrl: body.repoUrl });
   }
 
   // Legacy heuristic path — same behavior as before Task #15.

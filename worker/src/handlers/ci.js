@@ -36,6 +36,7 @@
 import { auditManifests, SOURCE_SKIP_RE } from "./analyze.js";
 import { analyzeVuln } from "../analyzers/vuln.js";
 import { persistRun } from "./runs.js";
+import { decorateSourceWithAcceptances } from "../risk/decorate.js";
 import { storeReportFor } from "../reports/render.js";
 import { SUPPORTED_FILES as LOCKFILE_NAMES, MAX_LOCKFILE_BYTES } from "../analyzers/lockfile.js";
 import { validateArchitectureInput, analyzeArchitecture } from "../analyzers/architecture.js";
@@ -564,6 +565,16 @@ export async function ciRunHandler(request, env, ctx) {
     };
   }
 
+  // Accepted risks are applied to a SEPARATE object, built here — after every
+  // persistRun above has already been awaited with the raw `sourceScan`.
+  // `runs.result_json` therefore keeps what the scanner found, and the
+  // acceptance stays a read-side fact that a revocation undoes everywhere at
+  // once. Decorating `sourceScan` in place would have written the acceptance
+  // into history and given a stale row something to carry.
+  const reportedScan = await decorateSourceWithAcceptances(env, sourceScan, {
+    orgId, repoUrl: ciContext.repo,
+  });
+
   // Top-level fields keep describing the dependency audit, so every existing
   // consumer — including the workflow's own jq — reads the same shape it
   // always has. `failed` is the verdict ACROSS both analyzers, which is what a
@@ -588,17 +599,45 @@ export async function ciRunHandler(request, env, ctx) {
     // `monthlyCeilingUsd: null` takes in algosize.budget.json. A brand-new
     // analyzer that starts failing builds on its first run gets deleted from
     // the workflow before anyone reads a finding, and then it protects nobody.
-    ...(sourceScan ? { source: {
-      status:   sourceScan.status,
-      findings: sourceScan.status === "ok" ? sourceScan.summary.total : 0,
-      summary:  sourceScan.status === "ok" ? sourceScan.summary.bySeverity : null,
+    ...(reportedScan ? { source: {
+      status:   reportedScan.status,
+      // `findings` and `summary` STILL COUNT EVERYTHING, accepted included.
+      //
+      // That is deliberate, and it is the conservative choice rather than the
+      // lazy one. A workflow already installed in a customer's repository does
+      // not regenerate itself, and it renders these two fields with no idea
+      // that an acceptance register exists. Narrowing them to open-only would
+      // make an old installation print a smaller number with nothing beside it
+      // explaining where the rest went — "0 open" with no "1 accepted", which
+      // is the exact failure the register was built to prevent.
+      //
+      // So the open/accepted split arrives as ADDITIONAL fields, and the
+      // generated workflow reads them with a jq default so both shapes render.
+      findings: reportedScan.status === "ok" ? reportedScan.summary.total : 0,
+      summary:  reportedScan.status === "ok" ? reportedScan.summary.bySeverity : null,
+      ...(reportedScan.status === "ok" && reportedScan.summary.accepted
+        && reportedScan.summary.accepted.total
+        ? {
+            open:     reportedScan.summary.open.total,
+            accepted: reportedScan.summary.accepted.total,
+            // Never silently: a lapsed acceptance is open again at full
+            // severity, and the build comment is where somebody would first
+            // notice that a signature ran out.
+            ...(reportedScan.summary.expiredAcceptances
+              ? { expiredAcceptances: reportedScan.summary.expiredAcceptances } : {}),
+            ...(reportedScan.summary.drifted ? { drifted: reportedScan.summary.drifted } : {}),
+          }
+        : {}),
       // The top few, so the comment can name something concrete instead of
-      // asking the reader to go and look.
-      top: (sourceScan.findings || []).slice(0, 5).map((f) => ({
-        severity: f.severity, ruleId: f.ruleId, title: f.title,
-        path: f.path, line: f.line, confidence: f.confidence,
-      })),
-      ...(sourceScan.message ? { message: sourceScan.message } : {}),
+      // asking the reader to go and look. Open findings first — an accepted
+      // one is not what a reader of a build comment needs named.
+      top: (reportedScan.findings || [])
+        .filter((f) => !f.accepted)
+        .slice(0, 5).map((f) => ({
+          severity: f.severity, ruleId: f.ruleId, title: f.title,
+          path: f.path, line: f.line, confidence: f.confidence,
+        })),
+      ...(reportedScan.message ? { message: reportedScan.message } : {}),
     } } : {}),
     // Deliberately NOT folded into the top-level `failed`. The optimizer gate
     // decides its own verdict from the ceilings in optimizer.config.json and
@@ -870,6 +909,22 @@ jobs:
             {
               echo ""
               jq -r '"**Code scan** · \\(.source.findings) finding(s) (\\(.source.summary.critical) critical, \\(.source.summary.high) high) in the files submitted"' response.json
+              # Accepted risks, when the response carries them. The jq default
+              # keeps this line working against a server that predates the
+              # register, and the count is NEVER printed on its own — a reader
+              # who sees a number go down has to be told where it went.
+              if [ "$(jq -r '.source.accepted // 0' response.json)" != "0" ]; then
+                echo ""
+                jq -r '"_\\(.source.accepted) of these are signed off in the accepted-risk register (\\(.source.open) open). They are still reported, still exported, and still counted above._"' response.json
+              fi
+              if [ "$(jq -r '.source.expiredAcceptances // 0' response.json)" != "0" ]; then
+                echo ""
+                jq -r '"⚠️ _\\(.source.expiredAcceptances) acceptance(s) have EXPIRED and are open again at full severity._"' response.json
+              fi
+              if [ "$(jq -r '.source.drifted // 0' response.json)" != "0" ]; then
+                echo ""
+                jq -r '"⚠️ _\\(.source.drifted) finding(s) match a signed acceptance but the code has changed underneath it, so the signature no longer covers them._"' response.json
+              fi
               if [ "$(jq -r '.source.findings' response.json)" != "0" ]; then
                 echo ""
                 jq -r '.source.top[] | "- \\(.severity | ascii_upcase) \\(.path):\\(.line) — \\(.title)"' response.json

@@ -851,7 +851,13 @@
         expiresAt: until.value,
         documentUrl: doc.value.trim() || undefined,
       }, "POST").then(function () {
-        msg.textContent = "Signed. Re-run the scan to see it applied.";
+        // This used to say "Re-run the scan to see it applied", which was
+        // untrue in both halves: there was no read path, so re-running showed
+        // nothing — and now that there is one, an acceptance is applied when a
+        // result is READ, so no re-scan is needed at all. It reaches this run,
+        // every past run, the report and the SARIF export the moment it is
+        // signed, and a revocation takes all of that back the same way.
+        msg.textContent = "Signed. It applies to this finding everywhere on reload — no re-scan needed.";
       }).catch(function (err) {
         // The API's refusals are written to be read by a person; show them
         // rather than replacing them with a generic failure.

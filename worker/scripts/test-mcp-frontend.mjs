@@ -120,6 +120,78 @@ group("states that are easy to render dishonestly");
     "…and a failure state distinct from an empty one");
 }
 
+group("every request uses the verb its route is registered for");
+{
+  // This page was dead on every load for every user, and neither cause could
+  // be seen from the browser: the panels rendered their honest "could not
+  // read" strings, which is exactly what they should do when a read fails,
+  // so the page looked like a backend outage rather than a client bug.
+  //
+  // Cause 1. `callApi(path, body, method)` DEFAULTS TO POST. All four reads
+  // omitted the method, and all four routes are registered GET-only. The
+  // /api/keys one was the worst of them: that path is registered for BOTH
+  // verbs (index.js), so the POST reached the key-CREATION handler and was
+  // stopped only by its `request.json()` throwing on the absent body.
+  const index = readFileSync(join(__dirname, "..", "src", "index.js"), "utf8");
+  for (const path of ["/api/mcp/manifest", "/api/mcp/clients", "/api/mcp/usage", "/api/keys"]) {
+    const call = new RegExp(
+      "callApi\\(\"" + path.replace(/\//g, "\\/") + "\"([^)]*)\\)");
+    const m = js.match(call);
+    expect(Boolean(m) && /,\s*"GET"\s*$/.test(m[1]),
+      `the ${path} read names GET explicitly — callApi defaults to POST`);
+  }
+  expect(/router\.delete\(\s*"\/api\/mcp\/clients\/:id"/.test(index),
+    "the revoke route is registered DELETE-only…");
+  expect(/callApi\("\/api\/mcp\/clients\/" \+ encodeURIComponent\(c\.clientId\), null, "DELETE"\)/.test(js),
+    "…so revoke passes DELETE as the METHOD, not as the body");
+  // The specific shape of the old bug: an options object in the body slot is
+  // silently JSON-encoded and sent, and the verb stays POST.
+  expect(!/callApi\([^)]*\{\s*method:/.test(js),
+    "no call passes a { method } object where callApi expects a body");
+}
+
+group("responses are read in the shape the handler sends");
+{
+  // Cause 2, independent of cause 1 and equally fatal. None of these four
+  // handlers wraps its reply — each returns its object directly, and callApi
+  // already throws on a non-2xx. Testing `r.ok` on a body with no `ok` field
+  // is false for a SUCCESSFUL read, so every panel took its error branch even
+  // when the request went through.
+  expect(!/r && r\.ok \? r\.data/.test(js),
+    "no read unwraps an {ok, data} envelope that no handler on this surface produces");
+  expect(!/r\.data\./.test(js),
+    "…and nothing reads through a `.data` that is never there");
+  expect(/callApi\("\/api\/mcp\/clients", null, "GET"\)[\s\S]{0,120}r\.connections/.test(js),
+    "the clients read takes `connections` from the top level of the reply");
+  expect(/callApi\("\/api\/keys", null, "GET"\)[\s\S]{0,400}r\.keys/.test(js),
+    "the keys read takes `keys` from the top level of the reply");
+  // The one endpoint on this page that DOES send {ok:true}. Asymmetric on
+  // purpose, and the asymmetry is the reason the envelope check above is
+  // scoped to the reads.
+  expect(/if \(r && r\.ok\) \{ fetchAll\(\); return; \}/.test(js),
+    "revoke still reads the `ok` its own handler really sends");
+}
+
+group("an unreadable list is never rendered as an empty one");
+{
+  // The keys read used to collapse EVERY failure — 403, 500, offline — to [],
+  // and the empty branch then stated "This organisation has no API keys yet"
+  // to an org whose keys simply could not be read. The reader's next move is
+  // to go and mint a duplicate credential.
+  expect(!/\.catch\(function \(\) \{ state\.keys = \[\]/.test(js),
+    "a failed key read does not become an empty key list");
+  expect(/state\.keys = \{ error: true \}/.test(js),
+    "…it becomes an explicit error state");
+  // Order matters: the error branch has to come first, or the length check
+  // on the sentinel object falls through to the empty copy.
+  const picker = js.slice(js.indexOf("function keyPicker"));
+  expect(picker.indexOf("state.keys.error") > -1
+    && picker.indexOf("state.keys.error") < picker.indexOf("no API keys yet"),
+    "…checked BEFORE the empty state, not after it");
+  expect(/it is not saying you have none/.test(js),
+    "…and the copy says the list is unread, not that the answer is zero");
+}
+
 group("consequential actions");
 {
   expect(/mcp-confirm/.test(js), "revoke is confirmed rather than immediate");
