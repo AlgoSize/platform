@@ -1162,6 +1162,17 @@ code, .mono {
 }
 .footer-links a { color: var(--text-muted); font-size: var(--fs-sm); }
 .footer-links a:hover { color: var(--text); }
+/* The page's closing promise. Sits above the copyright because it is a
+   statement about the content, not a legal notice about the site. */
+.footer-honesty {
+  display: block;
+  text-align: center;
+  max-width: 62ch;
+  margin: var(--s-5) auto 0;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  text-wrap: pretty;
+}
 .footer-copy {
   display: block;
   text-align: center;
@@ -7657,4 +7668,207 @@ textarea.cmp-input { resize: vertical; }
   .cmp-row { grid-template-columns: 1fr; gap: var(--s-2); }
   .cmp-row-head { display: none; }
   .cmp-mobile-label { display: inline; font-size: 0.58rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-dim); }
+}
+
+/* ==========================================================================
+   Landing page — the compliance and honest-coverage middle
+   ==========================================================================
+   Five sections restored to site/index.html: the SSDF/CRA coverage split, the
+   two-axis table, the accepted-risk register, the self-audit pair, the sweep/CI
+   pair, and the scorecard cell key.
+
+   Two rules govern the colour here, and both are borrowed from the dashboard
+   rather than invented for the marketing page:
+
+     1. An evidence state is not a result. The ⚙ / ✍ / ○ triad is set in
+        --text-muted and the brand accent — it says how we know, and how we
+        know is never good or bad news. Only the Result column is allowed to
+        use the severity ramp, because only the Result column is a verdict.
+     2. Every state carries a glyph and a word, never colour alone. The
+        severity ramp's own comment at the top of this file explains why, and
+        the same reason applies to a table read by the same audience.
+   ========================================================================== */
+
+/* --- The three-way coverage split --- */
+.cov-split {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s-4);
+  margin-bottom: var(--s-7);
+}
+.cov-card {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: var(--s-5);
+  display: flex; flex-direction: column; gap: var(--s-2);
+}
+.cov-glyph { font-size: var(--fs-lg); line-height: 1; color: var(--text-dim); }
+.cov-automated .cov-glyph { color: var(--accent); }
+.cov-attested .cov-glyph  { color: var(--text-muted); }
+.cov-uncovered .cov-glyph { color: var(--text-dim); }
+.cov-count {
+  margin: 0; font-size: var(--fs-sm); color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+/* The count is the only large number in the card, so it carries the weight and
+   the word beside it stays small — "11" and "automated" are one fact. */
+.cov-count strong {
+  display: block; font-size: var(--fs-2xl); font-weight: 600;
+  letter-spacing: -0.02em; color: var(--text); font-variant-numeric: tabular-nums;
+}
+.cov-body { margin: 0; color: var(--text-muted); font-size: var(--fs-sm); text-wrap: pretty; }
+
+/* --- Two axes, never one badge --- */
+.axes {
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--bg-elevated); padding: var(--s-5);
+  display: flex; flex-direction: column; gap: var(--s-4);
+  margin-bottom: var(--s-7);
+}
+.axes-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-3); }
+.axes-head h3 { font-size: var(--fs-lg); }
+.axes-sub { margin: 0; font-size: var(--fs-xs); color: var(--text-dim); }
+
+/* A wide table scrolls inside its own box. The page body never scrolls
+   sideways to accommodate it. */
+.table-scroll { overflow-x: auto; }
+
+.axes-table { width: 100%; border-collapse: collapse; min-width: 620px; }
+.axes-table th, .axes-table td {
+  text-align: left; padding: var(--s-3) var(--s-3);
+  border-bottom: 1px solid var(--border-soft); vertical-align: top;
+}
+.axes-table thead th {
+  font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--text-dim); font-weight: 600; border-bottom-color: var(--border);
+}
+.axes-table tbody th { font-weight: 600; white-space: nowrap; }
+.axes-table td { color: var(--text-muted); font-size: var(--fs-sm); text-wrap: pretty; }
+.axes-table tbody tr:last-child th,
+.axes-table tbody tr:last-child td { border-bottom: 0; }
+
+/* How we know: never coloured as good or bad. */
+.ev { font-size: var(--fs-xs); white-space: nowrap; color: var(--text-muted); }
+.ev-automated { color: var(--accent); }
+.ev-attested  { color: var(--text-muted); }
+.ev-uncovered { color: var(--text-dim); }
+
+/* Whether it holds: the only column allowed the severity ramp. */
+.res { font-size: var(--fs-xs); white-space: nowrap; font-weight: 600; }
+.res-notmet  { color: var(--sev-critical); }
+.res-expired { color: var(--accent-warm); }
+/* Not a verdict at all — set as body text so it cannot be mistaken for one. */
+.res-none { color: var(--text-dim); font-size: var(--fs-xs); }
+
+.axes-note {
+  margin: 0; color: var(--text-muted); font-size: var(--fs-sm);
+  text-wrap: pretty; max-width: 76ch;
+}
+
+/* --- Accepted risk --- */
+.risk { display: flex; flex-direction: column; gap: var(--s-4); }
+.risk-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-3); }
+.risk-head h3 { font-size: var(--fs-lg); }
+.risk-sub { margin: 0; font-size: var(--fs-xs); color: var(--text-dim); }
+
+/* The severity rail stays. An accepted finding is still true and still that
+   severe — the same rule .sast-card-high follows on the scanner. */
+.risk-card {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-warm);
+  border-radius: var(--radius); padding: var(--s-5);
+  display: flex; flex-direction: column; gap: var(--s-3);
+}
+.risk-state {
+  margin: 0; font-size: var(--fs-xs); font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted);
+}
+.risk-rule { margin: 0; font-size: var(--fs-xs); color: var(--text-dim); }
+.risk-title { margin: 0; font-size: var(--fs-md); text-wrap: pretty; }
+.risk-path { color: var(--text-muted); font-size: var(--fs-sm); }
+/* The rationale is a quotation from a person, and is set as one. */
+.risk-why {
+  margin: 0; padding: var(--s-3);
+  border: 1px dashed var(--border); border-radius: 8px; background: var(--bg);
+  color: var(--text-muted); font-size: var(--fs-sm); text-wrap: pretty;
+}
+.risk-meta { display: flex; flex-wrap: wrap; gap: var(--s-4); margin: 0; }
+.risk-meta div { display: flex; gap: var(--s-2); align-items: baseline; }
+.risk-meta dt {
+  font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+.risk-meta dd { margin: 0; font-size: var(--fs-xs); color: var(--text-muted); }
+.risk-rules {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: var(--s-3);
+}
+.risk-rules li {
+  color: var(--text-muted); font-size: var(--fs-sm); text-wrap: pretty;
+  padding-left: var(--s-4); border-left: 1px solid var(--border); max-width: 76ch;
+}
+
+/* --- What we publish about ourselves --- */
+.pubs { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--s-4); }
+.pub {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: var(--s-5);
+  display: flex; flex-direction: column; gap: var(--s-2); align-items: flex-start;
+}
+.pub-tag {
+  font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--accent-warm);
+}
+.pub h3 { font-size: var(--fs-md); }
+.pub p { margin: 0; color: var(--text-muted); font-size: var(--fs-sm); text-wrap: pretty; }
+.pub-link { margin-top: auto; padding-top: var(--s-2); font-size: var(--fs-sm); color: var(--accent); }
+
+/* --- It watches ---
+   Named sweep-* and not watch-*: the watch- prefix belongs to the optimizer
+   and estimator tool pages, and test-tools-frontend.mjs owns it — any rule
+   with that prefix must be applied by the dashboard. The landing page already
+   observes the same rule for the analyzer- prefix; one sheet, two components.
+
+   Prefixes are written here WITHOUT a leading dot on purpose. The dead-rule
+   guards scan this file for selectors, and a selector quoted in a comment
+   counts as one — the first draft of this note invented a class that has no
+   markup and failed the build. */
+.sweep-cards { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--s-4); }
+.sweep-card {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: var(--s-5);
+  display: flex; flex-direction: column; gap: var(--s-2);
+}
+.sweep-tag {
+  font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+.sweep-card h3 { font-size: var(--fs-md); }
+.sweep-card p { margin: 0; color: var(--text-muted); font-size: var(--fs-sm); text-wrap: pretty; }
+
+/* --- The scorecard cell key --- */
+.cellkey {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: var(--s-3);
+}
+.cellkey-item {
+  border: 1px solid var(--border-soft); border-radius: var(--radius);
+  background: var(--bg-elevated); padding: var(--s-4);
+  display: flex; flex-direction: column; gap: var(--s-2);
+}
+.cellkey-term { font-size: var(--fs-sm); }
+.cellkey-gloss { color: var(--text-muted); font-size: var(--fs-xs); text-wrap: pretty; }
+/* Four absences, one result. The four are dim and the result is not — that
+   difference is the whole point of the panel, so it is the loudest thing in it. */
+.cellkey-pending    { color: var(--text-muted); }
+.cellkey-unmeasured { color: var(--text-dim); }
+.cellkey-na         { color: var(--text-dim); }
+.cellkey-off        { color: var(--text-dim); }
+.cellkey-measured { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
+.cellkey-zero {
+  color: var(--accent); font-size: var(--fs-lg); font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 900px) {
+  .cov-split { grid-template-columns: 1fr; }
+  .pubs, .sweep-cards { grid-template-columns: 1fr; }
 }
