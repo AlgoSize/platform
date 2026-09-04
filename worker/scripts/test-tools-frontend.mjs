@@ -219,6 +219,23 @@ group("estimator commitments");
   expect(branchStart > -1 && branch.includes("chip-warn") && !branch.includes("chip-ok"),
     "the could-not-price chip is a warning, never the ok chip");
 
+  // 2c. A night the sweep was SKIPPED is not a night it ran and found nothing.
+  // renderNight read only m.paused, so a throttled or sandbox-less sweep
+  // rendered exactly like a completed one with a stale baseline beside it —
+  // last week's answer wearing last night's date. The sweep has recorded the
+  // reason since migration 0022; it simply never reached this page.
+  expect(/lastSkips/.test(optJs) && /s\.analyzer === "algo"/.test(optJs),
+    "the optimizer card reads the sweep's own record of what it declined to do");
+  expect(/"sweep skipped"/.test(optJs),
+    "…and says so in its own chip rather than borrowing 'first run pending'");
+  expect(/skip \? \(skip\.note/.test(optJs),
+    "…with the server's sentence for that reason, not a second wording invented here");
+  // Order matters: the skip must be read before the baseline, or a stale grade
+  // renders as last night's.
+  const optCode = optJs.split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
+  expect(optCode.indexOf('"sweep skipped"') < optCode.indexOf('"first run pending"'),
+    "…checked before the baseline, so a stale grade never reads as last night's");
+
   // 3. The no-credentials line appears on the automation card too.
   expect(/no cloud account, no credentials/.test(estJs),
     "the trust boundary is repeated where the automation is offered");

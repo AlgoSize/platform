@@ -422,8 +422,20 @@
       var row = el("div", { class: "night-row" });
       var top = el("div", { class: "night-row-top" });
       top.appendChild(el("strong", { class: "mono" }, shortRepo(m.repoUrl)));
+      // What the last sweep declined to do here. renderNight read only
+      // m.paused, so a night the optimizer pass was SKIPPED — throttled, no
+      // sandbox, a config it could not parse — rendered exactly like a night it
+      // ran and graded nothing. The sweep has recorded the reason since
+      // migration 0022; it simply never reached this page.
+      var skip = null;
+      if (Array.isArray(m.lastSkips)) {
+        skip = m.lastSkips.find(function (s) { return s && s.analyzer === "algo"; }) || null;
+      }
+
       if (m.paused) {
         top.appendChild(el("span", { class: "chip chip-muted" }, "paused"));
+      } else if (skip) {
+        top.appendChild(el("span", { class: "chip chip-warn" }, "sweep skipped"));
       } else if (!m.lastAlgo) {
         // Null baseline: the sweep has not completed an optimizer pass yet.
         // Distinct from zero, which means "ran, and the repo has no config".
@@ -438,6 +450,11 @@
 
       var meta = el("p", { class: "night-meta mono" },
         m.paused ? "Paused — resumes where the baseline left off."
+        // The skip's own sentence, from the server. Said before any grade,
+        // because a stale baseline shown without "last night did not run" is
+        // last week's answer wearing last night's date.
+        : skip ? (skip.note || "The optimizer pass did not run on the last sweep.") +
+                 (skip.fix ? " " + skip.fix : "")
         : !m.lastAlgo ? "Grades record silently as the baseline; the first email is a regression, not a report."
         : !m.lastAlgo.functions ? "The sweep looked and found no optimizer.config.json — commit the watchlist file to start grading."
         : "baseline " + (typeof m.lastAlgo.at === "number" ? core.formatRelativeTime(m.lastAlgo.at * 1000) : "recorded") +

@@ -122,6 +122,22 @@ function publicMonitor(m) {
     lastAlgo: m.lastAlgo
       ? { functions: Object.keys(m.lastAlgo.byName).length, at: m.lastAlgo.at }
       : null,
+    // What the last sweep DID NOT do, per analyzer (migrations/0022). The
+    // scorecard has read this since it existed; the tool pages could not, so a
+    // night the sweep was skipped rendered identically to a night it ran and
+    // found nothing. Null — not [] — when no sweep has recorded skips, because
+    // a row from before the column is unknown rather than clean.
+    lastSkips: Array.isArray(m.lastSkips)
+      // The sentence travels with the reason. The client has no copy of this
+      // table and should not grow one: two wordings for one skip is how a page
+      // ends up explaining a state the server stopped producing.
+      ? m.lastSkips.map((s) => ({
+          analyzer: s.analyzer,
+          reason: s.reason,
+          note: explainUnavailable(s.reason),
+          fix: fixUnavailable(s.reason),
+        }))
+      : null,
     // Code findings from the source scan (migrations/0024). Null means no
     // sweep has recorded one — never an implied zero.
     lastSource: m.lastSource
