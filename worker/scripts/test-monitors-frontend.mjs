@@ -183,6 +183,46 @@ console.log("\nevery CI snippet endpoint the Worker registers has a card that fe
     "the cloud-spend gate has its own card, like the other four");
 }
 
+{
+  // ---------------------------------------------------------------------
+  // A gate whose runs we cannot see must not report on the customer's repo
+  // ---------------------------------------------------------------------
+  //
+  // Three of the five gates file runs tagged "ci" and this page reads them.
+  // The estimate and cloud-spend workflows authenticate with an API key and
+  // file runs with a NULL source, so nothing they do ever reaches this feed —
+  // their entry in GATES carries `analyzer: null` and their `run` is null on
+  // every render, forever.
+  //
+  // The pill collapsed that into "not set up". A team whose cost gate had been
+  // green for a month read "not set up" the whole time, from an absence of
+  // evidence this page was never going to have. The card BODY already said the
+  // honest thing, so the two halves of one card disagreed.
+  expect(/var canSee = !!g\.analyzer;/.test(js),
+    "the pill asks whether this gate's runs can reach us at all");
+  expect(/!canSee \? "not reported"/.test(js),
+    "…and says 'not reported' rather than 'not set up' when they cannot");
+
+  // The claim must be impossible to reach, not merely avoided in one branch.
+  const pillBlock = js.slice(js.indexOf("var canSee = !!g.analyzer;"),
+                             js.indexOf("head.appendChild(pill);"));
+  expect(/not set up/.test(pillBlock) && /run \?/.test(pillBlock) &&
+         pillBlock.indexOf("not set up") > pillBlock.indexOf("!canSee"),
+    "'not set up' is reachable only for a gate whose runs would have reached us");
+
+  // The body sentence used to branch on `gatesOn`, which both of these gates
+  // have — so it always chose "Until the workflow lands nothing runs and
+  // nothing fails", a statement that the workflow has NOT landed.
+  // Matched against the file with line comments stripped: the comment that
+  // records WHY that sentence was wrong necessarily quotes it, and a test that
+  // cannot tell an explanation from a claim would forbid explaining the fix.
+  const rendered = js.split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
+  expect(!/Until the workflow lands nothing runs and nothing fails/.test(rendered),
+    "the body no longer asserts that an unseen workflow has not landed");
+  expect(/it is gating pull requests right/.test(js),
+    "…and says outright that a working gate would look exactly the same here");
+}
+
 console.log("");
 if (failures === 0) {
   console.log("\x1b[32m  all monitors-frontend tests passed\x1b[0m\n");

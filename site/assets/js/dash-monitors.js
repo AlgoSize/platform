@@ -1219,10 +1219,34 @@
 
       var head = el("div", { class: "mc-gate-card-head" });
       head.appendChild(el("h3", null, g.name));
-      var pillTone = run ? (tone === "bad" ? "bad" : "ok") : "muted";
-      var pillLabel = run ? (tone === "bad" ? "failing" : "passing") : "not set up";
+      // Three pill states, and the third exists because two of these gates
+      // CANNOT reach the first two.
+      //
+      // The comment above this table already says why: the estimate and
+      // cloud-spend workflows authenticate with an API key and file runs with a
+      // NULL source, so nothing they do ever reaches this feed. Their `run` is
+      // therefore null on every render, and the old ternary collapsed that into
+      // "not set up" — a claim about the customer's repository, made from an
+      // absence of evidence we were never going to have. A team whose cost gate
+      // has been green for a month read "not set up" the whole time.
+      //
+      // The card BODY was already honest about this. The pill was not, so the
+      // same card said two different things.
+      var canSee = !!g.analyzer;
+      var pillTone  = !canSee ? "muted" : run ? (tone === "bad" ? "bad" : "ok") : "muted";
+      var pillLabel = !canSee ? "not reported"
+                    : run ? (tone === "bad" ? "failing" : "passing")
+                    : "not set up";
+      var pillGlyph = !canSee ? "\u25CC "                              // ◌ — no signal
+                    : pillTone === "ok"  ? "\u2713 "
+                    : pillTone === "bad" ? "\u25B2 "
+                    : "\u25CB ";
       var pill = el("span", { class: "mc-health-pill mono", "data-tone": pillTone },
-        (pillTone === "ok" ? "\u2713 " : pillTone === "bad" ? "\u25B2 " : "\u25CB ") + pillLabel);
+        pillGlyph + pillLabel);
+      pill.setAttribute("title", !canSee
+        ? "This gate authenticates with an API key, so its runs are filed without the CI tag and never appear here. Whether it is set up and passing is not something this page can see."
+        : run ? "Read from the newest stored run this gate filed."
+              : "No run tagged CI has arrived from this gate.");
       head.appendChild(pill);
       card.appendChild(head);
 
@@ -1242,9 +1266,16 @@
         lastBox.appendChild(el("span", { class: "mono" }, meta));
         body.appendChild(lastBox);
       } else if (!g.feeds) {
-        body.appendChild(el("p", { class: "gate-card-blind" }, g.gatesOn ?
-          "Until the workflow lands nothing runs and nothing fails." :
-          "Runs from this gate are stored without the CI tag."));
+        // Both gates in this branch have a `gatesOn`, so the old ternary always
+        // chose "Until the workflow lands nothing runs and nothing fails" — a
+        // statement that the workflow has NOT landed, which is the thing this
+        // page cannot know. Whether it has landed has nothing to do with
+        // whether `gatesOn` is filled in; what matters is that its runs are
+        // filed without the CI tag and never arrive here.
+        body.appendChild(el("p", { class: "gate-card-blind" },
+          "Runs from this gate are filed without the CI tag, so they never reach this feed. " +
+          "If the workflow is committed and its secret is set, it is gating pull requests right " +
+          "now and this card would look exactly the same."));
       } else {
         body.appendChild(el("p", { class: "gate-card-blind" },
           "Nothing has arrived from this gate yet."));
