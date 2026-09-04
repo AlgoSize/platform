@@ -190,6 +190,38 @@ if (core) {
   try { core.renderVuln({ counts: {}, topAdvisories: [] }); } catch (err) { threw = err; }
   expect(!threw && out.childNodes.length > 0,
     "an empty advisory list renders too, rather than throwing or mounting nothing");
+
+  // An empty advisory list from a repository with NO manifest is a different
+  // answer to an empty list from a repository with three of them, and the
+  // renderer has to tell them apart. Before this, both produced "No known
+  // advisories. Nice." — a clean bill of health for a half nobody read.
+  const textOf = (node) => {
+    if (!node) return "";
+    if (typeof node === "string") return node;
+    let t = node.textContent || "";
+    for (const c of node.childNodes || []) t += textOf(c);
+    return t;
+  };
+
+  out.childNodes = [];
+  core.renderVuln({ counts: {}, topAdvisories: [] });
+  const measured = textOf(out);
+  expect(/No known advisories/.test(measured),
+    "an audited repository with nothing wrong still gets its clean result");
+
+  out.childNodes = [];
+  core.renderVuln({
+    counts: {}, topAdvisories: [],
+    dependencies: { status: "not_measured", reason: "no_lockfiles_found",
+                    message: "No supported lockfile found in empty/repo on main or master." },
+  });
+  const unmeasured = textOf(out);
+  expect(/not measured/i.test(unmeasured),
+    "a repository with no manifest says the dependency half was not measured");
+  expect(!/No known advisories/.test(unmeasured),
+    "…and never says there are no known advisories, which nobody checked");
+  expect(/No supported lockfile found/.test(unmeasured),
+    "…giving the reason from the server rather than a generic one");
 }
 
 // ---------------------------------------------------------------------------

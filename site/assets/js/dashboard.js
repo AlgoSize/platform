@@ -414,8 +414,29 @@
       wrap.appendChild(meta);
     }
 
+    // The dependency half's state, read before its findings. When no manifest
+    // was found the scanner audited nothing, and an empty advisory list below
+    // would otherwise render as "No known advisories. Nice." — a clean bill of
+    // health for a half nobody looked at. The source half is still rendered
+    // underneath, because a repository with no lockfiles still has code.
+    var deps = result.dependencies;
+    if (deps && deps.status && deps.status !== "ok") {
+      var unm = el("div", { class: "result-unmeasured" });
+      unm.appendChild(el("h4", { class: "result-section-title" }, "Dependencies · not measured"));
+      unm.appendChild(el("p", { class: "result-reason" },
+        deps.message || "The dependency audit did not run."));
+      unm.appendChild(el("p", { class: "result-reason" },
+        "The four counts above are from the source scan alone. They are not a statement " +
+        "about this repository's dependencies, because none were read."));
+      wrap.appendChild(unm);
+    }
+
     var advisories = result.topAdvisories || result.advisories || [];
-    if (!advisories.length) {
+    if (deps && deps.status && deps.status !== "ok") {
+      // Deliberately nothing here. The panel above already said what happened,
+      // and an empty state under it would be a second, quieter claim that the
+      // list is empty rather than absent.
+    } else if (!advisories.length) {
       wrap.appendChild(emptyState("No known advisories. Nice."));
     } else {
       wrap.appendChild(el("h4", { class: "result-section-title" }, "Top advisories"));

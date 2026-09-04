@@ -7877,3 +7877,17 @@ textarea.cmp-input { resize: vertical; }
    it is a fact about a past publish, not something to paste into sha256sum.
    See dash-compliance.js and migration 0030. */
 .cmp-sha-stale { color: var(--text-dim); text-decoration: line-through; }
+
+/* "We did not measure this half" — set apart from a finding and from an empty
+   state, because it is neither. Amber rail, same channel the scanner uses for
+   an out-of-date acceptance: something is missing that the reader must weigh,
+   and it is not a severity. */
+.result-unmeasured {
+  border-left: 3px solid var(--accent-warm);
+  padding: var(--s-3) var(--s-4);
+  margin: var(--s-4) 0;
+  background: var(--bg-elevated);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  display: flex; flex-direction: column; gap: var(--s-2);
+}
+.result-unmeasured .result-section-title { margin: 0; }
