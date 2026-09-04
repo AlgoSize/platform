@@ -30,6 +30,7 @@ import { toCycloneDX } from "../analyzers/cyclonedx.js";
 import { toAuditCsv } from "../analyzers/csv.js";
 import { reportHtmlFor } from "../reports/render.js";
 import { createShare, readShare, revokeShare, listShares, DEFAULT_SHARE_DAYS, MAX_SHARE_DAYS } from "../reports/share.js";
+import { decorateRunWithAcceptances } from "../risk/decorate.js";
 
 const json = (body, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -586,7 +587,11 @@ export async function getRunHandler(request, env) {
   if (!id) return json({ error: "missing_id", message: "run id required" }, 400);
   const run = await getRun(env, scope, id);
   if (!run) return json({ error: "not_found", message: "no such run" }, 404);
-  return json(run, 200);
+  // Acceptances are applied HERE, on the way out, and never inside getRun —
+  // `attachPipelineResult` reads through getRun and writes the result back, so
+  // decorating there would persist an acceptance into result_json and defeat
+  // the whole point of computing it read-side. See risk/decorate.js.
+  return json(await decorateRunWithAcceptances(env, run, { orgId: scope.orgId }), 200);
 }
 
 // ---------------------------------------------------------------------------
@@ -702,8 +707,14 @@ export async function getRunReportHandler(request, env, ctx) {
   const id = request.params && request.params.id;
   if (!id) return json({ error: "missing_id", message: "run id required" }, 400);
 
-  const run = await getRun(env, scope, id);
-  if (!run) return json({ error: "not_found", message: "no such run" }, 404);
+  const raw = await getRun(env, scope, id);
+  if (!raw) return json({ error: "not_found", message: "no such run" }, 404);
+  // Every format the report renders — HTML, SARIF, CSV, the raw JSON — comes
+  // off this one object, so the acceptance is applied once here rather than in
+  // four renderers that would drift. SARIF in particular: `toSarif` writes a
+  // `suppressions` entry for an accepted finding, and it can only do that if
+  // the finding reaching it carries the acceptance.
+  const run = await decorateRunWithAcceptances(env, raw, { orgId: scope.orgId });
 
   const url = new URL(request.url);
   const format = (url.searchParams.get("format") || "json").toLowerCase();
@@ -871,13 +882,18 @@ export async function sharedReportHandler(request, env, ctx) {
 
   // Read the run by its own ids rather than through the caller — there is no
   // caller. The token is the authorisation, and it names both.
-  const run = await getRun(env, { orgId: resolved.share.orgId, userId: null }, resolved.share.runId);
-  if (!run) {
+  const raw = await getRun(env, { orgId: resolved.share.orgId, userId: null }, resolved.share.runId);
+  if (!raw) {
     return json({
       error: "share_not_found",
       message: "The report this link points to is no longer available.",
     }, 404);
   }
+  // The share link must show what the customer sees, and that includes the
+  // acceptances — a report sent to a client that listed a signed-for finding
+  // as open would misrepresent them. Scoped to the SHARE's org, the same one
+  // the run was read under; the reader has no org of their own.
+  const run = await decorateRunWithAcceptances(env, raw, { orgId: resolved.share.orgId });
 
   const url = new URL(request.url);
   const format = (url.searchParams.get("format") || "html").toLowerCase();

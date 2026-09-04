@@ -328,6 +328,208 @@ group("the dashboard shows what is open AND what was signed for");
 }
 
 // ===========================================================================
+group("an acceptance actually reaches a scan");
+// ===========================================================================
+//
+// The group that would have caught the gap this file shipped with. Every
+// assertion above was about `applyAcceptedRisks` in isolation, and every one
+// of them passed while the function had exactly ONE caller — the PW.5.1
+// compliance collector. The scanner card offered "Accept this risk", said
+// "Signed. Re-run the scan to see it applied," and re-running showed the
+// finding still open. A pure function nobody calls is not a feature.
+//
+// So this group refuses to test the function. It stores a run, signs an
+// acceptance through the real D1 path, and reads the run back through the
+// real HTTP handler.
+{
+  const { makeD1 } = await import("./_d1-stub.mjs");
+  const { persistRun, getRunHandler, getRunReportHandler } = await import("../src/handlers/runs.js");
+  const { insertAcceptance, revokeAcceptance } = await import("../src/risk/store.js");
+  const { summarizeFindings } = await import("../src/analyzers/sast/schema.js");
+
+  const ORG = "org_e2e", USER = "u_e2e", AT = Math.floor(Date.now() / 1000);
+  const env = { DB: makeD1(), SITE_ORIGIN: "https://algosize.com" };
+
+  await env.DB.prepare(
+    `INSERT INTO users (user_id, email, plan, active_org_id, created_at, updated_at)
+     VALUES (?, ?, 'free', ?, ?, ?)`,
+  ).bind(USER, "e2e@acme.test", ORG, AT, AT).run();
+  await env.DB.prepare(
+    `INSERT INTO organisations (org_id, name, plan, seats_purchased, created_at, updated_at)
+     VALUES (?, ?, 'free', 1, ?, ?)`,
+  ).bind(ORG, "Acme", AT, AT).run();
+  await env.DB.prepare(
+    "INSERT INTO memberships (org_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?)",
+  ).bind(ORG, USER, AT).run();
+
+  // Two findings on the same file. Only the first is signed for, so a fix that
+  // accepted the whole file — or the whole rule — fails here.
+  const signed = { ...finding(), title: "Dynamic code evaluation", confidence: "high", module: "ast-analyzer" };
+  const other  = {
+    ...finding({ id: "VS-0002", line: 40, fingerprint: "ccccccccdddddddd",
+                 ruleId: "sast.injection.sql-concat", category: "injection" }),
+    title: "SQL built by concatenation", confidence: "high", module: "pattern-scan",
+  };
+  const scanned = [signed, other];
+  const storedResult = {
+    repoUrl: `https://github.com/${REPO}`,
+    advisories: [], counts: {},
+    source: { status: "ok", findings: scanned, summary: summarizeFindings(scanned), coverage: null },
+  };
+
+  const run = await persistRun(env, {
+    orgId: ORG, userId: USER, analyzer: "vuln", source: "manual",
+    input: { repoUrl: `https://github.com/${REPO}` },
+    result: storedResult,
+  });
+
+  const readRun = async () => {
+    const req = new Request(`https://algosize.com/api/runs/${run.id}`);
+    req.user = { userId: USER };
+    req.authMethod = "session";
+    req.params = { id: run.id };
+    return (await getRunHandler(req, env)).json();
+  };
+
+  // ---- before any acceptance exists -------------------------------------
+  const before = await readRun();
+  expect(before.result.source.summary.open.total === 2,
+    "with nothing signed, both findings read as open");
+
+  // ---- sign one ---------------------------------------------------------
+  await insertAcceptance(env, {
+    id: "ar_e2e", orgId: ORG, repoKey: REPO,
+    ruleId: signed.ruleId, path: signed.path, fingerprint: signed.fingerprint,
+    category: "injection", severity: "high",
+    rationale: "It is the sandbox. Defense layers 3 and 4 bound it.",
+    ownerEmail: "owner@acme.test", documentUrl: null, acceptedBy: "owner@acme.test",
+    acceptedAt: AT, expiresAt: AT + 90 * DAY, analyzerVersion: "test", runId: run.id,
+  });
+
+  const after = await readRun();
+  const bySignedFp = (r) => r.result.source.findings.find((f) => f.fingerprint === signed.fingerprint);
+  const byOtherFp  = (r) => r.result.source.findings.find((f) => f.fingerprint === other.fingerprint);
+
+  // THE assertion. Before this change it failed: the register stored the
+  // acceptance and no scan read it.
+  expect(bySignedFp(after) && bySignedFp(after).accepted === true,
+    "reading the run back shows the signed finding as accepted");
+  expect(bySignedFp(after).acceptance
+    && bySignedFp(after).acceptance.ownerEmail === "owner@acme.test",
+    "…carrying the record of who signed it");
+  expect(byOtherFp(after) && !byOtherFp(after).accepted,
+    "…and the unsigned finding on the SAME FILE is untouched");
+  expect(after.result.source.findings.length === 2,
+    "…and nothing is dropped: an acceptance moves a finding between buckets, never out of the list");
+
+  // The summary has to be recomputed, or it contradicts the findings beside it.
+  expect(after.result.source.summary.open.total === 1
+    && after.result.source.summary.accepted.total === 1,
+    "the summary is recomputed, so open and accepted agree with the findings");
+  expect(after.result.source.summary.total === 2,
+    "…while the total still counts everything — \"0 open\" never appears alone");
+
+  // ---- THE INVARIANT ----------------------------------------------------
+  // Nothing above may have written anything. If this fails, a revocation
+  // stops being retroactive and a stale row starts carrying `accepted: true`.
+  const stored = await env.DB.prepare("SELECT result_json FROM runs WHERE id = ?").bind(run.id).first();
+  const storedFindings = JSON.parse(stored.result_json).source.findings;
+  // Checked per finding, NOT by grepping the row for "accepted". Every summary
+  // carries an `accepted` key — `summarizeFindings` folds `acceptanceSummary`
+  // in unconditionally, so a raw scan stores `accepted: {total: 0}` — and a
+  // string match would fail on a correct row. The decoration this must rule
+  // out lives on the FINDINGS.
+  expect(storedFindings.every((f) => f.accepted === undefined && f.acceptance === undefined),
+    "the STORED findings are still raw — no acceptance was ever persisted onto one");
+  expect(JSON.parse(stored.result_json).source.summary.open.total === 2,
+    "…and the stored summary still reads as it did when the scan ran");
+
+  // ---- SARIF, through the real report handler ---------------------------
+  const sarifReq = new Request(`https://algosize.com/api/runs/${run.id}/report?format=sarif`);
+  sarifReq.user = { userId: USER };
+  sarifReq.authMethod = "session";
+  sarifReq.params = { id: run.id };
+  const sarif = await (await getRunReportHandler(sarifReq, env, null)).json();
+  const sarifResults = sarif.runs[0].results;
+  const suppressed = sarifResults.filter((r) => Array.isArray(r.suppressions) && r.suppressions.length);
+  expect(suppressed.length === 1,
+    "the SARIF export suppresses exactly the accepted finding");
+  expect(sarifResults.length === 2,
+    "…and still exports both, so the Security tab does not lose one");
+
+  // ---- revocation is retroactive, because nothing was stored ------------
+  await revokeAcceptance(env, ORG, "ar_e2e", "owner@acme.test", AT + 1);
+  const revoked = await readRun();
+  expect(bySignedFp(revoked) && !bySignedFp(revoked).accepted,
+    "revoking puts the finding back on the SAME run, with no re-scan");
+  expect(revoked.result.source.summary.open.total === 2,
+    "…and the open count goes back up");
+}
+
+// ===========================================================================
+group("every surface that shows source findings applies them");
+// ===========================================================================
+//
+// The end-to-end group above proves ONE path works. This one is about the
+// next path — the gap was not that the wiring was wrong, it was that there
+// was no wiring, and nothing said so. A static check per surface is the
+// cheapest thing that fails when a new reader of `result.source` is added and
+// the acceptance is forgotten.
+{
+  const read = (p) => readFileSync(join(SRC, p), "utf8");
+
+  const surfaces = [
+    ["handlers/runs.js",       "the runs read + report + share link"],
+    ["handlers/analyze.js",    "the manual repository scan"],
+    ["handlers/ci.js",         "the CI gate's build comment"],
+    ["handlers/monitors.js",   "the monitored result behind #/scanner"],
+    ["handlers/compliance.js", "the PW.5.1 evidence collector"],
+  ];
+  for (const [file, what] of surfaces) {
+    expect(/risk\/decorate\.js|applyAcceptedRisks/.test(read(file)),
+      `${what} applies accepted risks (${file})`);
+  }
+
+  // The invariant, checked structurally rather than trusted. `getRun` is read
+  // by `attachPipelineResult`, which writes the result straight back to D1 —
+  // so a decoration placed inside getRun would be persisted, and a revocation
+  // would stop being retroactive.
+  const runs = read("handlers/runs.js");
+  const getRunBody = runs.slice(
+    runs.indexOf("export async function getRun("),
+    runs.indexOf("export async function attachPipelineResult("));
+  expect(!/decorateRunWithAcceptances/.test(getRunBody),
+    "…and getRun itself does NOT decorate — attachPipelineResult writes through it");
+
+  // On the live scan path the decoration must come after persistence. Reading
+  // the order off the source is crude, but the alternative is trusting a
+  // comment, and this is the ordering the whole invariant rests on.
+  const analyze = read("handlers/analyze.js");
+  const vulnHandler = analyze.slice(analyze.indexOf("export async function analyzeVulnHandler"));
+  const persistAt = vulnHandler.indexOf("maybePersist(ctx, env, request, \"vuln\", body, response)");
+  const acceptAt  = vulnHandler.indexOf("withAcceptances(response, env,");
+  expect(persistAt > -1 && acceptAt > persistAt,
+    "the repository scan decorates AFTER handing the run to persistence, never before");
+
+  const ci = read("handlers/ci.js");
+  // lastIndexOf, not indexOf: the FIRST occurrence is the import at the top of
+  // the file, which sits before every persistRun by construction and would
+  // make this pass no matter where the call actually went.
+  expect(ci.lastIndexOf("decorateSourceWithAcceptances(env,") > ci.lastIndexOf("await persistRun(env, {"),
+    "CI ingest likewise decorates only after every persistRun has been awaited");
+  expect(/reportedScan/.test(ci) && !/sourceScan = await decorate/.test(ci),
+    "…into a separate object, so the stored sourceScan is never the decorated one");
+
+  // The build comment must not print a smaller number with nothing beside it.
+  expect(/source\.accepted \/\/ 0/.test(ci),
+    "the generated workflow reads the accepted count with a default, so an older server still renders");
+  expect(/still reported, still exported, and still counted above/.test(ci),
+    "…and says the accepted findings are still counted, never just that the number fell");
+  expect(/expiredAcceptances \/\/ 0/.test(ci) && /open again at full severity/.test(ci),
+    "…and a lapsed acceptance is called out in the build, not left to be noticed");
+}
+
+// ===========================================================================
 console.log();
 if (failures === 0) {
   console.log("\x1b[32m  all accepted-risk tests passed\x1b[0m\n");

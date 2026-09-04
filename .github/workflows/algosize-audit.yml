@@ -210,6 +210,22 @@ jobs:
             {
               echo ""
               jq -r '"**Code scan** · \(.source.findings) finding(s) (\(.source.summary.critical) critical, \(.source.summary.high) high) in the files submitted"' response.json
+              # Accepted risks, when the response carries them. The jq default
+              # keeps this line working against a server that predates the
+              # register, and the count is NEVER printed on its own — a reader
+              # who sees a number go down has to be told where it went.
+              if [ "$(jq -r '.source.accepted // 0' response.json)" != "0" ]; then
+                echo ""
+                jq -r '"_\(.source.accepted) of these are signed off in the accepted-risk register (\(.source.open) open). They are still reported, still exported, and still counted above._"' response.json
+              fi
+              if [ "$(jq -r '.source.expiredAcceptances // 0' response.json)" != "0" ]; then
+                echo ""
+                jq -r '"⚠️ _\(.source.expiredAcceptances) acceptance(s) have EXPIRED and are open again at full severity._"' response.json
+              fi
+              if [ "$(jq -r '.source.drifted // 0' response.json)" != "0" ]; then
+                echo ""
+                jq -r '"⚠️ _\(.source.drifted) finding(s) match a signed acceptance but the code has changed underneath it, so the signature no longer covers them._"' response.json
+              fi
               if [ "$(jq -r '.source.findings' response.json)" != "0" ]; then
                 echo ""
                 jq -r '.source.top[] | "- \(.severity | ascii_upcase) \(.path):\(.line) — \(.title)"' response.json

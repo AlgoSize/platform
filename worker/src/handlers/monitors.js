@@ -32,6 +32,7 @@ import {
 import { resolveMonitorRoute, describeRoute } from "../monitors/routing.js";
 import { inspectMonitor, INSPECTABLE } from "../monitors/inspect.js";
 import { auditFromRequest, AUDIT_ACTIONS } from "../audit.js";
+import { decorateResultWithAcceptances } from "../risk/decorate.js";
 
 const MAX_URL_LEN    = 300;
 const MAX_BRANCH_LEN = 255;
@@ -636,6 +637,16 @@ export async function monitorResultHandler(request, env, ctx) {
     });
   }
 
+  // Accepted risks are applied here, and this endpoint is the reason the read
+  // path had to exist at all: it is what #/scanner shows for a monitored
+  // repository, so it is where the reader who just pressed "Accept this risk"
+  // looks to see whether it took. Nothing is stored on this path — the
+  // inspection is recomputed on every call — so there is no raw copy to keep
+  // apart from the decorated one.
+  const result = await decorateResultWithAcceptances(env, inspection.result, {
+    orgId: ctxOrg.orgId, repoUrl: monitor.repoUrl,
+  });
+
   return jsonResponse({
     status:     "ok",
     analyzer,
@@ -645,7 +656,7 @@ export async function monitorResultHandler(request, env, ctx) {
     // Recomputed now, from committed files — NOT the 03:00 snapshot. Said in
     // the payload so the page can date what it is showing honestly.
     computedAt: Math.floor(Date.now() / 1000),
-    result:     inspection.result,
+    result,
     baseline:   inspection.baseline,
     delta:      inspection.delta,
   });
