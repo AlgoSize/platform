@@ -1921,9 +1921,56 @@
   }
 
   // ---------------------------------------------------------------------
-  // PNG export — canvas only, by design: the findings panel is text the user
-  // can copy; rasterising it into the image helps nobody.
+  // PNG export — the map, plus the two lines that qualify it.
+  //
+  // The findings panel is deliberately left out: it is text the user can copy,
+  // and rasterising it helps nobody. The COVERAGE strip and the origin legend
+  // are a different matter. They are not commentary on the map, they are the
+  // terms on which it is true — how much of the system was read, and which
+  // edges were declared rather than observed. A PNG that drops them is a
+  // stronger claim than the screen it came from, and it is the artefact that
+  // ends up in a slide deck, where nobody can click through to the caveat.
   // ---------------------------------------------------------------------
+
+  /**
+   * The qualifying lines, as plain strings, built from the result rather than
+   * scraped from the DOM — the strip may be collapsed, scrolled or absent, and
+   * none of that changes what was actually measured.
+   */
+  function exportCaption() {
+    var result = state.result || {};
+    var limits = result.limits || {};
+    var summary = result.summary || {};
+    var lines = [];
+
+    var analyzed = limits.filesAnalyzed, skipped = limits.filesSkipped;
+    if (analyzed == null && skipped == null) {
+      // Same rule the on-screen strip follows: an old run's silence is not a
+      // claim that nothing was skipped.
+      lines.push("COVERAGE · NOT RECORDED — this run predates coverage recording; treat the map as a lower bound.");
+    } else {
+      var oversized = (limits.oversized || []).length;
+      lines.push((summary.complete === true ? "COVERAGE · FULL" : "COVERAGE · PARTIAL") + " — " +
+        (analyzed != null ? analyzed : "\u2014") + " files read, " +
+        (skipped != null ? skipped : "\u2014") + " skipped" +
+        (oversized ? ", " + oversized + " too large to read" : "") +
+        (summary.complete === true ? "." : " — what was not read cannot appear on this map."));
+    }
+
+    var edges = (result.graph && result.graph.edges) || [];
+    var present = {};
+    edges.forEach(function (e) { if (e && e.origin && ORIGIN[e.origin]) present[e.origin] = true; });
+    var keys = ["static", "both", "runtime"].filter(function (k) { return present[k]; });
+    if (keys.length) {
+      lines.push("ORIGIN — " + keys.map(function (k) {
+        return ORIGIN[k].label + ": " + ORIGIN[k].gloss;
+      }).join(" · "));
+    }
+    if (edges.some(isUnconfirmed) || ((result.graph && result.graph.nodes) || []).some(isUnconfirmed)) {
+      lines.push("Dashed outline — unconfirmed: declared somewhere we read, never seen in use.");
+    }
+    return lines;
+  }
 
   function exportPng(btn) {
     var canvasWrap = document.getElementById("xray-canvas");
@@ -1932,10 +1979,36 @@
     setBusy(btn, true, "Exporting…");
 
     var clone = svg.cloneNode(true);
-    var bgRect = svgEl("rect", {
-      width: svg.getAttribute("width"), height: svg.getAttribute("height"), fill: C.bg,
-    });
+    var mapW = parseFloat(svg.getAttribute("width")) || 0;
+    var mapH = parseFloat(svg.getAttribute("height")) || 0;
+
+    // The caption band, sized to what it has to say.
+    var caption = exportCaption();
+    var LINE = 16, PAD = 12;
+    var bandH = caption.length ? (PAD * 2 + caption.length * LINE) : 0;
+
+    var bgRect = svgEl("rect", { width: mapW, height: mapH + bandH, fill: C.bg });
     clone.insertBefore(bgRect, clone.firstChild);
+
+    if (bandH) {
+      clone.setAttribute("height", String(mapH + bandH));
+      var vb = clone.getAttribute("viewBox");
+      if (vb) {
+        var p = vb.split(/\s+/);
+        if (p.length === 4) clone.setAttribute("viewBox", p[0] + " " + p[1] + " " + p[2] + " " + (parseFloat(p[3]) + bandH));
+      }
+      var sep = svgEl("rect", { x: 0, y: mapH, width: mapW, height: 1, fill: C.borderSoft });
+      clone.appendChild(sep);
+      caption.forEach(function (line, i) {
+        var t = svgEl("text", {
+          x: PAD, y: mapH + PAD + LINE * (i + 0.75),
+          "font-family": "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+          "font-size": "11", fill: C.muted,
+        });
+        t.textContent = line;
+        clone.appendChild(t);
+      });
+    }
 
     var xml = new XMLSerializer().serializeToString(clone);
     var blob = new Blob([xml], { type: "image/svg+xml;charset=utf-8" });

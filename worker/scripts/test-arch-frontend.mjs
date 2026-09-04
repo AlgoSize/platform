@@ -150,6 +150,24 @@ group("the design commitments hold in the source");
   expect(/if \(!cov\) return el\("span", \{ hidden/.test(js),
     "with no coverage block, it renders nothing rather than a plausible list");
 
+  // 3c. The PNG carries the terms on which the map is true.
+  // A map exported without its coverage line is a stronger claim than the
+  // screen it came from — and the PNG is the artefact that ends up in a slide
+  // deck, where nobody can click through to the caveat.
+  expect(/function exportCaption/.test(js),
+    "the export builds its caption from the result, not by scraping the DOM");
+  const exportFn = js.slice(js.indexOf("function exportPng"), js.indexOf("function exportPng") + 2600);
+  expect(exportFn.includes("exportCaption()"),
+    "…and exportPng actually calls it");
+  expect(/COVERAGE · PARTIAL/.test(js) && /what was not read cannot appear on this map/.test(js),
+    "a partial run says so in the image itself");
+  expect(/COVERAGE · NOT RECORDED/.test(js),
+    "and a run from before coverage was recorded says that, rather than implying full coverage");
+  expect(/ORIGIN — /.test(js) && /never seen in use/.test(js),
+    "the origin legend rides along, so a declared-only edge is not read as an observed one");
+  expect(exportFn.includes("mapH + bandH"),
+    "the canvas grows to fit the caption rather than cropping the map");
+
   // 4. Directed edges with trimmed arrowheads; hot path solid and coloured.
   expect(/marker-end.*arch-arrow/.test(js) && /function trimEdge/.test(js),
     "edges are directed, trimmed to box boundaries so arrowheads stay visible");
