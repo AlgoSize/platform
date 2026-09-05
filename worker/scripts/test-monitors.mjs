@@ -23,7 +23,8 @@ import {
   advisoryKey, advisoryKeySet, hashKeySet, diffAdvisories, groupBySeverity,
 } from "../src/monitors/diff.js";
 import { sweepDueMonitors, runMonitorCheck, handleMonitorQueue, handleMonitorDlq } from "../src/monitors/run.js";
-import { discoverArchFiles, runArchForMonitor, MAX_ARCH_TREE_FILES } from "../src/monitors/analyzers.js";
+import { discoverArchFiles, runArchForMonitor, MAX_ARCH_TREE_FILES,
+         splitPricedProviders } from "../src/monitors/analyzers.js";
 import {
   createMonitor, getMonitorById, listMonitorsDue, isDue, monitorLimitFor, setMonitorPaused,
   normalizeAnalyzers, recordMonitorRun,
@@ -279,6 +280,30 @@ function makeAuditFetch({ vulns = [] }) {
   };
 }
 
+/**
+ * A repository that reads perfectly and simply has no lockfile.
+ *
+ * Deliberately distinct from a fetch that 404s everything: that one is an
+ * unreadable repository, which analyze.js still reports as a configuration
+ * error. Here the git tree lists a source file and serves it, so the source
+ * scan succeeds and only the dependency half is unmeasured.
+ */
+function makeLocklessFetch() {
+  const tree = { truncated: false, tree: [{ path: "src/app.js", type: "blob", size: 40 }] };
+  return async (url) => {
+    const u = String(url);
+    if (u.includes("api.github.com") && u.includes("/git/trees/")) {
+      return new Response(JSON.stringify(tree), { status: 200 });
+    }
+    if (u.includes("raw.githubusercontent.com")) {
+      const path = decodeURIComponent(u.split("/").slice(6).join("/"));
+      if (path === "src/app.js") return new Response("const x = 1;\n", { status: 200 });
+      return new Response("not found", { status: 404 });
+    }
+    return new Response("not found", { status: 404 });
+  };
+}
+
 {
   // A paused monitor that somehow reaches the consumer (paused in the window
   // between sweep and consume) is still skipped — the pause wins.
@@ -350,9 +375,12 @@ function makeAuditFetch({ vulns = [] }) {
 }
 
 {
-  // A 4xx from the audit (bad repo, no lockfile) is the monitor's own
-  // misconfiguration — reported, not retried forever, and never emailed as
-  // if it were a vulnerability change.
+  // A 4xx from the audit is the monitor's own misconfiguration — reported, not
+  // retried forever, and never emailed as if it were a vulnerability change.
+  // This fixture 404s EVERYTHING, so the repository itself is unreadable:
+  // analyze.js answers repo_unreadable. A repository that reads fine and merely
+  // lacks a lockfile is a different case with a different answer, and has its
+  // own test further down ("a repository that loses its lockfile").
   const env = makeEnv();
   const orgId = await seedOrg(env, { userId: "usr_bad", email: "bad@example.com" });
   const m = await createMonitor(env, { orgId, repoUrl: "https://github.com/a/empty" });
@@ -361,8 +389,8 @@ function makeAuditFetch({ vulns = [] }) {
   env.FETCH = async () => new Response("not found", { status: 404 });
   const res = await runMonitorCheck(env, m.monitorId, {}, { now: NOW, sendTransactional: mailbox.send });
 
-  expect(res.status === "audit_error", `a repo with no lockfile reports audit_error (got ${res.status})`);
-  expect(res.retryable === false, "and is marked non-retryable — nightly retries won't create a lockfile");
+  expect(res.status === "audit_error", `an unreadable repo reports audit_error (got ${res.status})`);
+  expect(res.retryable === false, "and is marked non-retryable — nightly retries won't make it readable");
   expect(mailbox.sent.length === 0, "and sends no email");
 }
 
@@ -1480,6 +1508,83 @@ console.log("\na sweep survives a database that is behind on migrations\n");
       m.monitorId, { ranAt: NOW, resultHash: "h", advisoryIds: [] });
   } catch { threw = true; }
   expect(threw, "a non-schema failure still throws rather than being swallowed");
+}
+
+// ===========================================================================
+console.log("\na repository that loses its lockfile has not fixed everything\n");
+// ===========================================================================
+{
+  // The dangerous half of letting a no-lockfile scan through. The analyzer now
+  // returns 200 with the dependency half marked not_measured, so the sweep
+  // reaches the normal path — and diffing an EMPTY advisory list against a
+  // stored baseline does not read as "we did not look". It reads as every
+  // advisory resolved, and the customer gets an email saying so.
+  const env = makeEnv();
+  const orgId = await seedOrg(env, { userId: "usr_ll", email: "ll@example.com" });
+  const m = await createMonitor(env, { orgId, repoUrl: "https://github.com/a/lockless" });
+  const mailbox = makeMailbox();
+
+  // First sweep: a normal repository with one advisory, to lay a baseline.
+  env.FETCH = makeAuditFetch({ vulns: [{ id: "GHSA-old", package: "lodash", fixedIn: "4.17.21" }] });
+  await runMonitorCheck(env, m.monitorId, {}, { now: NOW, sendTransactional: mailbox.send });
+  const seeded = await getMonitorById(env, m.monitorId);
+  expect((seeded.lastAdvisoryIds || []).length === 1,
+    "the baseline holds the one advisory that was found");
+
+  // Second sweep: the lockfile is gone. The source still reads fine, so this
+  // is not an unreadable repository — only an unmeasured dependency half.
+  env.FETCH = makeLocklessFetch();
+  const sentBefore = mailbox.sent.length;
+  const res = await runMonitorCheck(env, m.monitorId, {}, { now: NOW + DAY, sendTransactional: mailbox.send });
+
+  const after = await getMonitorById(env, m.monitorId);
+  expect(JSON.stringify(after.lastAdvisoryIds) === JSON.stringify(seeded.lastAdvisoryIds),
+    "an unmeasured dependency half advances nothing — the baseline is exactly what it was");
+  expect(mailbox.sent.length === sentBefore,
+    "and sends no email, because nothing was found and nothing was fixed");
+  expect(res.status !== "alerted",
+    `the sweep does not alert on a half it did not read (got ${res.status})`);
+  expect(Array.isArray(after.lastSkips) &&
+         after.lastSkips.some((sk) => sk && sk.analyzer === "vuln" && sk.reason === "no_lockfiles"),
+    "the skip is recorded, so the scorecard cell says so instead of grading an empty list");
+}
+
+// ===========================================================================
+console.log("\na provider that priced nothing is not the cheapest provider\n");
+// ===========================================================================
+{
+  // engine.js sums an empty lineItems array to 0, so "could not price a single
+  // resource" and "genuinely free" arrive at every consumer as the same number.
+  // byProvider is ranked by that number and the first entry wins — on the
+  // scorecard cell, on the nightly watch chip, and in the alert diff. Before
+  // this split, the provider that knew LEAST always won all three.
+  const providers = [
+    { providerId: "aws",          providerName: "AWS",          estimatedTotalMicroUsd: 0, lineItems: [] },
+    { providerId: "digitalocean", providerName: "DigitalOcean", estimatedTotalMicroUsd: 12_340_000,
+      lineItems: [{ estimatedCostMicroUsd: 12_340_000 }] },
+  ];
+  const { byProvider, unpriced } = splitPricedProviders(providers);
+
+  expect(!("aws" in byProvider),
+    "a provider with no line items is kept out of byProvider entirely");
+  expect(unpriced.length === 1 && unpriced[0] === "aws",
+    "and is named as unpriced, because 'we could not read it' is a fact worth keeping");
+  expect(byProvider.digitalocean === 12_340_000 && Object.keys(byProvider).length === 1,
+    "the provider that actually priced something is the only one left to rank");
+
+  // The exact ranking every consumer performs. This is the assertion that
+  // fails if the split is reverted.
+  const cheapest = Object.entries(byProvider).sort((a, b) => a[1] - b[1])[0];
+  expect(cheapest && cheapest[0] === "digitalocean",
+    "so the cheapest provider is one with a price, not one with no information");
+
+  // A real zero is not the same thing and must survive. A provider that priced
+  // a free tier produced a line item; only the empty list is disqualifying.
+  const free = splitPricedProviders([
+    { providerId: "fly", estimatedTotalMicroUsd: 0, lineItems: [{ estimatedCostMicroUsd: 0 }] },
+  ]);
+  expect(free.byProvider.fly === 0 && free.unpriced.length === 0,
+    "a measured zero still counts — line items are the test, not the total");
 }
 
 console.log("");

@@ -42,6 +42,81 @@ export const UNIMPLEMENTED_RULES = Object.freeze([
   },
 ]);
 
+/**
+ * Every rule that RUNS, by lens, with what it looks for.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY A CATALOGUE AND NOT A COMMENT
+ * ---------------------------------------------------------------------------
+ * The explorer renders each lens as a bare count, and a bare count of zero is
+ * the ambiguity this codebase exists to remove: "four rules ran and none
+ * fired" and "this lens is silent" are the same character on screen. A reader
+ * deciding whether a clean map means anything needs the denominator, and the
+ * denominator has to come from somewhere that cannot drift.
+ *
+ * So it is declared here rather than counted by hand, and
+ * test-architecture.mjs asserts that every `rule:` string the three rule
+ * functions can emit appears below and vice versa. Adding a rule without
+ * cataloguing it fails the build; deleting one without removing its entry does
+ * too. The failure mode this prevents is not a wrong number — it is a lens
+ * that quietly claims coverage it lost.
+ *
+ * UNIMPLEMENTED_RULES above is the other half of the same statement: what a
+ * lens does NOT look for, and why nothing in a repository could establish it.
+ */
+export const RULE_CATALOG = Object.freeze([
+  { lens: "speed", rule: "sync_chain_depth",
+    what: "A synchronous call chain deep enough that latency compounds." },
+  { lens: "speed", rule: "chatty_edge",
+    what: "Many distinct call sites between one pair of services." },
+  { lens: "speed", rule: "static_without_cache",
+    what: "Static assets served with no cache in front of them." },
+  { lens: "speed", rule: "cron_fanout_should_queue",
+    what: "A scheduled job fanning out to many services without a queue." },
+
+  { lens: "cost", rule: "always_on_single_purpose",
+    what: "A long-running container with one inbound dependency and no published port." },
+  { lens: "cost", rule: "duplicate_datastores",
+    what: "Two datastores of the same kind where one would do." },
+  { lens: "cost", rule: "unbounded_log_retention",
+    what: "Log retention configured without a bound." },
+  { lens: "cost", rule: "shared_external_dependency",
+    what: "One external API called from several clusters." },
+
+  { lens: "security", rule: "datastore_publicly_published",
+    what: "A datastore port published to the host." },
+  { lens: "security", rule: "datastore_shared_across_services",
+    what: "One datastore written by services from different clusters." },
+  { lens: "security", rule: "committed_secret",
+    what: "A credential committed to the repository." },
+  { lens: "security", rule: "unpinned_base_image",
+    what: "A base image pinned to a moving tag rather than a digest." },
+  { lens: "security", rule: "cross_cluster_bypasses_gateway",
+    what: "A cross-cluster call that goes around the gateway." },
+  { lens: "security", rule: "public_without_auth_marker",
+    what: "No authentication marker in a cluster whose source we actually read." },
+]);
+
+/**
+ * What each lens covers, for a surface that has to explain a zero.
+ *
+ * `ran` is the number of rules that were evaluated, NOT the number that fired.
+ * That distinction is the whole point: a lens reading 0 of 4 looked four times
+ * and found nothing; a lens reading 0 of 0 did not look.
+ */
+export function ruleCoverage() {
+  const byLens = {};
+  for (const lens of LENSES) {
+    const rules = RULE_CATALOG.filter((r) => r.lens === lens);
+    byLens[lens] = {
+      ran: rules.length,
+      rules: rules.map((r) => ({ rule: r.rule, what: r.what })),
+      notImplemented: UNIMPLEMENTED_RULES.filter((r) => r.lens === lens),
+    };
+  }
+  return byLens;
+}
+
 const sev = { critical: 4, high: 3, medium: 2, low: 1 };
 
 // ---------------------------------------------------------------------------

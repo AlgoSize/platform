@@ -179,7 +179,12 @@ const SCATTER = {
     point("@cf/twin/one"),
     point("@cf/twin/two"),                       // identical position
     point("@cf/baai/bge-m3", { x: 99, y: 62, priceHint: { inputPer1M: 0.012, outputPer1M: null, verified: true } }),
-    point("@cf/old/model", { x: 40, y: 30, deprecated: true, bestTier: null }),
+    // Shaped the way models.js priceHint() really returns a superseded model:
+    // both prices null, with the REASON attached. pricing.js lists this class
+    // of model at a real price and pickPrice declines it for a new call, which
+    // is not the same fact as "emits no output tokens".
+    point("@cf/old/model", { x: 40, y: 30, deprecated: true, bestTier: null,
+      priceHint: { inputPer1M: null, outputPer1M: null, reason: "model_deprecated", verified: false } }),
   ],
 };
 
@@ -284,6 +289,32 @@ group("a null price is not a free one");
   expect(/\$0\.012/.test(t), "…while its real input price is shown");
   expect(/engineering estimates/.test(t),
     "…and the tooltip says the scores are estimates rather than benchmark results");
+}
+
+{
+  // The other null, and the one that was being described wrongly. A superseded
+  // model has a PUBLISHED output price that pickPrice refuses for a new call —
+  // @cf/moonshotai/kimi-k2.5 is listed at $0.180 / 1M out — and the tooltip
+  // said "n/a — no output tokens" about it. Same shape as the embedding case,
+  // opposite fact.
+  const { registry } = boot(routesFor());
+  await flush();
+  const body = registry.get("models-body");
+  const dot = body.find((n) => n.getAttribute("data-model") === "@cf/old/model");
+  expect(dot !== null, "a superseded model is on the plot when they are shown");
+  dot.fire("mouseenter");
+  await flush();
+
+  const tip = registry.get("models-body").find((n) => /mdl-tip/.test(n.className) && n.getAttribute("role") === "tooltip");
+  const t = textOf(tip);
+  expect(!/no output tokens/.test(t),
+    "a superseded model is never described as emitting no output tokens");
+  expect(/not quoted — superseded/.test(t),
+    "…it says the price is not quoted because the model is superseded");
+  // Both legs, not just the one that was reported: the input price is refused
+  // for the same reason and must say the same thing.
+  expect((t.match(/not quoted — superseded/g) || []).length === 2,
+    "…on both the input and the output row, since both are refused for that reason");
 }
 
 group("avoid and unrated are different marks");

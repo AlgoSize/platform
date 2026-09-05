@@ -1134,6 +1134,13 @@
         "Findings only fire with evidence — a silent lens means no rule could cite a file and line. " +
         "This selection may still have findings under other lenses; the chips above say which."));
       panel.appendChild(clean);
+
+      // What "clear" actually covers. The empty panel used to end at the
+      // sentence above, which asks the reader to trust that rules ran without
+      // ever naming one. This lists them — and, underneath, names what this
+      // lens deliberately does NOT look for, so the gap is visible instead of
+      // assumed covered.
+      panel.appendChild(coveragePanel());
     } else {
       var ul = el("ul", { class: "xray-finding-list" });
       findings.slice(0, 30).forEach(function (f) { ul.appendChild(findingCard(f)); });
@@ -1301,6 +1308,76 @@
     return counts;
   }
 
+  /**
+   * How many rules RAN under a lens — the denominator behind its count.
+   *
+   * null when the run predates summary.lensCoverage (a stored result from
+   * before the catalogue existed). Then the button falls back to a bare count,
+   * because inventing a denominator for a run we cannot ask is exactly the
+   * fabrication this panel is here to stop.
+   */
+  function lensRuleCount(lens) {
+    var cov = state.result && state.result.summary && state.result.summary.lensCoverage;
+    if (!cov) return null;
+    if (lens === "all") {
+      var total = 0;
+      for (var k in cov) if (cov[k] && typeof cov[k].ran === "number") total += cov[k].ran;
+      return total || null;
+    }
+    return cov[lens] && typeof cov[lens].ran === "number" ? cov[lens].ran : null;
+  }
+
+  /**
+   * "What 'clear' covers" — rendered under an empty findings panel.
+   *
+   * Built from summary.lensCoverage, so it can only ever say what the analyzer
+   * actually ran. A run stored before the catalogue existed has no coverage
+   * block and gets nothing here rather than a plausible list: an invented
+   * denominator on a clean result is worse than an unexplained one.
+   */
+  function coveragePanel() {
+    var cov = state.result && state.result.summary && state.result.summary.lensCoverage;
+    if (!cov) return el("span", { hidden: "hidden" });
+
+    var lenses = state.lens === "all" ? LENSES.filter(function (l) { return l !== "all"; })
+                                      : [state.lens];
+    var box = el("div", { class: "xray-covers" });
+    box.appendChild(el("h4", { class: "xray-covers-title" }, "What \u201cclear\u201d covers"));
+
+    lenses.forEach(function (lens) {
+      var c = cov[lens];
+      if (!c) return;
+      var grp = el("div", { class: "xray-covers-lens" });
+      grp.appendChild(el("span", { class: "mono xray-covers-lens-name" },
+        LENS_LABEL[lens] + " · " + c.ran + " rule" + (c.ran === 1 ? "" : "s") + " ran"));
+      var ul = el("ul", { class: "xray-covers-list" });
+      (c.rules || []).forEach(function (r) {
+        var li = el("li", null);
+        li.appendChild(el("span", { class: "mono xray-covers-rule" }, r.rule));
+        li.appendChild(el("span", { class: "xray-covers-what" }, r.what));
+        ul.appendChild(li);
+      });
+      grp.appendChild(ul);
+
+      // The other half of the same statement, and the reason this panel is
+      // trustworthy: what the lens cannot establish from a repository, said
+      // in the same place as what it can.
+      if ((c.notImplemented || []).length) {
+        var nul = el("ul", { class: "xray-covers-list xray-covers-gaps" });
+        (c.notImplemented || []).forEach(function (r) {
+          var li = el("li", null);
+          li.appendChild(el("span", { class: "mono xray-covers-rule" }, r.rule));
+          li.appendChild(el("span", { class: "xray-covers-what" }, r.why));
+          nul.appendChild(li);
+        });
+        grp.appendChild(el("span", { class: "mono xray-covers-gaps-label" }, "not looked for"));
+        grp.appendChild(nul);
+      }
+      box.appendChild(grp);
+    });
+    return box;
+  }
+
   function controlsRow() {
     var bar = el("div", { class: "xray-controls" });
 
@@ -1317,8 +1394,20 @@
         state.lens === lens ? "●" : "○"));
       b.appendChild(el("span", null, LENS_LABEL[lens]));
       // The count rides on the button so choosing a lens never requires
-      // switching to it first to learn whether it is empty.
-      b.appendChild(el("span", { class: "mono xray-lens-count" }, String(counts[lens] || 0)));
+      // switching to it first to learn whether it is empty — and it carries
+      // its DENOMINATOR, because a bare 0 cannot distinguish "four rules
+      // looked and found nothing" from "this lens is silent". The denominator
+      // is summary.lensCoverage, declared in architecture/rules.js and kept
+      // true by a test rather than by discipline.
+      var ran = lensRuleCount(lens);
+      b.appendChild(el("span", { class: "mono xray-lens-count" },
+        ran === null ? String(counts[lens] || 0)
+                     : String(counts[lens] || 0) + " / " + ran));
+      if (ran !== null) {
+        b.setAttribute("title",
+          (counts[lens] || 0) + " found by " + ran + " rule" + (ran === 1 ? "" : "s") +
+          " that ran under " + LENS_LABEL[lens].toLowerCase());
+      }
       b.addEventListener("click", function () { state.lens = lens; render(); });
       lensGroup.appendChild(b);
     });
@@ -1832,9 +1921,56 @@
   }
 
   // ---------------------------------------------------------------------
-  // PNG export — canvas only, by design: the findings panel is text the user
-  // can copy; rasterising it into the image helps nobody.
+  // PNG export — the map, plus the two lines that qualify it.
+  //
+  // The findings panel is deliberately left out: it is text the user can copy,
+  // and rasterising it helps nobody. The COVERAGE strip and the origin legend
+  // are a different matter. They are not commentary on the map, they are the
+  // terms on which it is true — how much of the system was read, and which
+  // edges were declared rather than observed. A PNG that drops them is a
+  // stronger claim than the screen it came from, and it is the artefact that
+  // ends up in a slide deck, where nobody can click through to the caveat.
   // ---------------------------------------------------------------------
+
+  /**
+   * The qualifying lines, as plain strings, built from the result rather than
+   * scraped from the DOM — the strip may be collapsed, scrolled or absent, and
+   * none of that changes what was actually measured.
+   */
+  function exportCaption() {
+    var result = state.result || {};
+    var limits = result.limits || {};
+    var summary = result.summary || {};
+    var lines = [];
+
+    var analyzed = limits.filesAnalyzed, skipped = limits.filesSkipped;
+    if (analyzed == null && skipped == null) {
+      // Same rule the on-screen strip follows: an old run's silence is not a
+      // claim that nothing was skipped.
+      lines.push("COVERAGE · NOT RECORDED — this run predates coverage recording; treat the map as a lower bound.");
+    } else {
+      var oversized = (limits.oversized || []).length;
+      lines.push((summary.complete === true ? "COVERAGE · FULL" : "COVERAGE · PARTIAL") + " — " +
+        (analyzed != null ? analyzed : "\u2014") + " files read, " +
+        (skipped != null ? skipped : "\u2014") + " skipped" +
+        (oversized ? ", " + oversized + " too large to read" : "") +
+        (summary.complete === true ? "." : " — what was not read cannot appear on this map."));
+    }
+
+    var edges = (result.graph && result.graph.edges) || [];
+    var present = {};
+    edges.forEach(function (e) { if (e && e.origin && ORIGIN[e.origin]) present[e.origin] = true; });
+    var keys = ["static", "both", "runtime"].filter(function (k) { return present[k]; });
+    if (keys.length) {
+      lines.push("ORIGIN — " + keys.map(function (k) {
+        return ORIGIN[k].label + ": " + ORIGIN[k].gloss;
+      }).join(" · "));
+    }
+    if (edges.some(isUnconfirmed) || ((result.graph && result.graph.nodes) || []).some(isUnconfirmed)) {
+      lines.push("Dashed outline — unconfirmed: declared somewhere we read, never seen in use.");
+    }
+    return lines;
+  }
 
   function exportPng(btn) {
     var canvasWrap = document.getElementById("xray-canvas");
@@ -1843,10 +1979,36 @@
     setBusy(btn, true, "Exporting…");
 
     var clone = svg.cloneNode(true);
-    var bgRect = svgEl("rect", {
-      width: svg.getAttribute("width"), height: svg.getAttribute("height"), fill: C.bg,
-    });
+    var mapW = parseFloat(svg.getAttribute("width")) || 0;
+    var mapH = parseFloat(svg.getAttribute("height")) || 0;
+
+    // The caption band, sized to what it has to say.
+    var caption = exportCaption();
+    var LINE = 16, PAD = 12;
+    var bandH = caption.length ? (PAD * 2 + caption.length * LINE) : 0;
+
+    var bgRect = svgEl("rect", { width: mapW, height: mapH + bandH, fill: C.bg });
     clone.insertBefore(bgRect, clone.firstChild);
+
+    if (bandH) {
+      clone.setAttribute("height", String(mapH + bandH));
+      var vb = clone.getAttribute("viewBox");
+      if (vb) {
+        var p = vb.split(/\s+/);
+        if (p.length === 4) clone.setAttribute("viewBox", p[0] + " " + p[1] + " " + p[2] + " " + (parseFloat(p[3]) + bandH));
+      }
+      var sep = svgEl("rect", { x: 0, y: mapH, width: mapW, height: 1, fill: C.borderSoft });
+      clone.appendChild(sep);
+      caption.forEach(function (line, i) {
+        var t = svgEl("text", {
+          x: PAD, y: mapH + PAD + LINE * (i + 0.75),
+          "font-family": "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+          "font-size": "11", fill: C.muted,
+        });
+        t.textContent = line;
+        clone.appendChild(t);
+      });
+    }
 
     var xml = new XMLSerializer().serializeToString(clone);
     var blob = new Blob([xml], { type: "image/svg+xml;charset=utf-8" });

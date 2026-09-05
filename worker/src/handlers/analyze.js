@@ -763,33 +763,81 @@ export async function runLockfileAudit(body, env, request, ctx, { treeCache = nu
     return json({ error: "fetch_failed", message: "could not fetch repo lockfiles" }, 502);
   }
 
-  if (manifests.length === 0) {
+  // The source scan runs FIRST now, because the no-lockfile decision below
+  // depends on what it learns. It has always failed soft and always reported
+  // its own state; running it earlier changes nothing about it.
+  //
+  // The scan rides along with the dependency audit and fails SOFT. The
+  // dependency audit is the contract this endpoint has always honoured; a
+  // GitHub hiccup while reading source must degrade to "we could not read the
+  // code" beside a complete advisory list, never to a 502 that loses both.
+  // `status` carries which of those happened so the UI never renders an unread
+  // repository as clean.
+  const source = await runSourceScan(
+    { ...repo, branch: body.branch || undefined }, fetchImpl, env, ctx, request, userId, treeCache);
+
+  // No lockfile is a fact about the DEPENDENCY half, and it used to end the
+  // whole request: a 404 here meant runSourceScan was never reached, so a
+  // repository with no manifests and a thousand files of source got no source
+  // findings and no statement that none had been looked for. The comment above
+  // states the rule for the other direction — a failure reading source must
+  // degrade beside a complete advisory list, never lose both. This is the same
+  // rule, applied symmetrically.
+  //
+  // With ONE exception, and it is why the source scan moved above this line.
+  // "No lockfile" and "this repository cannot be read at all" were previously
+  // the same 404, because an unreachable repo simply yields no manifests. They
+  // are different facts and deserve different answers: an unreadable repository
+  // is a monitor's configuration error and must keep saying so, or a deleted
+  // repo would report as healthy-with-nothing-measured forever. The source
+  // scan's own `unavailable` is the signal that separates them — it read the
+  // same GitHub, at the same moment, with the same credentials.
+  const noManifests = manifests.length === 0;
+  if (noManifests && source && source.status === "unavailable") {
     return json({
-      error: "no_lockfiles_found",
-      message: `No supported lockfile found in ${repo.owner}/${repo.repo} on main or master. Supported: ${LOCKFILE_NAMES.join(", ")}.`,
-      helpUrl: "https://docs.github.com/en/repositories/working-with-files/managing-files",
+      error: "repo_unreadable",
+      message: `Nothing in ${repo.owner}/${repo.repo} could be read on main or master — no lockfile, and the source tree was unreadable too. The repository may be private, renamed, or deleted.`,
+      helpUrl: VULN_HELP_URL,
     }, 404);
   }
 
-  // The parse → OSV → summarise core is shared with the CI ingestion endpoint
-  // (handlers/ci.js), which submits lockfile CONTENT instead of a repo URL.
-  // Same computation either way: CI supplies inputs and the Worker computes
-  // the report, so a CI verdict and a dashboard verdict on the same lockfile
-  // can never disagree.
+  // So the run continues, and the dependency half says what state it is in.
+  // What it must not do is come back as an empty advisory list: zero advisories
+  // from zero lockfiles renders as "No known advisories. Nice."
+  const dependencies = noManifests
+    ? {
+        status: "not_measured",
+        // Kept as the old error code so anything that matched on the 404 body
+        // still finds the same string in the same situation.
+        reason: "no_lockfiles_found",
+        message: `No supported lockfile found in ${repo.owner}/${repo.repo} on main or master. Supported: ${LOCKFILE_NAMES.join(", ")}.`,
+        helpUrl: "https://docs.github.com/en/repositories/working-with-files/managing-files",
+      }
+    : { status: "ok" };
+
   const audit = await auditManifests(manifests, fetchImpl, { env, ctx, request, userId });
   if (!audit.ok) return json(audit.body, audit.status);
-
-  // The source scan rides along, and fails SOFT. The dependency audit is the
-  // contract this endpoint has always honoured; a GitHub hiccup while reading
-  // source must degrade to "we could not read the code" beside a complete
-  // advisory list, never to a 502 that loses both. `status` carries which of
-  // those happened so the UI never renders an unread repository as clean.
-  const source = await runSourceScan(
-    { ...repo, branch: body.branch || undefined }, fetchImpl, env, ctx, request, userId, treeCache);
 
   return json({
     repoUrl: `https://github.com/${repo.owner}/${repo.repo}`,
     ...audit.result,
+    // The dependency half's own state, beside the source half's. Both blocks
+    // are always present and both always say what state they are in, so a
+    // reader never has to infer "measured" from the absence of an error.
+    dependencies,
+    // A summary that counted an unmeasured half as zero would put a grade on
+    // half a scan. `complete: false` is the channel that already means "these
+    // numbers are a floor", and every consumer that respects it degrades here
+    // for free.
+    summary: noManifests
+      ? {
+          ...audit.result.summary,
+          complete: false,
+          partialReason:
+            "No dependency manifest was found, so no dependencies were audited. " +
+            "The counts above describe the source scan only.",
+        }
+      : audit.result.summary,
     source,
     analyzerVersion: analyzerVersion(env),
   }, 200);

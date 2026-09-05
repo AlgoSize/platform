@@ -348,12 +348,19 @@
 
     var rows = el("div", { class: "mdl-tip-rows mono" });
     rows.appendChild(tipRow("context", fmtCtx(p.contextWindow)));
-    rows.appendChild(tipRow("price / 1M in", price(p.priceHint && p.priceHint.inputPer1M)));
-    // Null out is "this model emits no output tokens", not "$0" — an embedding
-    // model priced at zero output would read as free rather than inapplicable.
+    var ph = p.priceHint || {};
+    rows.appendChild(tipRow("price / 1M in",
+      ph.inputPer1M != null ? price(ph.inputPer1M) : unpricedWhy(ph.reason)));
+    // A null output price is TWO different facts, and printing one sentence for
+    // both stated something false. An embedding model emits no output tokens,
+    // so its output price is inapplicable. A superseded model has a published
+    // output price that pickPrice refuses for a new call — kimi-k2.5 is listed
+    // at $0.180 / 1M out and read "n/a — no output tokens". priceHint.reason is
+    // set only in the second case, so it decides which sentence this is.
     rows.appendChild(tipRow("price / 1M out",
-      p.priceHint && p.priceHint.outputPer1M != null
-        ? price(p.priceHint.outputPer1M) : "n/a — no output tokens"));
+      ph.outputPer1M != null ? price(ph.outputPer1M)
+        : ph.reason ? unpricedWhy(ph.reason)
+        : "n/a — no output tokens"));
     rows.appendChild(tipRow(axisLabel(g.x), score(p.x)));
     rows.appendChild(tipRow(axisLabel(g.y), score(p.y)));
     tip.appendChild(rows);
@@ -554,6 +561,19 @@
   function axisLabel(a) { return (a && a.label) || ""; }
   function num(v) { return typeof v === "number" ? v : 0; }
   function score(v) { return typeof v === "number" ? v + " / 100" : "not scored"; }
+
+  /**
+   * Why a price is missing, in the tooltip's own words.
+   *
+   * "unpriced" alone invites the reader to assume the number is unknown to
+   * anyone. For a superseded model it is published and we are declining to
+   * quote it, which is a different thing and the reader's to weigh.
+   */
+  function unpricedWhy(reason) {
+    if (reason === "model_deprecated") return "not quoted — superseded";
+    if (reason === "model_not_priced") return "not in the price catalogue";
+    return "unpriced";
+  }
 
   function price(v) {
     if (typeof v !== "number") return "unpriced";

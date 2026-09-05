@@ -125,9 +125,48 @@ group("the design commitments hold in the source");
   expect(/ln === state\.lens \? C\.accent/.test(js),
     "…with the active lens ringed in teal");
 
-  // 3. Lens buttons carry counts.
+  // 3. Lens buttons carry counts — and their denominator.
   expect(/function lensCounts/.test(js) && /xray-lens-count/.test(js),
     "lens buttons carry finding counts, so an empty lens is known before switching");
+  // A bare 0 cannot tell "four rules looked and found nothing" from "this lens
+  // is silent". The denominator is what makes a clean lens a result.
+  expect(/function lensRuleCount/.test(js) && /summary\.lensCoverage/.test(js),
+    "…and the count carries how many rules ran, read from the analyzer's own catalogue");
+  expect(/ran === null \? String\(counts\[lens\] \|\| 0\)/.test(js),
+    "a run stored before that catalogue existed falls back to a bare count rather than inventing one");
+
+  // 3b. The clean state explains itself instead of asking to be trusted.
+  expect(/function coveragePanel/.test(js) && /What \\u201cclear\\u201d covers/.test(js),
+    "an empty findings panel lists what was actually looked for");
+  expect(/panel\.appendChild\(coveragePanel\(\)\);/.test(js),
+    "…and the panel is actually appended, not merely defined");
+  // Appended INSIDE the empty branch: under a populated list it would be noise.
+  const emptyBranch = js.slice(js.indexOf("Nothing found under this lens"),
+                               js.indexOf("} else {", js.indexOf("Nothing found under this lens")));
+  expect(emptyBranch.includes("coveragePanel()"),
+    "…in the empty branch, where a reader is deciding whether clean means anything");
+  expect(/notImplemented/.test(js) && /not looked for/.test(js),
+    "…and names what the lens deliberately does not look for, in the same place");
+  expect(/if \(!cov\) return el\("span", \{ hidden/.test(js),
+    "with no coverage block, it renders nothing rather than a plausible list");
+
+  // 3c. The PNG carries the terms on which the map is true.
+  // A map exported without its coverage line is a stronger claim than the
+  // screen it came from — and the PNG is the artefact that ends up in a slide
+  // deck, where nobody can click through to the caveat.
+  expect(/function exportCaption/.test(js),
+    "the export builds its caption from the result, not by scraping the DOM");
+  const exportFn = js.slice(js.indexOf("function exportPng"), js.indexOf("function exportPng") + 2600);
+  expect(exportFn.includes("exportCaption()"),
+    "…and exportPng actually calls it");
+  expect(/COVERAGE · PARTIAL/.test(js) && /what was not read cannot appear on this map/.test(js),
+    "a partial run says so in the image itself");
+  expect(/COVERAGE · NOT RECORDED/.test(js),
+    "and a run from before coverage was recorded says that, rather than implying full coverage");
+  expect(/ORIGIN — /.test(js) && /never seen in use/.test(js),
+    "the origin legend rides along, so a declared-only edge is not read as an observed one");
+  expect(exportFn.includes("mapH + bandH"),
+    "the canvas grows to fit the caption rather than cropping the map");
 
   // 4. Directed edges with trimmed arrowheads; hot path solid and coloured.
   expect(/marker-end.*arch-arrow/.test(js) && /function trimEdge/.test(js),

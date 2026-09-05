@@ -149,6 +149,305 @@ description: Algosize audits your dependencies and your source, computes severit
     </div>
   </section>
 
+  <!-- ============= COMPLIANCE & RELEASE AUDIT =============
+       Every number in this section is read off a file in this repository, not
+       written by hand:
+
+         41 practices, 11 automated / 7 attested / 23 not covered
+             site/compliance/SSDF-mapping.md, Summary table at the foot.
+         8 obligations
+             site/compliance/CRA-mapping.md, Annex I Part II.
+         PW.4.1 automated / PS.1.1 attested / PW.8.2 not covered
+             SSDF-mapping.md lines 55, 47, 63 — including PW.8.2's stated
+             reason, which is that this platform reads code and does not run it.
+         met / not met / insufficient evidence / not applicable / expired
+             the result vocabulary in worker/src/compliance/resolve.js, where
+             weakenTo() can only ever weaken a verdict.
+
+       If the mapping changes, these numbers go stale. That is the trade for
+       printing real ones. -->
+  <section class="section" id="compliance">
+    <div class="container">
+      <div class="section-head">
+        <span class="eyebrow">What we can evidence</span>
+        <h2>Compliance &amp; release audit.</h2>
+        <p>
+          Map a repository against NIST SSDF v1.1 — 41 practices — and EU CRA
+          Annex I Part II — 8 obligations. Coverage splits three ways and never
+          collapses: what an analyzer measured, what a person signed for, and
+          what this tool cannot see at all.
+        </p>
+      </div>
+
+      <div class="cov-split">
+        <article class="cov-card cov-automated">
+          <span class="cov-glyph" aria-hidden="true">⚙</span>
+          <p class="cov-count mono"><strong>11</strong> automated</p>
+          <p class="cov-body">
+            An analyzer produced an artifact — an SBOM, a finding set, a run
+            history — and the control is answered from it.
+          </p>
+        </article>
+
+        <article class="cov-card cov-attested">
+          <span class="cov-glyph" aria-hidden="true">✍</span>
+          <p class="cov-count mono"><strong>7</strong> attested</p>
+          <p class="cov-body">
+            A named person signed a claim with an expiry date. Nothing was
+            measured, and the page says so where the result is shown.
+          </p>
+        </article>
+
+        <article class="cov-card cov-uncovered">
+          <span class="cov-glyph" aria-hidden="true">○</span>
+          <p class="cov-count mono"><strong>23</strong> not covered</p>
+          <p class="cov-body">
+            A fact about this tool, not a finding about you. Every one publishes
+            the reason it cannot be evidenced.
+          </p>
+        </article>
+      </div>
+
+      <div class="axes">
+        <div class="axes-head">
+          <h3>Two axes, never one badge</h3>
+          <p class="axes-sub mono">how we know · and whether it holds</p>
+        </div>
+
+        <div class="table-scroll">
+          <table class="axes-table">
+            <caption class="sr-only">
+              Three SSDF practices, each showing how the control is evidenced
+              and, separately, what the evidence says.
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col" class="mono">Control</th>
+                <th scope="col">Practice</th>
+                <th scope="col">How we know</th>
+                <th scope="col">Result</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row" class="mono">PW.4.1</th>
+                <td>Acquire and maintain well-secured software components from third parties</td>
+                <td><span class="ev ev-automated mono"><span aria-hidden="true">⚙</span> automated</span></td>
+                <td><span class="res res-notmet mono"><span aria-hidden="true">✕</span> not met</span></td>
+              </tr>
+              <tr>
+                <th scope="row" class="mono">PS.1.1</th>
+                <td>Store all forms of code based on the principle of least privilege</td>
+                <td><span class="ev ev-attested mono"><span aria-hidden="true">✍</span> attested</span></td>
+                <td><span class="res res-expired mono"><span aria-hidden="true">⏱</span> attestation expired</span></td>
+              </tr>
+              <tr>
+                <th scope="row" class="mono">PW.8.2</th>
+                <td>Scope, design and perform executable code testing</td>
+                <td><span class="ev ev-uncovered mono"><span aria-hidden="true">○</span> not covered</span></td>
+                <td class="res-none">— no result · this tool reads code, it does not run it</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p class="axes-note">
+          A control can be automated and not met, or attested and expired.
+          Collapsing those into one badge is how “we didn’t look” becomes “you
+          passed” — so the two columns never merge, and a verdict can only ever
+          be weakened on its way to the page, never strengthened.
+        </p>
+      </div>
+
+      <!-- The accepted-risk register. The rule id, severity and CWE below are
+           the real ones from worker/src/analyzers/sast/registry.js — the
+           `sast.xss.html-sink` rule is high, not medium, and its CWE is
+           CWE-79. The record fields are the ones risk/accept.js actually
+           builds: ownerEmail, rationale, expiresAt. Expiry is re-evaluated on
+           every read, and the ban on accepting a credential or a dependency
+           advisory is NEVER_ACCEPTABLE in that same file, re-checked at
+           apply time so a row written by any other path still cannot take
+           effect. -->
+      <div class="risk">
+        <div class="risk-head">
+          <h3>Accepted risk</h3>
+          <p class="risk-sub mono">a true finding that will not be fixed, signed for</p>
+        </div>
+
+        <article class="risk-card">
+          <p class="risk-state mono"><span aria-hidden="true">◆</span> accepted</p>
+          <p class="risk-rule mono">sast.xss.html-sink · high · CWE-79</p>
+          <p class="risk-title">
+            Unsanitized value assigned to an HTML sink in an internal admin
+            view <span class="risk-path mono">apps/admin/assets/report-table.js:41</span>
+          </p>
+          <blockquote class="risk-why">
+            The table renders only operator-authored strings and is unreachable
+            from the public app. Rewriting it is scheduled with the admin
+            rebuild.
+          </blockquote>
+          <dl class="risk-meta mono">
+            <div><dt>owner</dt><dd>platform@acme.io</dd></div>
+            <div><dt>expires</dt><dd>2027-01-31</dd></div>
+            <div><dt>still listed</dt><dd>leaves the open count, nothing else</dd></div>
+          </dl>
+        </article>
+
+        <ul class="risk-rules">
+          <li>
+            Expiry is enforced on read: a lapsed acceptance reopens the finding
+            at full severity, with no one having to remember. Nothing is stored
+            against the scan, so revoking one takes effect across every report
+            already written.
+          </li>
+          <li>
+            Committed credentials and dependency advisories can never be
+            accepted. A credential is rotated, not accepted.
+          </li>
+          <li>
+            An acceptance is pinned to the exact finding. Change the line and it
+            reopens as drifted, because what was signed for is no longer what is
+            there.
+          </li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= WHAT WE PUBLISH ABOUT OURSELVES =============
+       Counted, not estimated: site/compliance/ holds 20 markdown pages, of
+       which 17 are policy pages and all 17 end in a `## Roadmap` section. The
+       three without one are the two framework mappings and the README, which
+       are indexes rather than policies. The SBOM sentence is quoted from
+       site/compliance/PW-01a-threat-model.md:87. -->
+  <section class="section" id="openness">
+    <div class="container">
+      <div class="section-head">
+        <span class="eyebrow">Read it before you sign up</span>
+        <h2>What we publish about ourselves.</h2>
+        <p>
+          We run the same audit on Algosize and publish the result — 20 pages,
+          and every one of the 17 policy pages ends with a Roadmap section
+          listing its own gaps. You can read all of it before you give us an
+          email address.
+        </p>
+      </div>
+
+      <div class="pubs">
+        <article class="pub">
+          <span class="pub-tag mono" aria-hidden="true">▲ pack</span>
+          <h3>Read what we say about our own gaps</h3>
+          <p>
+            Not a summary of it. The pack itself, in the same plain words —
+            including the line that we do not generate an SBOM for our own
+            repository while selling that capability.
+          </p>
+          <a class="pub-link mono" href="{{ '/security/compliance/' | relative_url }}">/security/compliance/ →</a>
+        </article>
+
+        <article class="pub">
+          <span class="pub-tag mono" aria-hidden="true">▲ threat model</span>
+          <h3>Standing threat model</h3>
+          <p>
+            Assets, trust boundaries, threats, and the decision taken against
+            each. Published alongside the pack and kept current — including one
+            residual risk we state we do not mitigate and could not.
+          </p>
+          <a class="pub-link mono" href="{{ '/security/' | relative_url }}">/security/ →</a>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= IT WATCHES =============
+       Both halves are shipped, not planned. The per-repository hour is the
+       `run_at_hour` column added in worker/migrations/0017_monitor_health.sql,
+       which isDue() reads to hold a monitor back until its own hour. The CI
+       gate's SARIF upload and its one sticky comment per pull request are
+       steps in .github/workflows/algosize-audit.yml — the same file
+       /api/ci/snippet serves, byte for byte, with a test that fails if the two
+       ever drift apart. -->
+  <section class="section" id="watch">
+    <div class="container">
+      <div class="section-head">
+        <span class="eyebrow">After the first scan</span>
+        <h2>It watches, it doesn’t just scan.</h2>
+        <p>
+          Scheduled sweeps per repository, and a CI gate that comments on the
+          pull request and uploads SARIF to the GitHub Security tab.
+        </p>
+      </div>
+
+      <div class="sweep-cards">
+        <article class="sweep-card">
+          <span class="sweep-tag mono">Scheduled sweep</span>
+          <h3>One sweep per repository, on your schedule</h3>
+          <p>
+            A repository under watch is re-audited on its own cadence, and the
+            result lands beside the last one so you see what moved rather than a
+            fresh wall of findings.
+          </p>
+        </article>
+
+        <article class="sweep-card">
+          <span class="sweep-tag mono">CI gate</span>
+          <h3>A comment on the PR, SARIF in the Security tab</h3>
+          <p>
+            The gate posts its verdict where the review already happens, in one
+            comment it keeps updating, and uploads SARIF so findings appear in
+            GitHub’s own Security tab rather than only in ours.
+          </p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= SERVICE SCORECARD =============
+       The design showed three ways of having no number. The dashboard ships
+       FOUR, and the four are what render: site/assets/js/dash-workspace.js
+       lines 280-285, whose glosses are quoted verbatim below. Printing three
+       here would have been the page rounding its own product down. The
+       measured-clean row is the fifth state and the only one that is a number:
+       worker/src/handlers/scorecard.js returns a value only when an analyzer
+       actually produced one. -->
+  <section class="section" id="scorecard">
+    <div class="container">
+      <div class="section-head">
+        <span class="eyebrow">On every repository row</span>
+        <h2>A cell is never a bare zero.</h2>
+        <p>
+          Four ways of having no number, and one way of having one. They are
+          different facts about different parties, so they never render as the
+          same cell — and there is no overall repository score, because a
+          dependency grade and a cloud bill do not average.
+        </p>
+      </div>
+
+      <ul class="cellkey">
+        <li class="cellkey-item">
+          <span class="cellkey-term mono cellkey-pending">first run pending</span>
+          <span class="cellkey-gloss">enabled; no sweep has produced a result yet</span>
+        </li>
+        <li class="cellkey-item">
+          <span class="cellkey-term mono cellkey-unmeasured">not measured</span>
+          <span class="cellkey-gloss">the sweep ran and found nothing it could read</span>
+        </li>
+        <li class="cellkey-item">
+          <span class="cellkey-term mono cellkey-na">not applicable</span>
+          <span class="cellkey-gloss">this repository has no such thing to measure</span>
+        </li>
+        <li class="cellkey-item">
+          <span class="cellkey-term mono cellkey-off">not watched</span>
+          <span class="cellkey-gloss">the analyzer is switched off for this repo</span>
+        </li>
+        <li class="cellkey-item cellkey-measured">
+          <span class="cellkey-term mono cellkey-zero">0</span>
+          <span class="cellkey-gloss">measured, and clean — the only one of the five that is a result</span>
+        </li>
+      </ul>
+    </div>
+  </section>
+
   <!-- ============= A VALIDATED FIX =============
        The five checks named here are the five worker/src/fix/validate.js
        actually runs — structural, blast_radius, parse, target_removed,

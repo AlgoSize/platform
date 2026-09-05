@@ -749,9 +749,37 @@
     }
 
     var a = published[0];
-    body.appendChild(el("span", { class: "cmp-fact-label mono" },
-      "SHA-256 · verify against the file you were sent"));
-    body.appendChild(el("code", { class: "cmp-sha mono" }, a.packSha256 || "unrecorded"));
+
+    // Three states, and only the first is a checksum anyone should act on.
+    //
+    // `packHashScope` is what the stored hash COVERS. Until migration 0030 it
+    // covered a document the download endpoint never served, so running
+    // sha256sum on the downloaded file produced a mismatch and told a recipient
+    // their evidence pack had been tampered with. A hash that cannot verify is
+    // worse than no hash on the one panel whose whole claim is verifiability,
+    // so a pre-0030 pack says what it is instead of printing a number.
+    if (a.packSha256 && a.packHashScope === "document") {
+      body.appendChild(el("span", { class: "cmp-fact-label mono" },
+        "SHA-256 · verify against the file you were sent"));
+      body.appendChild(el("code", { class: "cmp-sha mono" }, a.packSha256));
+      body.appendChild(el("span", { class: "cmp-fact-note" },
+        "Run sha256sum on the downloaded .json — this is the hash of those exact bytes, " +
+        "and the download repeats it in an x-algosize-pack-sha256 header."));
+    } else if (a.packSha256) {
+      body.appendChild(el("span", { class: "cmp-fact-label mono" },
+        "SHA-256 · does not cover this download"));
+      body.appendChild(el("code", { class: "cmp-sha cmp-sha-stale mono" }, a.packSha256));
+      body.appendChild(el("span", { class: "cmp-fact-note" },
+        "This pack was published before the hash was taken over the file we serve, so the " +
+        "checksum above is of a different document and will not match the download. The record " +
+        "itself is intact and unedited — only the checksum is unusable. Publish a fresh pack for " +
+        "this period to get one that verifies."));
+    } else {
+      body.appendChild(el("span", { class: "cmp-fact-label mono" }, "SHA-256"));
+      body.appendChild(el("span", { class: "cmp-fact-note" },
+        "No checksum was recorded for this pack. The record is still complete; there is simply " +
+        "nothing here to verify a downloaded copy against."));
+    }
 
     body.appendChild(el("span", { class: "cmp-fact-label mono" }, "Frozen · size · retained until"));
     body.appendChild(el("span", { class: "cmp-fact-strong mono tnum" },

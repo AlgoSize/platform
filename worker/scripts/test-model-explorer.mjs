@@ -223,6 +223,46 @@ group("provenance is one record, not a sentence retyped per surface");
     "…and it says plainly that nothing here has been reconciled against a bill");
 }
 
+// ===========================================================================
+console.log("\na missing price says WHY it is missing\n");
+// ===========================================================================
+{
+  // A null price was two different facts wearing one shape, and the tooltip
+  // described both with the embedding sentence: "n/a — no output tokens" about
+  // @cf/moonshotai/kimi-k2.5, which pricing.js lists at $0.180 / 1M out. It is
+  // not that the model emits no output tokens; it is that pickPrice refuses a
+  // deprecated row for a new call.
+  //
+  // costOf already distinguished them. priceHint threw the distinction away,
+  // so this checks the shape the explorer actually receives.
+  const pts = graphData(GRAPH_KINDS[0], { includeDeprecated: true }).points || [];
+  const byModel = (id) => pts.find((p) => p.model === id) || null;
+
+  const dep = pts.filter((p) => p.deprecated);
+  expect(dep.length > 0, `the catalogue still has a superseded model to check (${dep.length})`);
+  for (const p of dep) {
+    expect(p.priceHint && p.priceHint.reason === "model_deprecated",
+      `${p.model} says its price is withheld because it is superseded`);
+    expect(p.priceHint && p.priceHint.inputPer1M === null && p.priceHint.outputPer1M === null,
+      `…and quotes no price for it, in either direction`);
+  }
+
+  // The other null, which must stay reachable: a model that IS priced and
+  // genuinely has no output leg. Its reason is null, and that null is what
+  // lets the renderer keep saying "no output tokens" for exactly this case.
+  const embed = byModel("@cf/baai/bge-m3");
+  expect(embed !== null, "the embedding model is on the plot");
+  expect(embed.priceHint.inputPer1M !== null && embed.priceHint.outputPer1M === null,
+    "an embedding model is priced on input and has no output price");
+  expect(embed.priceHint.reason === null,
+    "…with no reason attached, because nothing is being withheld — it emits no output tokens");
+
+  // A priced, ordinary model carries no reason either.
+  const live = pts.find((p) => !p.deprecated && p.priceHint && p.priceHint.outputPer1M !== null);
+  expect(live && live.priceHint.reason === null,
+    "a fully priced model carries no withheld-price reason");
+}
+
 console.log("");
 if (failures) {
   console.log(`\x1b[31m  ${failures} model-explorer test(s) failed\x1b[0m\n`);

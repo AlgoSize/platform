@@ -18,6 +18,8 @@
 
 import { validateArchitectureInput, analyzeArchitecture } from "../src/analyzers/architecture.js";
 import { analyzeArchitectureHandler } from "../src/handlers/analyze.js";
+import { RULE_CATALOG, UNIMPLEMENTED_RULES, LENSES, ruleCoverage }
+  from "../src/analyzers/architecture/rules.js";
 import { summarize } from "../src/handlers/runs.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -512,6 +514,111 @@ console.log("\na committed placeholder is not a leaked credential\n");
                     "committed_secret");
   expect(leaked.length === 1 && leaked[0].severity === "critical",
     `a real committed credential is still one critical finding (got ${leaked.length})`);
+}
+
+// ===========================================================================
+console.log("\nthe map's node total is the sum of its boxes\n");
+// ===========================================================================
+{
+  // The explorer draws one box per cluster plus a "Shared resources" box, each
+  // labelled "<n> NODES", above a stat card reading the total. If those two
+  // disagree the map is quietly hiding nodes, and a reader counting boxes to
+  // check the total would be right to stop trusting the map.
+  //
+  // They agree because graph.js derives one from the other:
+  //   cluster.nodes = nodes.filter((n) => n.cluster === cluster.id)
+  // and the explorer's "Shared resources" box is nodes with no cluster at all.
+  // That is an exact partition — but it is enforced by one line in the builder
+  // and consumed by two independent places in the renderer, which is precisely
+  // the shape that rots silently. So it is asserted here rather than assumed.
+  const { result } = run([
+    repoFile("worker/wrangler.toml"),
+    repoFile("worker-sandbox/wrangler.toml"),
+    repoFile("site/_config.yml"),
+    repoFile("worker/src/index.js"),
+  ]);
+  const { graph, summary } = result;
+
+  const inClusters = graph.clusters.reduce((n, c) => n + (c.nodes || []).length, 0);
+  const loose = graph.nodes.filter((n) => !n.cluster).length;
+  expect(inClusters + loose === graph.nodes.length,
+    `every node is in exactly one box: ${inClusters} clustered + ${loose} shared = ` +
+    `${graph.nodes.length} nodes`);
+  expect(summary.nodes === graph.nodes.length,
+    `and the stat card counts the same nodes the boxes do (${summary.nodes})`);
+
+  // No node claims a cluster the map does not draw. Such a node would be
+  // counted in the total, absent from every box, and invisible on the map.
+  const clusterIds = new Set(graph.clusters.map((c) => c.id));
+  const orphans = graph.nodes.filter((n) => n.cluster && !clusterIds.has(n.cluster));
+  expect(orphans.length === 0,
+    `no node belongs to a cluster that is not on the map${orphans.length ? " — " + orphans.map((n) => n.id + "→" + n.cluster).join(", ") : ""}`);
+
+  // And no node is in two boxes: a resource declared by two clusters is
+  // deliberately demoted to shared (graph.js addNode), not listed under both.
+  const seen = new Map();
+  const doubled = [];
+  for (const c of graph.clusters) {
+    for (const id of c.nodes || []) {
+      if (seen.has(id)) doubled.push(`${id} (${seen.get(id)} and ${c.id})`);
+      else seen.set(id, c.id);
+    }
+  }
+  expect(doubled.length === 0,
+    `no node is listed under two clusters${doubled.length ? " — " + doubled.join(", ") : ` (${seen.size} checked)`}`);
+}
+
+// ===========================================================================
+console.log("\nthe rule catalogue is the real list of rules, not a stale copy of it\n");
+// ===========================================================================
+{
+  // A lens count of 0 is ambiguous without a denominator, and the denominator
+  // is RULE_CATALOG. A catalogue that has drifted from the code is worse than
+  // none: it would state coverage the analyzer no longer has, on the panel
+  // whose entire job is to make a clean result trustworthy.
+  //
+  // Read from the source rather than from an export, because the thing being
+  // checked is that the DECLARATION matches what the rule functions can
+  // actually emit. An export could only ever agree with itself.
+  const src = readFileSync(join(REPO, "worker/src/analyzers/architecture/rules.js"), "utf8");
+
+  // Every `rule: "..."` the file mentions, minus the ones inside the two
+  // declarative blocks (UNIMPLEMENTED_RULES and RULE_CATALOG itself), is a
+  // rule some function can emit.
+  const declaredIds = new Set([
+    ...RULE_CATALOG.map((r) => r.rule),
+    ...UNIMPLEMENTED_RULES.map((r) => r.rule),
+  ]);
+  const emitted = new Set();
+  for (const m of src.matchAll(/rule:\s*"([a-z0-9_]+)"/g)) emitted.add(m[1]);
+  // Subtract the ids that appear only because the two blocks declare them.
+  const emittedByRules = [...emitted].filter((id) =>
+    !UNIMPLEMENTED_RULES.some((r) => r.rule === id));
+
+  const uncatalogued = emittedByRules.filter((id) => !RULE_CATALOG.some((r) => r.rule === id));
+  expect(uncatalogued.length === 0,
+    `every rule the analyzer can emit is catalogued${uncatalogued.length ? " — missing: " + uncatalogued.join(", ") : ` (${emittedByRules.length} checked)`}`);
+
+  const stale = RULE_CATALOG.filter((r) => !emitted.has(r.rule)).map((r) => r.rule);
+  expect(stale.length === 0,
+    `and nothing is catalogued that the analyzer no longer emits${stale.length ? " — stale: " + stale.join(", ") : ""}`);
+
+  expect([...declaredIds].length === RULE_CATALOG.length + UNIMPLEMENTED_RULES.length,
+    "no rule id is declared twice across the catalogue and the not-implemented list");
+
+  // The coverage object the explorer renders from.
+  const cov = ruleCoverage();
+  expect(LENSES.every((l) => cov[l] && cov[l].ran === cov[l].rules.length && cov[l].ran > 0),
+    "every lens reports how many rules ran, and no lens reports zero rules");
+  expect(LENSES.reduce((n, l) => n + cov[l].ran, 0) === RULE_CATALOG.length,
+    "the per-lens totals add up to the catalogue");
+  expect(cov.speed.rules.every((r) => r.what && r.what.length > 10),
+    "and each rule says what it looks for, so 'covered' is checkable rather than asserted");
+
+  // The unimplemented half of the same statement travels with it.
+  expect(cov.cost.notImplemented.length + cov.speed.notImplemented.length +
+         cov.security.notImplemented.length === UNIMPLEMENTED_RULES.length,
+    "what a lens does NOT look for is attached to that lens, not to a footnote");
 }
 
 // ---------- summary ----------

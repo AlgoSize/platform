@@ -619,6 +619,14 @@ const MIGRATIONS = Object.freeze([
     checks: [{ table: "accepted_risks", column: "expires_at" },
              { table: "accepted_risks", column: "fingerprint" },
              { table: "accepted_risks", column: "owner_email" }] },
+  { id: "0030", name: "compliance_pack_hash",
+    // What the published pack's SHA-256 covers. Absent, publishing still works
+    // and the pack still downloads — the failure is that the hash goes back to
+    // covering a document nobody is served, so the checksum shown to a customer
+    // for verification can never match the file they verify. Silent, and on the
+    // one surface whose product claim is verifiable evidence.
+    checks: [{ table: "compliance_audits", column: "pack_hash_scope" },
+             { table: "compliance_audits", column: "scans_json" }] },
 ]);
 
 /** Plain SQLite identifier — the only shape we will interpolate into a PRAGMA. */

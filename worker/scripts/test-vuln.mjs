@@ -975,9 +975,15 @@ async function withFetch(impl, fn) {
          "topAdvisories present (≤10 by severity desc)");
 }
 
-// 58. Repo with no lockfiles → 404 no_lockfiles_found
+// 58a. A repository nothing can be read from is still a configuration error.
+//      "No lockfile" and "this repo cannot be read at all" used to be the same
+//      404, because an unreachable repo simply yields no manifests. They are
+//      different facts: a deleted or renamed repository must keep saying so,
+//      or a monitor pointed at one reports healthy-with-nothing-measured
+//      forever. The source scan's own `unavailable` separates them — it read
+//      the same GitHub at the same moment with the same credentials.
 {
-  const fetchImpl = async (url) => new Response("not found", { status: 404 });
+  const fetchImpl = async () => new Response("not found", { status: 404 });
   const req = new Request("http://x/api/analyze/vuln", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -985,11 +991,64 @@ async function withFetch(impl, fn) {
   });
   const body = await withFetch(fetchImpl, async () => {
     const res = await analyzeVulnHandler(req, makeEnv());
-    expect(res.status === 404, `no-lockfiles → 404 (got ${res.status})`);
+    expect(res.status === 404, `an unreadable repository still 404s (got ${res.status})`);
     return res.json();
   });
-  expect(body.error === "no_lockfiles_found" && typeof body.helpUrl === "string",
-    `404 body has error=no_lockfiles_found + helpUrl (got: ${body.error})`);
+  expect(body.error === "repo_unreadable" && typeof body.helpUrl === "string",
+    `and says so by name (got: ${body.error})`);
+}
+
+// 58b. A repository that reads fine and simply has no lockfile: the DEPENDENCY
+//      half is not measured, and the run continues. This used to 404, which
+//      ended the request before runSourceScan was reached — so a repository
+//      with no manifests and any amount of source got no source findings and no
+//      statement that none had been looked for. Half A's absence took half B
+//      with it.
+{
+  const tree = { truncated: false, tree: [{ path: "src/app.js", type: "blob", size: 120 }] };
+  const fetchImpl = async (url) => {
+    const u = String(url);
+    if (u.includes("api.github.com") && u.includes("/git/trees/")) {
+      return new Response(JSON.stringify(tree), { status: 200 });
+    }
+    if (u.includes("raw.githubusercontent.com")) {
+      const path = decodeURIComponent(u.split("/").slice(6).join("/"));
+      // The whole point of the fixture: source reads, lockfiles do not exist.
+      if (path === "src/app.js") return new Response("const x = 1;\n", { status: 200 });
+      return new Response("nf", { status: 404 });
+    }
+    return new Response("nf", { status: 404 });
+  };
+  const req = new Request("http://x/api/analyze/vuln", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ repoUrl: "https://github.com/lockless/repo" }),
+  });
+  const body = await withFetch(fetchImpl, async () => {
+    const res = await analyzeVulnHandler(req, makeEnv());
+    expect(res.status === 200,
+      `a readable repository with no lockfile no longer ends the run (got ${res.status})`);
+    return res.json();
+  });
+
+  expect(body.dependencies && body.dependencies.status === "not_measured",
+    "the dependency half says it was not measured, rather than reporting zero");
+  expect(body.dependencies && body.dependencies.reason === "no_lockfiles_found" &&
+         typeof body.dependencies.helpUrl === "string",
+    "keeping the old error code and help link, so anything matching on them still finds them");
+
+  // The half that matters here: the source scan ran, and says what state it is
+  // in. That it was asked at all is the assertion.
+  expect(body.source && body.source.status === "ok",
+    `and the source scan ran to completion (got ${body.source && body.source.status})`);
+
+  // A grade computed over an unmeasured half is half a scan wearing a whole
+  // one's number. `complete: false` is the existing channel that says so.
+  expect(body.summary && body.summary.complete === false &&
+         /No dependency manifest was found/.test(body.summary.partialReason || ""),
+    "the summary refuses to call itself complete when a half was never read");
+  expect(!(body.advisories || []).length,
+    "the advisory list is empty — which is exactly why the block above has to exist");
 }
 
 // 59. master-branch fallback works (main 404s, master serves)

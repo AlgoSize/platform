@@ -1373,12 +1373,30 @@ jobs:
             exit 0
           fi
 
-          # Cheapest priced provider. Providers that could not be priced are
-          # excluded rather than counted as zero.
-          jq -r '[.providers[] | select(.estimatedTotalMicroUsd != null)]
+          # Cheapest priced provider. "Priced" means it produced at least one
+          # line item: a provider whose adapter could price NOTHING reports a
+          # total of 0 — the sum of an empty list — and the earlier filter on
+          # "!= null" never excluded it, so the provider that knew least always
+          # sorted first and the gate compared $0 against the ceiling and
+          # passed. A ceiling that a total ignorance of your costs always
+          # satisfies is not a ceiling.
+          # The range travels with the point estimate. Assumptions widen an
+          # estimate — an unknown region, a utilisation guess, a stale catalog —
+          # and engine.js reports the width as lower/upper bounds. The gate used
+          # only the point estimate, so an $80-$150 estimate against a $100
+          # ceiling passed on $95 and said nothing about the $150. That is a
+          # coin flip wearing a verdict.
+          jq -r '[.providers[] | select((.lineItems | length) > 0)]
                  | sort_by(.estimatedTotalMicroUsd) | .[0]
                  | "cheapest_usd=\\(.estimatedTotalMicroUsd / 1000000)",
+                   "lower_usd=\\((.lowerBoundMicroUsd // .estimatedTotalMicroUsd) / 1000000)",
+                   "upper_usd=\\((.upperBoundMicroUsd // .estimatedTotalMicroUsd) / 1000000)",
                    "cheapest_name=\\(.providerName // .providerId)"' response.json >> "$GITHUB_OUTPUT"
+          # Nothing priced anywhere. The gate must not compare a number it does
+          # not have, so it says so and annotates instead of passing silently.
+          if ! grep -q '^cheapest_usd=' "$GITHUB_OUTPUT"; then
+            echo "unpriceable=true" >> "$GITHUB_OUTPUT"
+          fi
           jq -r '"resources=\\(.normalizedSpec.resources | length)"' response.json >> "$GITHUB_OUTPUT"
 
       - name: Comment and gate
@@ -1387,18 +1405,50 @@ jobs:
           GH_TOKEN: \${{ github.token }}
           CEILING:  \${{ steps.budget.outputs.ceiling }}
           USD:      \${{ steps.run.outputs.cheapest_usd }}
+          LOWER:    \${{ steps.run.outputs.lower_usd }}
+          UPPER:    \${{ steps.run.outputs.upper_usd }}
           NAME:     \${{ steps.run.outputs.cheapest_name }}
           RESOURCES: \${{ steps.run.outputs.resources }}
+          UNPRICEABLE: \${{ steps.run.outputs.unpriceable }}
           PR: \${{ github.event.pull_request.number }}
         run: |
+          # Nothing could be priced on any provider. There is no number, so
+          # there is nothing to compare against the ceiling — and passing a
+          # gate on a number you do not have is the failure this whole comment
+          # exists to prevent. Say what happened and annotate.
+          if [ "$UNPRICEABLE" = "true" ]; then
+            {
+              echo "<!-- algosize-estimate -->"
+              echo "### Infrastructure cost"
+              echo
+              echo "**Could not price this configuration.** $RESOURCES resource(s) were read, and"
+              echo "none of them are in our pricing catalog for any provider yet."
+              echo
+              echo "No ceiling was applied, because there is no total to apply one to. This is a gap"
+              echo "in what Algosize can price, not a finding about your configuration."
+            } > comment.md
+            gh pr comment "$PR" --body-file comment.md --edit-last || \\
+              gh pr comment "$PR" --body-file comment.md
+            exit 0
+          fi
+
           VERDICT="No ceiling is set, so this is an annotation only."
           FAIL=0
           if [ -n "$CEILING" ]; then
-            if awk "BEGIN{exit !($USD > $CEILING)}"; then
-              VERDICT="Over the \$$CEILING/mo ceiling."
+            # Three outcomes, because a range against a line has three
+            # relationships and only two of them are a verdict.
+            if awk "BEGIN{exit !($UPPER <= $CEILING)}"; then
+              VERDICT="Within the \\$$CEILING/mo ceiling, at the top of the range too."
+            elif awk "BEGIN{exit !($LOWER > $CEILING)}"; then
+              VERDICT="Over the \\$$CEILING/mo ceiling, at the bottom of the range too."
               FAIL=1
             else
-              VERDICT="Within the \$$CEILING/mo ceiling."
+              # The ceiling falls INSIDE the estimate. We do not know, and the
+              # honest answer is to say so rather than to pick the end that
+              # happens to give a verdict. Deliberately does not fail the build:
+              # turning "we cannot tell" into a red build is the same
+              # overreach in the other direction.
+              VERDICT="Cannot say. The \\$$CEILING/mo ceiling falls inside the estimate's own range (\\$$LOWER to \\$$UPPER), so this configuration may be over or under it. Narrow the range by supplying a region and a utilisation figure, or read the assumptions in the full report."
             fi
           fi
 
@@ -1406,7 +1456,11 @@ jobs:
             echo "<!-- algosize-estimate -->"
             echo "### Infrastructure cost"
             echo
-            echo "**\$$USD / month** on $NAME — cheapest of the priced providers, $RESOURCES resources."
+            echo "**\\$$USD / month** on $NAME — cheapest of the priced providers, $RESOURCES resources."
+            if [ "$LOWER" != "$UPPER" ]; then
+              echo
+              echo "Range \\$$LOWER to \\$$UPPER, from the assumptions this estimate had to make."
+            fi
             echo
             echo "$VERDICT"
             echo
@@ -1418,7 +1472,7 @@ jobs:
             gh pr comment "$PR" --body-file comment.md
 
           if [ "$FAIL" = "1" ]; then
-            echo "::error::Estimated monthly cost \$$USD exceeds the \$$CEILING ceiling."
+            echo "::error::Estimated monthly cost \\$$USD exceeds the \\$$CEILING ceiling."
             exit 1
           fi
 `;

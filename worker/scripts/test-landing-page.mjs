@@ -17,7 +17,7 @@
 //
 // Run with:  node scripts/test-landing-page.mjs
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -35,6 +35,12 @@ const pricing  = readFileSync(join(SITE, "assets", "js", "pricing.js"), "utf8");
 const checkout = readFileSync(join(SITE, "assets", "js", "checkout.js"), "utf8");
 const validate = readFileSync(join(__dirname, "..", "src", "fix", "validate.js"), "utf8");
 const stages   = readFileSync(join(__dirname, "..", "src", "ai", "stages.js"), "utf8");
+const resolve  = readFileSync(join(__dirname, "..", "src", "compliance", "resolve.js"), "utf8");
+const accept   = readFileSync(join(__dirname, "..", "src", "risk", "accept.js"), "utf8");
+const workspce = readFileSync(join(SITE, "assets", "js", "dash-workspace.js"), "utf8");
+const ssdf     = readFileSync(join(SITE, "compliance", "SSDF-mapping.md"), "utf8");
+const cra      = readFileSync(join(SITE, "compliance", "CRA-mapping.md"), "utf8");
+const packDir  = readdirSync(join(SITE, "compliance")).filter((f) => f.endsWith(".md"));
 
 let failures = 0;
 const ok   = (msg) => console.log(`  \x1b[32m✓\x1b[0m ${msg}`);
@@ -200,6 +206,178 @@ group("the advisory in the hero is a real one, scored from its own vector");
 }
 
 // ===========================================================================
+group("the compliance section counts what is actually in the mapping");
+// ===========================================================================
+{
+  // The page prints 11 / 7 / 23 out of 41. Those are not decorative: they are
+  // the SSDF mapping's own summary, and the mapping is edited by hand whenever
+  // a control changes state. Recount the table body here rather than trusting
+  // the summary row — a summary that has drifted from its own table would
+  // otherwise agree with a page that has drifted with it.
+  const practiceRows = ssdf.split("\n").filter((l) => /^\| \*\*[A-Z]{2}\.\d/.test(l));
+  const countOf = (state) =>
+    practiceRows.filter((l) => l.includes("| `" + state + "` |")).length;
+  const counted = {
+    automated: countOf("automated"),
+    attested: countOf("attested"),
+    "not covered": countOf("not covered"),
+  };
+
+  expect(practiceRows.length === 41,
+    `the SSDF mapping still holds 41 practices (found ${practiceRows.length})`);
+  expect(counted.automated + counted.attested + counted["not covered"] === practiceRows.length,
+    "every practice carries exactly one of the three coverage states");
+
+  // Each printed count is matched against its own card, not against the page
+  // as a whole — "11" appearing somewhere is not the same as the automated
+  // card saying 11.
+  for (const [state, n] of Object.entries(counted)) {
+    const cls = { automated: "cov-automated", attested: "cov-attested", "not covered": "cov-uncovered" }[state];
+    const card = index.match(new RegExp(`<article class="cov-card ${cls}">[\\s\\S]*?</article>`));
+    expect(Boolean(card) && new RegExp(`<strong>${n}</strong>\\s*${state}`).test(card[0]),
+      `the ${state} card prints ${n}, the number in the mapping`);
+  }
+
+  const craRows = cra.split("\n").filter((l) => /^\| \*\*II\.\d/.test(l));
+  expect(craRows.length === 8,
+    `the CRA mapping still holds 8 Annex I Part II obligations (found ${craRows.length})`);
+  expect(/EU CRA\s*\n?\s*Annex I Part II — 8 obligations/.test(index.replace(/\s+/g, " ").replace(/ /g, " ")) ||
+         /Annex I Part II — 8 obligations/.test(index.replace(/\s+/g, " ")),
+    "and the page says 8, not a number of its own");
+
+  // The three practices in the two-axes table are quoted from the mapping. A
+  // reworded practice must reword the page, or the page is quoting a document
+  // that no longer says that.
+  const AXES = [
+    { id: "PW.4.1", state: "automated", cls: "ev-automated" },
+    { id: "PS.1.1", state: "attested",  cls: "ev-attested" },
+    { id: "PW.8.2", state: "not covered", cls: "ev-uncovered" },
+  ];
+  for (const a of AXES) {
+    const row = ssdf.split("\n").find((l) => l.startsWith(`| **${a.id}**`));
+    const title = row ? row.split("|")[2].trim() : null;
+    expect(Boolean(title) && index.includes(title),
+      `${a.id} is quoted word for word from the mapping`);
+    expect(Boolean(row) && row.includes("| `" + a.state + "` |"),
+      `${a.id} is ${a.state} in the mapping, which is what the page shows`);
+    // The state and the verdict are two different cells. Pin the state to the
+    // "How we know" column specifically: showing it in the Result column would
+    // be the exact collapse the section's own note says never happens.
+    const trBody = index.match(new RegExp(`<th scope="row" class="mono">${a.id.replace(/\./g, "\\.")}</th>[\\s\\S]*?</tr>`));
+    expect(Boolean(trBody) && trBody[0].includes(`class="ev ${a.cls} mono"`),
+      `${a.id}'s evidence state sits in the How-we-know column`);
+  }
+
+  // Two axes means the Result column has its own vocabulary, and the page may
+  // only print words resolve.js can actually return.
+  expect(/not_met/.test(resolve) && />✕<\/span> not met</.test(index.replace(/<span aria-hidden="true">/g, ">")),
+    "\"not met\" is a result resolve.js can return");
+  expect(/attestation_expired/.test(resolve) && /attestation expired/.test(index),
+    "\"attestation expired\" is a result resolve.js can return");
+  // PW.8.2 has no result at all. If it ever renders as one, the table has
+  // collapsed the two axes into one badge.
+  const uncoveredRow = index.match(/<th scope="row" class="mono">PW\.8\.2<\/th>[\s\S]*?<\/tr>/);
+  expect(Boolean(uncoveredRow) && !/class="res /.test(uncoveredRow[0]) &&
+         /no result/.test(uncoveredRow[0]),
+    "a not-covered control renders no result, rather than a passing one");
+}
+
+// ===========================================================================
+group("the accepted risk on the page is one the register would accept");
+// ===========================================================================
+{
+  const card = index.match(/<article class="risk-card">[\s\S]*?<\/article>/);
+  expect(Boolean(card), "the accepted-risk card is on the page");
+
+  const ruleId = card ? (card[0].match(/([a-z]+\.[a-z0-9-]+\.[a-z0-9-]+) ·/) || [])[1] : null;
+  const rule = RULES.find((r) => r.id === ruleId);
+  expect(Boolean(rule), `${ruleId} is a registered rule, not an invented one`);
+
+  // The design this section came from named `sast.xss.unescaped-template`,
+  // which no analyzer emits. Printing a severity or a CWE the rule does not
+  // carry is the same class of mistake one field further in.
+  expect(Boolean(rule) && card[0].includes(`· ${rule.severity} ·`),
+    "the severity beside the rule is the severity the registry gives it");
+  expect(Boolean(rule) && rule.cwe.some((c) => card[0].includes(c)),
+    "and the CWE is one the rule actually carries");
+
+  // The whole point of NEVER_ACCEPTABLE is that some findings cannot be signed
+  // away. An example drawn from one of those categories would advertise a
+  // capability the code refuses.
+  const banned = (accept.match(/NEVER_ACCEPTABLE = Object\.freeze\(\[([^\]]*)\]/) || [])[1] || "";
+  const bannedList = banned.split(",").map((x) => x.trim().replace(/"/g, "")).filter(Boolean);
+  expect(bannedList.length > 0 && Boolean(rule) && !bannedList.includes(rule.category),
+    `the example's category (${rule && rule.category}) is one the register will accept`);
+  // Sentence tests run against whitespace-collapsed HTML: the page wraps its
+  // prose, and a line break inside a quoted sentence is not a change to it.
+  const prose = index.replace(/\s+/g, " ");
+  expect(bannedList.includes("secrets") && bannedList.includes("dependency") &&
+         /Committed credentials and dependency advisories can never be accepted/.test(prose),
+    "the page names the two categories the code refuses, and only those two");
+
+  // Expiry is a read-side rule. The page says so because that is what makes a
+  // revocation retroactive; if the code ever persisted the decision instead,
+  // this sentence would become a promise nothing keeps.
+  expect(/enforced on read/.test(prose) && /Nothing is stored against the scan/.test(prose),
+    "the page states that expiry is evaluated on read, which is where accept.js evaluates it");
+}
+
+// ===========================================================================
+group("the self-audit and scorecard sections count real files and real states");
+// ===========================================================================
+{
+  const roadmapPages = packDir.filter((f) =>
+    /^## Roadmap/m.test(readFileSync(join(SITE, "compliance", f), "utf8")));
+  expect(/publish the result — 20 pages/.test(index.replace(/\s+/g, " ")) &&
+         packDir.length === 20,
+    `the pack really is ${packDir.length} pages, and the page says 20`);
+  expect(roadmapPages.length === 17 &&
+         /17 policy pages ends with a Roadmap section/.test(index.replace(/\s+/g, " ")),
+    `${roadmapPages.length} pages end in a Roadmap section, and the page says 17`);
+
+  // The scorecard key. The design showed three states; the dashboard ships
+  // four, and the four glosses below are quoted from it. If the dashboard
+  // rewords one, the marketing page is describing a product that has moved.
+  const KEY = [
+    ["cellkey-pending",    "first run pending", "enabled; no sweep has produced a result yet"],
+    ["cellkey-unmeasured", "not measured",      "the sweep ran and found nothing it could read"],
+    ["cellkey-na",         "not applicable",    "this repository has no such thing to measure"],
+    ["cellkey-off",        "not watched",       "the analyzer is switched off for this repo"],
+  ];
+  for (const [cls, term, gloss] of KEY) {
+    expect(workspce.includes(gloss),
+      `the dashboard still glosses "${term}" the way the page quotes it`);
+    const item = index.match(new RegExp(`<span class="cellkey-term mono ${cls}">[\\s\\S]*?</li>`));
+    expect(Boolean(item) && item[0].includes(term) && item[0].includes(gloss),
+      `the page's "${term}" cell carries that same gloss`);
+  }
+  // Four absences and one number. A fifth absence in the dashboard, unmirrored
+  // here, would make "four ways of having no number" the wrong count.
+  const dashKey = workspce.match(/\[\s*\["scorecard-key-[\s\S]*?\.forEach\(/);
+  expect(Boolean(dashKey) && (dashKey[0].match(/scorecard-key-/g) || []).length === KEY.length,
+    "the dashboard still has exactly four non-numeric cell states");
+  expect(/Four ways of having no number, and one way of having one/.test(index.replace(/\s+/g, " ")),
+    "and the page counts them the same way");
+}
+
+// ===========================================================================
+group("the watch section describes automation that exists");
+// ===========================================================================
+{
+  const workflow = readFileSync(join(__dirname, "..", "..", ".github", "workflows", "algosize-audit.yml"), "utf8");
+  expect(/upload-sarif/.test(workflow) && /SARIF to the GitHub Security tab/.test(index.replace(/\s+/g, " ")),
+    "the gate really does upload SARIF, which is what the page claims");
+  expect(/One sticky comment per PR/.test(workflow) &&
+         /in one\s+comment it keeps updating/.test(index),
+    "and it really does keep one comment rather than appending");
+
+  const migration = readFileSync(join(__dirname, "..", "migrations", "0017_monitor_health.sql"), "utf8");
+  expect(/run_at_hour/.test(migration) &&
+         /One sweep per repository, on your schedule/.test(index),
+    "a per-repository hour is a stored column, not a plan");
+}
+
+// ===========================================================================
 group("the page holds up on a phone");
 // ===========================================================================
 {
@@ -224,9 +402,16 @@ group("the page holds up on a phone");
   expect(!/class="[^"]*\banalyzer-/.test(index),
     "the landing page stays off the dashboard's .analyzer-* class prefix");
 
+  // Same rule, second prefix. test-tools-frontend.mjs owns watch-* for the
+  // optimizer and estimator pages and fails any rule with that prefix the
+  // dashboard does not apply — so a landing-page section about scheduled
+  // sweeps has to be named something else, and was.
+  expect(!/class="[^"]*\bwatch-/.test(index),
+    "and off the tool pages' .watch-* prefix");
+
   // Every custom list zeroes the UA's padding — three new lists forgot it
   // once, and the indent it left read as a broken layout.
-  for (const cls of ["checklist", "pipe-steps", "funnel"]) {
+  for (const cls of ["checklist", "pipe-steps", "funnel", "risk-rules", "cellkey"]) {
     const block = css.match(new RegExp(`\\.${cls} \\{[^}]*\\}`));
     expect(Boolean(block) && /padding: 0/.test(block[0]) && /list-style: none/.test(block[0]),
       `.${cls} resets the browser's default list indent`);

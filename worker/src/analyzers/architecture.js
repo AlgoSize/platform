@@ -19,7 +19,8 @@
 // has no way to know which half.
 
 import { buildGraph } from "./architecture/graph.js";
-import { scoreGraph, countByLens, countBySeverity, UNIMPLEMENTED_RULES } from "./architecture/rules.js";
+import { scoreGraph, countByLens, countBySeverity, UNIMPLEMENTED_RULES,
+         ruleCoverage } from "./architecture/rules.js";
 import { recommend } from "./architecture/recommend.js";
 import { enrichGraph } from "./architecture/enrich.js";
 
@@ -145,6 +146,10 @@ export function analyzeArchitecture({ files, oversized = [] }) {
       edges: enriched.edges.length,
       findings: findings.length,
       byLens: countByLens(findings),
+      // The denominator behind byLens. Without it a lens reading 0 is
+      // ambiguous between "four rules looked and found nothing" and "this
+      // lens is silent", which are opposite pieces of news.
+      lensCoverage: ruleCoverage(),
       bySeverity: severityCounts,
       // Mirrors the dependency audit's `complete` flag: true only when every
       // submitted file was understood and no cap bit. A caller can render

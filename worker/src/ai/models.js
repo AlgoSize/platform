@@ -233,14 +233,33 @@ const GRAPHS = {
 };
 
 /** Real $/1M in and out for a model, or nulls when it is not priced. */
+/**
+ * Per-1M prices for the explorer, and — when there is no price — WHY.
+ *
+ * A bare null was two different facts wearing one shape. An embedding model
+ * emits no output tokens, so its output price is inapplicable; a superseded
+ * model has a published output price that pickPrice deliberately refuses for a
+ * new call. Both arrived at the tooltip as null, and the tooltip printed the
+ * embedding sentence for both: "n/a — no output tokens" about
+ * @cf/moonshotai/kimi-k2.5, which pricing.js lists at $0.180 / 1M out.
+ *
+ * costOf already distinguishes them — `reason` is "model_deprecated" or
+ * "model_not_priced" — so the reason travels instead of being re-derived by a
+ * renderer that cannot see the catalogue.
+ */
 function priceHint(model) {
   const inOnly = costOf(model, { inputTokens: 1_000_000, outputTokens: 0 });
   const outOnly = costOf(model, { inputTokens: 0, outputTokens: 1_000_000 });
+  const priced = inOnly.priced || outOnly.priced;
   return {
     inputPer1M: inOnly.priced ? round6(inOnly.totalCostUsd) : null,
     // Null, not zero: an embedding model emits no output tokens, and "$0.00
     // per 1M out" reads as free rather than as inapplicable.
     outputPer1M: outOnly.priced && outOnly.totalCostUsd > 0 ? round6(outOnly.totalCostUsd) : null,
+    // Only set when there is no price at all. A model that IS priced and
+    // simply has no output leg keeps reason null, so the renderer's
+    // "no output tokens" sentence stays reachable for exactly that case.
+    reason: priced ? null : (inOnly.reason || outOnly.reason || "model_not_priced"),
     verified: inOnly.priced ? inOnly.verified : false,
   };
 }

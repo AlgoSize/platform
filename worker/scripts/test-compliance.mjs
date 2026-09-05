@@ -8,6 +8,7 @@
 //
 // Run with:  node scripts/test-compliance.mjs
 
+import { createHash } from "node:crypto";
 import { makeD1 } from "./_d1-stub.mjs";
 import {
   CATALOG_VERSION, FRAMEWORKS, RESULTS, EVIDENCE_STATES,
@@ -694,7 +695,9 @@ section("Publishing freezes a self-describing record");
   }), env, null);
   const { audit } = await res.json();
   expect(res.status === 201, "an audit publishes");
-  expect(/^[0-9a-f]{64}$/.test(audit.packSha256), "with a SHA-256 over its canonical form");
+  expect(/^[0-9a-f]{64}$/.test(audit.packSha256), "with a SHA-256 recorded");
+  expect(audit.packHashScope === "document",
+    "and the record says what that hash covers — the document the download serves");
   expect(audit.retainUntil === audit.periodEnd + 60 * 60 * 24 * 365,
     "and a one-year retention past the period it describes");
   expect(audit.catalogVersion === CATALOG_VERSION, "stamped with the catalog it was cut against");
@@ -724,6 +727,58 @@ section("Publishing freezes a self-describing record");
   const parsed = JSON.parse(text);
   expect(parsed.controls.every((c) => c.title && c.rationale),
     "every control in the record carries its own wording and reason, so it still reads after the runs age out");
+
+  // -------------------------------------------------------------------------
+  // The checksum has to verify the file. This is the assertion the surface
+  // could not pass before: publish hashed canonicalPack() while the download
+  // served a differently-shaped, pretty-printed object that carried the hash
+  // as one of its own fields. Three independent reasons it could never match,
+  // on the one panel whose product claim is verifiable evidence.
+  //
+  // Hashed here exactly the way a recipient would: sha256sum on the bytes that
+  // came off the wire. Nothing is rebuilt, re-serialized or normalized first —
+  // doing any of that would be testing our own serializer against itself and
+  // would have passed against the broken code too.
+  // -------------------------------------------------------------------------
+  const downloadedSha = createHash("sha256").update(Buffer.from(text, "utf8")).digest("hex");
+  expect(downloadedSha === audit.packSha256,
+    "the stored SHA-256 is the SHA-256 of the bytes the download actually returns");
+  expect(audit.packBytes === Buffer.byteLength(text, "utf8"),
+    "and the recorded size is the size of those same bytes");
+  expect(pack.headers.get("x-algosize-pack-sha256") === audit.packSha256,
+    "the download repeats the hash in a header, so it can be checked without the dashboard");
+
+  // A document cannot contain its own hash. This was the second of the three
+  // reasons, and the one that would survive any amount of shape-matching.
+  expect(!("packSha256" in parsed) && !text.includes(audit.packSha256),
+    "the checksum is not a field inside the document it describes");
+
+  // Two inputs that were live at publish and gone by download time. If either
+  // stops being frozen, the rebuilt document changes and the hash above fails —
+  // but it fails for a reason nobody would guess from that assertion alone, so
+  // they are checked by name.
+  expect(parsed.subject.branch === "main",
+    "the branch is frozen with the record, not read live at download");
+  // A counts object, not a list — checked by shape because assuming it was an
+  // array is exactly what broke the hash while this was being written.
+  expect(parsed.scans && typeof parsed.scans === "object" && !Array.isArray(parsed.scans) &&
+         typeof parsed.scans.total === "number",
+    "and so is the scans block — evidence about the evidence, kept rather than dropped");
+
+  // A pack published before migration 0030 — simulated by clearing the scope
+  // the way an un-upgraded row actually looks. Its stored hash is over a
+  // document that was never served, so the header must NOT offer it: a
+  // recipient who ran sha256sum on that would conclude their evidence pack had
+  // been tampered with, which is a worse failure than no checksum at all.
+  await env.DB.prepare(`UPDATE compliance_audits SET pack_hash_scope = NULL WHERE id = ?`)
+    .bind(audit.id).run();
+  const legacy = await downloadPackHandler(
+    Object.assign(req(`/api/compliance/audits/${audit.id}/pack`), { params: { id: audit.id } }), env);
+  expect(legacy.status === 200, "a pre-0030 pack still downloads — the record is intact");
+  expect(legacy.headers.get("x-algosize-pack-sha256") === null,
+    "but its hash is not offered as a checksum of the file, because it is not one");
+  await env.DB.prepare(`UPDATE compliance_audits SET pack_hash_scope = 'document' WHERE id = ?`)
+    .bind(audit.id).run();
 
   // A correction supersedes.
   const res2 = await publishAuditHandler(req("/api/compliance/audits", {

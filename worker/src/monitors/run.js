@@ -262,8 +262,44 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
     return { status: "audit_error", monitorId, code, retryable: false };
   }
 
-  const advisories = Array.isArray(result && result.advisories) ? result.advisories : [];
-  const diff = diffAdvisories(advisories, monitor.lastAdvisoryIds);
+  // The dependency half's own state, read exactly the way `source.status` is
+  // read below. A repository with no lockfile used to be a 4xx from the
+  // analyzer and took the permanent-failure branch above; now the analyzer
+  // keeps going so the source scan still happens, and the dependency half says
+  // it was not measured instead.
+  //
+  // The baseline is the reason this needs its own branch. Diffing an empty
+  // advisory list against a stored one does not read as "we did not look" — it
+  // reads as EVERY ADVISORY FIXED, and would send an email saying so. So an
+  // unmeasured half advances nothing, exactly as an outage in the source scan
+  // advances nothing.
+  // Declared here rather than beside the secondary analyzers, because the
+  // dependency half is now the first thing that can skip.
+  const skips = [];
+
+  const depsMeasured = !(result && result.dependencies && result.dependencies.status &&
+                         result.dependencies.status !== "ok");
+  const advisories = depsMeasured && Array.isArray(result && result.advisories)
+    ? result.advisories : [];
+  const diff = depsMeasured
+    ? diffAdvisories(advisories, monitor.lastAdvisoryIds)
+    : {
+        // The stored baseline, carried forward byte for byte. recordMonitorRun
+        // writes advisoryIds unconditionally — unlike the per-analyzer
+        // baselines, it has no `undefined` contract — so "leave it alone" has
+        // to be spelled as "write back what is already there".
+        currentKeys:   Array.isArray(monitor.lastAdvisoryIds) ? monitor.lastAdvisoryIds : [],
+        newAdvisories: [],
+        resolvedKeys:  [],
+        shouldAlert:   false,
+        isBaseline:    false,
+      };
+  if (!depsMeasured) {
+    // no_lockfiles is a permanent, honest answer about the repository, not an
+    // outage — the same shape as no_source_files — so it joins
+    // NOT_APPLICABLE_REASONS rather than reading as an error someone must fix.
+    skips.push({ analyzer: "vuln", reason: "no_lockfiles" });
+  }
 
   // What this sweep will file as runs (see persistSweepRuns below). Collected
   // as the analyzers finish rather than reconstructed afterwards, because an
@@ -278,7 +314,6 @@ export async function runMonitorCheck(env, monitorId, ctx, { now, sendTransactio
   // outage costs a night's coverage rather than a false "all new" email.
   const analyzers = monitor.analyzers || ["vuln"];
   const fetchImpl = (env && env.FETCH) || globalThis.fetch;
-  const skips = [];
 
   // ---- source scan (migrations/0024) --------------------------------------
   //

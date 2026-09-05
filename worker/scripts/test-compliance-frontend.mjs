@@ -330,7 +330,8 @@ group("States that must not read as clean");
     "/api/compliance/frameworks": FRAMEWORKS,
     "/api/compliance/coverage": coverage({
       audits: [{ id: "caud_1", status: "published", publishedAt: 1788134400,
-                 retainUntil: 1819670400, packSha256: "a".repeat(64), packBytes: 41000,
+                 retainUntil: 1819670400, packSha256: "a".repeat(64),
+                 packHashScope: "document", packBytes: 41000,
                  catalogVersion: "2026-09-02.1", summary: { total: 42 } }],
     }),
   });
@@ -338,11 +339,42 @@ group("States that must not read as clean");
   const body = registry.get("compliance-body");
   const text = body.textContent;
   expect(text.includes("a".repeat(64)), "the published record shows its SHA-256 for verification");
+  expect(text.includes("sha256sum"),
+    "and says how to check it, since a checksum nobody knows how to use verifies nothing");
+  expect(body.findAll((n) => (n.className || "").includes("cmp-sha-stale")).length === 0,
+    "a hash that covers the served document is not struck through");
   expect(text.includes("kept until 2027-"), "and when it stops being kept");
   expect(text.includes("bulk bundle"),
     "the missing bulk bundle is stated in words rather than offered as a dead button");
   const dead = body.findAll((n) => n.tagName === "BUTTON" && /download/i.test(n.textContent));
   expect(dead.length === 0, "there is no download button that cannot download anything");
+}
+
+{
+  // A pack published before migration 0030. Its stored hash is over a document
+  // the download endpoint never served, so printing it as a checksum would tell
+  // a recipient who ran sha256sum that their evidence pack had been tampered
+  // with. The panel has to say what it is instead.
+  const { registry } = boot({
+    "/api/compliance/frameworks": FRAMEWORKS,
+    "/api/compliance/coverage": coverage({
+      audits: [{ id: "caud_0", status: "published", publishedAt: 1788134400,
+                 retainUntil: 1819670400, packSha256: "b".repeat(64),
+                 packHashScope: null, packBytes: 41000,
+                 catalogVersion: "2026-09-02.1", summary: { total: 42 } }],
+    }),
+  });
+  await flush();
+  const body = registry.get("compliance-body");
+  const text = body.textContent;
+  expect(text.includes("does not cover this download"),
+    "a pre-0030 hash says plainly that it does not describe the file you can download");
+  expect(!text.includes("sha256sum"),
+    "and does not tell anyone to run sha256sum against it");
+  expect(text.includes("record itself is intact"),
+    "while making clear the record is not the thing that is broken");
+  expect(body.findAll((n) => (n.className || "").includes("cmp-sha-stale")).length === 1,
+    "the unusable checksum is struck through rather than removed, so it stays auditable");
 }
 
 {
