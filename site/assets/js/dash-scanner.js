@@ -45,6 +45,65 @@
       });
   }
 
+  /**
+   * The state of one half of a sweep, in the vocabulary the scorecard already
+   * uses (dash-workspace.js): pending, unmeasured, clean, or a count.
+   *
+   * `kind` decides the chip; `text` is what it says; `title` explains a state
+   * that is not self-evident. Both halves go through the same shape so neither
+   * can quietly grow a fifth state the other does not have.
+   */
+  function dependencyHalf(m) {
+    var n = m.knownAdvisoryCount;
+    // null is "no completed sweep", which is not zero. That distinction was
+    // already right on this half and is kept exactly as it was.
+    if (n === null || n === undefined) {
+      return { kind: "pending", text: "first run pending",
+               title: "Enabled; no sweep has produced an advisory count yet." };
+    }
+    if (n === 0) return { kind: "clean", text: "0" };
+    return { kind: "count", text: String(n) + " advisor" + (n === 1 ? "y" : "ies") };
+  }
+
+  function sourceHalf(m) {
+    // A recorded skip outranks the baseline. The sweep says why it did not read
+    // the code, and that sentence comes from the server (monitors.js
+    // explainUnavailable) rather than being written a second time here.
+    var skip = null;
+    if (Array.isArray(m.lastSkips)) {
+      skip = m.lastSkips.find(function (s) { return s && s.analyzer === "source"; }) || null;
+    }
+    if (skip) {
+      return { kind: "unmeasured", text: "not measured",
+               title: skip.note || "The source scan did not run on the last sweep." };
+    }
+    if (!m.lastSource || typeof m.lastSource.total !== "number") {
+      return { kind: "pending", text: "first run pending",
+               title: "Enabled; no sweep has recorded a source result yet." };
+    }
+    if (m.lastSource.total === 0) return { kind: "clean", text: "0" };
+    return { kind: "count",
+             text: String(m.lastSource.total) + " finding" + (m.lastSource.total === 1 ? "" : "s") };
+  }
+
+  var HALF_TONE = {
+    pending:    "chip-muted",
+    unmeasured: "chip-warn",
+    clean:      "chip-ok",
+    count:      "chip-warn",
+  };
+
+  function halfChip(letter, what, st) {
+    var chip = el("span", { class: "chip " + (HALF_TONE[st.kind] || "chip-muted") });
+    // The letter and the half's name ride on the chip, because two chips with
+    // no labels are worse than one: a reader cannot tell which number is which.
+    chip.appendChild(el("span", { class: "mono night-half-tag" }, letter + " · " + what));
+    chip.appendChild(el("span", null,
+      (st.kind === "clean" ? "✓ " : "") + st.text));
+    if (st.title) chip.setAttribute("title", st.title);
+    return chip;
+  }
+
   function render() {
     var body = document.getElementById("vuln-watch-body");
     if (!body) return;
@@ -74,21 +133,23 @@
       var top = el("div", { class: "night-row-top" });
       top.appendChild(el("strong", { class: "mono" }, shortRepo(m.repoUrl)));
 
-      // null count = no completed sweep. Rendered as pending, never as zero:
-      // "we have not looked" must not read as "we looked and it was clean".
       if (m.paused) {
         top.appendChild(el("span", { class: "chip chip-muted" }, "paused"));
-      } else if (m.knownAdvisoryCount === null || m.knownAdvisoryCount === undefined) {
-        top.appendChild(el("span", { class: "chip chip-muted" }, "first run pending"));
-      } else if (m.knownAdvisoryCount === 0) {
-        top.appendChild(el("span", { class: "chip chip-ok" }, "✓ clean"));
       } else {
-        top.appendChild(el("span", { class: "chip chip-warn" },
-          m.knownAdvisoryCount + " known advisor" + (m.knownAdvisoryCount === 1 ? "y" : "ies")));
+        // TWO chips, always. This row used to carry one, driven only by
+        // knownAdvisoryCount — the DEPENDENCY half — and a repository with no
+        // advisories and twelve critical source findings read "✓ clean". So did
+        // one whose source half the sweep never managed to read.
+        //
+        // The sweep has scanned both halves since migration 0024 and records
+        // both; the row simply showed one of them. Rendering them through the
+        // same helper is what stops them drifting apart again.
+        top.appendChild(halfChip("A", "deps", dependencyHalf(m)));
+        top.appendChild(halfChip("B", "code", sourceHalf(m)));
       }
 
       // What the last sweep found NEW. Absent entirely when the delta was
-      // never measured — the same null-vs-zero rule as the count above.
+      // never measured — the same null-vs-zero rule as the counts above.
       if (m.lastDelta && typeof m.lastDelta.total === "number" && m.lastDelta.total > 0) {
         top.appendChild(el("span", { class: "chip chip-danger" },
           "+" + m.lastDelta.total + " new last sweep"));

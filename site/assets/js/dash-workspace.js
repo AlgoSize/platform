@@ -550,6 +550,21 @@
     card.appendChild(toolResult(t));
 
     var foot = el("div", { class: "ws-tool-foot" });
+
+    // Run it from here, or say why you cannot. The second half is the one that
+    // matters: this card used to hold only the "Open" link, so a tool with no
+    // way to re-run looked exactly like one with a run a click away, and a
+    // reader had to open the page to find out which.
+    var run = inlineRun(t);
+    if (run.can) {
+      var btn = el("button", { type: "button", class: "btn btn-ghost btn-sm ws-tool-run",
+        "data-monitor": run.monitor.monitorId }, run.cta);
+      btn.addEventListener("click", function () { runInline(run.monitor, btn); });
+      foot.appendChild(btn);
+    } else {
+      foot.appendChild(el("span", { class: "ws-tool-nowhy" }, run.why));
+    }
+
     var open = el("a", { class: "ws-tool-open", href: t.route });
     open.appendChild(el("span", null, "Open " + t.short));
     open.appendChild(el("span", { class: "mono", "aria-hidden": "true" }, "→"));
@@ -557,6 +572,75 @@
     card.appendChild(foot);
 
     return card;
+  }
+
+  /**
+   * Whether this tool can be re-run from the card, and if not, why not.
+   *
+   * A re-run here is a sweep of one watched repository — POST
+   * /api/monitors/:id/run, the same endpoint the Monitors page uses. So the
+   * answer depends on what is watched, and every "no" names its own reason
+   * rather than the control simply being absent.
+   *
+   * The card deliberately refuses to CHOOSE a repository when several qualify.
+   * Picking one silently would run a sweep the reader did not ask for, on a
+   * repo they did not name.
+   */
+  /** owner/repo, the way every other tool page renders one. */
+  function shortRepo(url) {
+    return String(url || "").replace(/^https?:\/\/(www\.)?github\.com\//, "");
+  }
+
+  function inlineRun(t) {
+    if (!t.analyzer) {
+      return { can: false, why: "Reads a file you give it — nothing scheduled to re-run." };
+    }
+    // null is "we could not read your monitors", which is not "you have none".
+    // loadScorecard() catches a failed read to null, so this is the real
+    // distinction and not a hypothetical one — rendering the second would be
+    // this card asserting a fact it does not have.
+    if (!state.monitors) {
+      return { can: false, why: "Could not read your monitors, so this cannot say whether a re-run is available." };
+    }
+    // state.monitors is the RESPONSE, not the list — same unwrap the pulse and
+    // the scorecard do a few functions up.
+    var watching = (state.monitors.monitors || []).filter(function (m) {
+      return (m.analyzers || []).indexOf(t.analyzer) !== -1;
+    });
+    if (!watching.length) {
+      return { can: false, why: "No repository is watched with this analyzer switched on." };
+    }
+    var live = watching.filter(function (m) { return !m.paused; });
+    if (!live.length) {
+      return { can: false, why: "Every repository watched with this analyzer is paused." };
+    }
+    if (live.length > 1) {
+      return { can: false,
+               why: live.length + " repositories run this analyzer — pick one on Monitors." };
+    }
+    return { can: true, monitor: live[0], cta: "Re-run on " + shortRepo(live[0].repoUrl) };
+  }
+
+  function runInline(m, btn) {
+    core.setBusy(btn, true, "Sweeping…");
+    callApi("/api/monitors/" + encodeURIComponent(m.monitorId) + "/run", null, "POST")
+      .then(function (r) {
+        // A sweep that did not happen must not leave a card looking swept.
+        if (r && r.error) {
+          core.setBusy(btn, false);
+          btn.textContent = r.message || "The sweep did not run.";
+          return;
+        }
+        // refresh(), not load(): load() short-circuits on `loaded` and would
+        // leave the card showing the result from before the sweep. This export
+        // has existed unused since the Workspace redesign — it is exactly the
+        // re-read this needed, and now has a caller.
+        return api.refresh();
+      })
+      .catch(function (e) {
+        core.setBusy(btn, false);
+        btn.textContent = (e && e.message) || "The sweep did not run.";
+      });
   }
 
   /**
@@ -625,10 +709,16 @@
     return analyzer;
   }
 
-  window.DashWorkspace = {
+  // Named so the inline run control can call refresh() through the same export
+  // anything else would use, rather than reaching for the private `loaded`.
+  var api = {
     load: load,
     // Re-read after something elsewhere changed a monitor, so the scorecard
-    // does not keep showing a repo that was just removed.
+    // does not keep showing a repo that was just removed — or, since the
+    // inline run control landed, the result from before a sweep this page
+    // itself triggered.
     refresh: function () { loaded = false; load(); },
   };
+
+  window.DashWorkspace = api;
 })();

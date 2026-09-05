@@ -21,6 +21,9 @@ const SITE = join(__dirname, "..", "..", "site");
 const html   = readFileSync(join(SITE, "dashboard.html"), "utf8");
 const optJs  = readFileSync(join(SITE, "assets", "js", "dash-optimizer.js"), "utf8");
 const estJs  = readFileSync(join(SITE, "assets", "js", "dash-estimate.js"), "utf8");
+// The scanner's nightly watch is built from the same night-* classes as these
+// two pages, so it belongs to the dead-rule check below.
+const scanJs = readFileSync(join(SITE, "assets", "js", "dash-scanner.js"), "utf8");
 const dashJs = readFileSync(join(SITE, "assets", "js", "dashboard.js"), "utf8");
 const router = readFileSync(join(SITE, "assets", "js", "dash-router.js"), "utf8");
 const wsJs   = readFileSync(join(SITE, "assets", "js", "dash-workspace.js"), "utf8");
@@ -118,9 +121,17 @@ group("the new classes are styled, and none are dead");
 // ===========================================================================
 {
   const PREFIX = /^(flow-|opt-|watch-|night-|rewrite-|est-grid|est-col|opt-card-hub)/;
+  // dash-scanner.js belongs in this list and always did: its nightly-watch rows
+  // are built from night-row, night-meta, night-off and night-actions. They
+  // passed only because the optimizer and estimator happen to apply the same
+  // names, so a night-* class used ONLY by the scanner would have been reported
+  // dead from the day this guard was written. The first one to exist exposed
+  // it. Adding the file makes the guard's premise true rather than working
+  // around the symptom.
   const applied = uniq([
     ...matchAll(optJs, /class:\s*"([^"]+)"/g).flatMap((c) => c.split(/\s+/)),
     ...matchAll(estJs, /class:\s*"([^"]+)"/g).flatMap((c) => c.split(/\s+/)),
+    ...matchAll(scanJs, /class:\s*"([^"]+)"/g).flatMap((c) => c.split(/\s+/)),
     ...matchAll(dashJs, /class:\s*"([^"]+)"/g).flatMap((c) => c.split(/\s+/)),
     ...matchAll(html, /class="([^"]+)"/g).flatMap((c) => c.split(/\s+/)),
   ]).filter((c) => PREFIX.test(c));
@@ -131,7 +142,7 @@ group("the new classes are styled, and none are dead");
   const unstyled = applied.filter((c) => !styled.has(c));
   expect(unstyled.length === 0,
     `every new class has a CSS rule${unstyled.length ? " — unstyled: " + unstyled.join(", ") : ` (${applied.length} checked)`}`);
-  const sources = optJs + estJs + dashJs + html;
+  const sources = optJs + estJs + scanJs + dashJs + html;
   const orphans = [...styled].filter((c) => !sources.includes(c));
   expect(orphans.length === 0,
     `no new rule is dead${orphans.length ? " — orphaned: " + orphans.join(", ") : ""}`);

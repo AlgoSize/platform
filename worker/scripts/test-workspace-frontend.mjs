@@ -706,6 +706,48 @@ group("every tool page has a monitored half, not just a manual bench");
     "dashboard.js exposes its manual renderers so the monitored half reuses them");
   expect(/core\.renderVuln\(payload\.result\)/.test(scanJs),
     "the scanner's monitored result goes through the manual vuln renderer");
+
+  // -------------------------------------------------------------------------
+  // The nightly watch row carries BOTH halves of the sweep.
+  // -------------------------------------------------------------------------
+  //
+  // It used to carry one chip, driven only by knownAdvisoryCount — the
+  // dependency half. A repository with no advisories and twelve critical
+  // source findings read "✓ clean", and so did one whose source half the sweep
+  // never managed to read. The sweep has scanned both halves since migration
+  // 0024 and records both; the row simply showed one of them.
+  //
+  // Matched against the file with line comments stripped: the comments here
+  // and in the module necessarily quote the string that used to be wrong.
+  const scanCode = scanJs.split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
+
+  expect(/function dependencyHalf/.test(scanCode) && /function sourceHalf/.test(scanCode),
+    "each half of the sweep has its own state function");
+  expect(/halfChip\("A", "deps", dependencyHalf\(m\)\)/.test(scanCode) &&
+         /halfChip\("B", "code", sourceHalf\(m\)\)/.test(scanCode),
+    "…and BOTH are rendered on every row, through one shared chip builder");
+  expect(!/"✓ clean"/.test(scanCode),
+    "no single chip calls a repository clean on the strength of one half");
+
+  // The source half reads what the sweep recorded, including what it declined
+  // to do. Without the skip branch an unread half falls through to the
+  // baseline and renders as pending — which is a different, wrong answer.
+  expect(/s\.analyzer === "source"/.test(scanCode) && /lastSource/.test(scanCode),
+    "the code half reads lastSource, and the skip the sweep recorded against it");
+  expect(/kind: "unmeasured"/.test(scanCode) && /skip\.note/.test(scanCode),
+    "…and an unmeasured half says so, in the sentence the server supplied");
+
+  // "clean" is reachable only from a measured zero, on either half. This is
+  // the assertion that fails if the two states are ever collapsed again.
+  for (const fn of ["dependencyHalf", "sourceHalf"]) {
+    const body = scanCode.slice(scanCode.indexOf(`function ${fn}(m) {`),
+                               scanCode.indexOf("\n  }", scanCode.indexOf(`function ${fn}(m) {`)));
+    const cleanAt = body.indexOf('kind: "clean"');
+    expect(cleanAt > -1 && /=== 0\) return \{ kind: "clean"/.test(body),
+      `${fn} returns clean only for a measured zero`);
+    expect(body.indexOf('kind: "pending"') < cleanAt,
+      `…and checks "no result yet" before it, so a null never reaches the zero test`);
+  }
   expect(/render\(payload\.result\)/.test(estJs),
     "the estimator's monitored result goes through the manual estimate renderer");
   expect(/state\.result = payload\.result/.test(archJs),
@@ -741,6 +783,50 @@ group("every tool page has a monitored half, not just a manual bench");
   // one as the other would mark the wrong boxes as new.
   expect(/workerFindingKey/.test(archJs),
     "the X-ray translates the Worker's finding keys rather than assuming they match its own");
+}
+
+// ===========================================================================
+group("a tool card offers a run, or says why it cannot");
+// ===========================================================================
+{
+  // The card used to hold only the "Open <tool> →" link, so a tool with a run
+  // a click away looked exactly like one with no way to run at all, and the
+  // reader had to open the page to find out which.
+  //
+  // The half that matters is the "cannot" branch. A control that is simply
+  // absent tells nobody anything; every no here names its own reason.
+  const wsCode = wsJs.split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
+
+  expect(/function inlineRun\(t\)/.test(wsCode),
+    "each tool card asks whether it can be re-run from here");
+  const foot = wsCode.slice(wsCode.indexOf('var foot = el("div", { class: "ws-tool-foot" });'),
+                            wsCode.indexOf("card.appendChild(foot);"));
+  expect(foot.includes("inlineRun(t)") && foot.includes("ws-tool-nowhy"),
+    "…and the card renders the answer either way, not only when it is yes");
+
+  // The run is the sweep endpoint the Monitors page already uses, not a second
+  // way to start a scan that could drift from it.
+  expect(/"\/api\/monitors\/" \+ encodeURIComponent\(m\.monitorId\) \+ "\/run"/.test(wsCode),
+    "a re-run goes through POST /api/monitors/:id/run, the same sweep Monitors triggers");
+
+  // Every refusal, and the one that matters most: an unreadable monitor list is
+  // not an empty one. Rendering "no repository is watched" from a failed read
+  // would be this card asserting a fact it does not have.
+  expect(/if \(!state\.monitors\) \{[\s\S]{0,220}?Could not read your monitors/.test(wsCode),
+    "an unreadable monitor list says so, rather than reading as 'you have none'");
+  expect(/No repository is watched with this analyzer/.test(wsCode),
+    "…a watched-by-nothing tool says that");
+  expect(/is paused/.test(wsCode),
+    "…an all-paused tool says that");
+  expect(/repositories run this analyzer — pick one on Monitors/.test(wsCode),
+    "…and with several candidates the card refuses to choose one for you");
+  expect(/nothing scheduled to re-run/.test(wsCode),
+    "…while a tool that reads an uploaded file says it has nothing to re-run");
+
+  // A sweep that did not happen must not leave the card looking swept, and a
+  // sweep that did must re-read rather than keep the pre-sweep numbers.
+  expect(/refresh\(\)/.test(wsCode) && /r && r\.error/.test(wsCode),
+    "a completed sweep re-reads the scorecard, and a refused one says so instead");
 }
 
 // ===========================================================================

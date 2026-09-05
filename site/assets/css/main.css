@@ -7919,3 +7919,28 @@ textarea.cmp-input { resize: vertical; }
   color: var(--accent-warm); margin-top: var(--s-2);
 }
 .xray-covers-gaps .xray-covers-rule { color: var(--accent-warm); }
+
+/* The A · deps / B · code label inside a nightly-watch chip. Dimmer than the
+   number it precedes: the reader wants the count first and the label only when
+   they need to tell the two halves apart. Two unlabelled chips would be worse
+   than the single chip this replaced. */
+.night-half-tag {
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.72;
+  margin-right: 6px;
+}
+
+/* Inline run control on a Workspace tool card, and the reason when there is
+   none. The reason is set as text rather than a disabled button: a greyed
+   control invites a click and explains nothing, and the sentence is the whole
+   point of the state. */
+.ws-tool-run { margin-right: auto; }
+.ws-tool-nowhy {
+  margin-right: auto;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  text-wrap: pretty;
+  max-width: 34ch;
+}
