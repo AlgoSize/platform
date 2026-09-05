@@ -7843,31 +7843,6 @@ textarea.cmp-input { resize: vertical; }
 .sweep-card h3 { font-size: var(--fs-md); }
 .sweep-card p { margin: 0; color: var(--text-muted); font-size: var(--fs-sm); text-wrap: pretty; }
 
-/* --- The scorecard cell key --- */
-.cellkey {
-  list-style: none; margin: 0; padding: 0;
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-  gap: var(--s-3);
-}
-.cellkey-item {
-  border: 1px solid var(--border-soft); border-radius: var(--radius);
-  background: var(--bg-elevated); padding: var(--s-4);
-  display: flex; flex-direction: column; gap: var(--s-2);
-}
-.cellkey-term { font-size: var(--fs-sm); }
-.cellkey-gloss { color: var(--text-muted); font-size: var(--fs-xs); text-wrap: pretty; }
-/* Four absences, one result. The four are dim and the result is not — that
-   difference is the whole point of the panel, so it is the loudest thing in it. */
-.cellkey-pending    { color: var(--text-muted); }
-.cellkey-unmeasured { color: var(--text-dim); }
-.cellkey-na         { color: var(--text-dim); }
-.cellkey-off        { color: var(--text-dim); }
-.cellkey-measured { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
-.cellkey-zero {
-  color: var(--accent); font-size: var(--fs-lg); font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
 @media (max-width: 900px) {
   .cov-split { grid-template-columns: 1fr; }
   .pubs, .sweep-cards { grid-template-columns: 1fr; }

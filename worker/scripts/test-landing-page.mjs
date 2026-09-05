@@ -323,7 +323,7 @@ group("the accepted risk on the page is one the register would accept");
 }
 
 // ===========================================================================
-group("the self-audit and scorecard sections count real files and real states");
+group("the self-audit section counts real files");
 // ===========================================================================
 {
   const roadmapPages = packDir.filter((f) =>
@@ -334,30 +334,6 @@ group("the self-audit and scorecard sections count real files and real states");
   expect(roadmapPages.length === 17 &&
          /17 policy pages ends with a Roadmap section/.test(index.replace(/\s+/g, " ")),
     `${roadmapPages.length} pages end in a Roadmap section, and the page says 17`);
-
-  // The scorecard key. The design showed three states; the dashboard ships
-  // four, and the four glosses below are quoted from it. If the dashboard
-  // rewords one, the marketing page is describing a product that has moved.
-  const KEY = [
-    ["cellkey-pending",    "first run pending", "enabled; no sweep has produced a result yet"],
-    ["cellkey-unmeasured", "not measured",      "the sweep ran and found nothing it could read"],
-    ["cellkey-na",         "not applicable",    "this repository has no such thing to measure"],
-    ["cellkey-off",        "not watched",       "the analyzer is switched off for this repo"],
-  ];
-  for (const [cls, term, gloss] of KEY) {
-    expect(workspce.includes(gloss),
-      `the dashboard still glosses "${term}" the way the page quotes it`);
-    const item = index.match(new RegExp(`<span class="cellkey-term mono ${cls}">[\\s\\S]*?</li>`));
-    expect(Boolean(item) && item[0].includes(term) && item[0].includes(gloss),
-      `the page's "${term}" cell carries that same gloss`);
-  }
-  // Four absences and one number. A fifth absence in the dashboard, unmirrored
-  // here, would make "four ways of having no number" the wrong count.
-  const dashKey = workspce.match(/\[\s*\["scorecard-key-[\s\S]*?\.forEach\(/);
-  expect(Boolean(dashKey) && (dashKey[0].match(/scorecard-key-/g) || []).length === KEY.length,
-    "the dashboard still has exactly four non-numeric cell states");
-  expect(/Four ways of having no number, and one way of having one/.test(index.replace(/\s+/g, " ")),
-    "and the page counts them the same way");
 }
 
 // ===========================================================================
@@ -411,7 +387,7 @@ group("the page holds up on a phone");
 
   // Every custom list zeroes the UA's padding — three new lists forgot it
   // once, and the indent it left read as a broken layout.
-  for (const cls of ["checklist", "pipe-steps", "funnel", "risk-rules", "cellkey"]) {
+  for (const cls of ["checklist", "pipe-steps", "funnel", "risk-rules"]) {
     const block = css.match(new RegExp(`\\.${cls} \\{[^}]*\\}`));
     expect(Boolean(block) && /padding: 0/.test(block[0]) && /list-style: none/.test(block[0]),
       `.${cls} resets the browser's default list indent`);

@@ -402,52 +402,6 @@ description: Algosize audits your dependencies and your source, computes severit
     </div>
   </section>
 
-  <!-- ============= SERVICE SCORECARD =============
-       The design showed three ways of having no number. The dashboard ships
-       FOUR, and the four are what render: site/assets/js/dash-workspace.js
-       lines 280-285, whose glosses are quoted verbatim below. Printing three
-       here would have been the page rounding its own product down. The
-       measured-clean row is the fifth state and the only one that is a number:
-       worker/src/handlers/scorecard.js returns a value only when an analyzer
-       actually produced one. -->
-  <section class="section" id="scorecard">
-    <div class="container">
-      <div class="section-head">
-        <span class="eyebrow">On every repository row</span>
-        <h2>A cell is never a bare zero.</h2>
-        <p>
-          Four ways of having no number, and one way of having one. They are
-          different facts about different parties, so they never render as the
-          same cell — and there is no overall repository score, because a
-          dependency grade and a cloud bill do not average.
-        </p>
-      </div>
-
-      <ul class="cellkey">
-        <li class="cellkey-item">
-          <span class="cellkey-term mono cellkey-pending">first run pending</span>
-          <span class="cellkey-gloss">enabled; no sweep has produced a result yet</span>
-        </li>
-        <li class="cellkey-item">
-          <span class="cellkey-term mono cellkey-unmeasured">not measured</span>
-          <span class="cellkey-gloss">the sweep ran and found nothing it could read</span>
-        </li>
-        <li class="cellkey-item">
-          <span class="cellkey-term mono cellkey-na">not applicable</span>
-          <span class="cellkey-gloss">this repository has no such thing to measure</span>
-        </li>
-        <li class="cellkey-item">
-          <span class="cellkey-term mono cellkey-off">not watched</span>
-          <span class="cellkey-gloss">the analyzer is switched off for this repo</span>
-        </li>
-        <li class="cellkey-item cellkey-measured">
-          <span class="cellkey-term mono cellkey-zero">0</span>
-          <span class="cellkey-gloss">measured, and clean — the only one of the five that is a result</span>
-        </li>
-      </ul>
-    </div>
-  </section>
-
   <!-- ============= A VALIDATED FIX =============
        The five checks named here are the five worker/src/fix/validate.js
        actually runs — structural, blast_radius, parse, target_removed,
