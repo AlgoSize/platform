@@ -1,6 +1,6 @@
 # MCP-PLAN.md — Algosize Model Context Protocol server
 
-Status: **built.** The server, its 22 tools, OAuth 2.1, the `#/mcp` dashboard
+Status: **built.** The server, its 28 tools, OAuth 2.1, the `#/mcp` dashboard
 view and the admin adoption panel are all implemented and tested. What follows
 describes what is actually in the tree, not what was intended — where the
 original plan was wrong, the correction is recorded rather than the plan
@@ -44,8 +44,11 @@ Tools import neither handlers nor `enforceQuota`, the guard stays absolute, and
 
 **Kimi K3 is not a slug swap.** See §8.
 
-**22 tools, not 20.** The extra two are `algosize_get_monitor_result` and
-`algosize_get_ci_snippet`, both read-only and free.
+**28 tools, not 20.** The first two past the original plan were
+`algosize_get_monitor_result` and `algosize_get_ci_snippet`, both read-only and
+free; the catalog has grown since, most recently with the fixes and handoff
+groups. The count that is true is whatever `worker/src/mcp/tools/index.js`
+assembles — see §4 for the current split.
 
 ---
 
@@ -115,8 +118,9 @@ one is refused: `worker/MCP.md`.
 
 ## 4. Tools
 
-22 tools in four groups. `metered` is derived from `chains.js`, so it cannot
-disagree with reality.
+28 tools in six groups — analysis 7, runs 4, posture 6, monitors 6, fixes 3,
+handoff 2. `metered` is derived from `chains.js`, so it cannot disagree with
+reality.
 
 **Analysis** — `algosize_analyze_vulnerabilities`, `algosize_analyze_cost`,
 `algosize_analyze_complexity`, `algosize_analyze_architecture`,
@@ -126,12 +130,18 @@ disagree with reality.
 **Runs & Reports** — `algosize_list_runs`, `algosize_get_run`,
 `algosize_get_run_report`, `algosize_share_run`.
 
-**Posture** — `algosize_get_scorecard`, `algosize_list_arch_snapshots`,
-`algosize_diff_architecture`, `algosize_get_ci_snippet`, `algosize_whoami`.
+**Posture** — `algosize_get_scorecard`, `algosize_profile_repository`,
+`algosize_list_arch_snapshots`, `algosize_diff_architecture`,
+`algosize_get_ci_snippet`, `algosize_whoami`.
 
 **Monitors** — `algosize_list_monitors`, `algosize_create_monitor`,
 `algosize_update_monitor`, `algosize_delete_monitor`,
 `algosize_run_monitor_now`, `algosize_get_monitor_result`.
+
+**Fixes** — `algosize_propose_code_fix`, `algosize_validate_fix`,
+`algosize_explain_finding`.
+
+**Agent handoff** — `algosize_get_scan_findings`, `algosize_record_patch`.
 
 Descriptions are written for a model: what the tool does, what it costs, and
 when *not* to use it. Every metered tool says `CONSUMES ONE RUN` and points at
