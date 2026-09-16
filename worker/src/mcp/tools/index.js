@@ -1,4 +1,4 @@
-// The tool catalog: one flat array, assembled from the four domain files.
+// The tool catalog: one flat array, assembled from the six domain files.
 //
 // What is deliberately NOT here is as important as what is. There is no tool
 // for /api/keys, /api/billing/*, /api/account/*, /api/org*, /api/admin/*,
@@ -29,7 +29,7 @@ export const TOOLS = Object.freeze([
   ...HANDOFF_TOOLS,
 ]);
 
-// The four groups the dashboard's tool catalog renders under. Derived from the
+// The six groups the dashboard's tool catalog renders under. Derived from the
 // files rather than hand-listed, so a tool added to a domain file appears in
 // the UI without a second edit somewhere else.
 export const TOOL_GROUPS = Object.freeze([

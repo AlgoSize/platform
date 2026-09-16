@@ -191,7 +191,8 @@ claude mcp add --transport http algosize https://algosize.com/api/mcp \
 
 Then, in Claude Code:
 
-1. confirm the tool list appears (22 tools);
+1. confirm the tool list appears (28 tools — analysis 7, runs 4, posture 6,
+   monitors 6, fixes 3, handoff 2, per `worker/src/mcp/tools/index.js`);
 2. run a **read-only** tool — `algosize_whoami` or `algosize_list_runs`;
 3. run **one metered** tool on a small input;
 4. confirm that run now appears in `GET /api/runs` with
