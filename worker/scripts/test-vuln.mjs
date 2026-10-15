@@ -368,17 +368,21 @@ console.log("\nAggregation\n");
 
 // 26. Planted-vulnerability sample returns the expected findings, sorted by severity desc
 {
-  const planted = `
-// Algosize cloud config
-const AWS_KEY = "${FAKE_AWS_KEY}";
-const stripe_key = "${FAKE_STRIPE_KEY}";
-function unsafe(input) {
-  eval(input);
-  const q = "SELECT * FROM users WHERE id = " + input;
-  db.query(\`UPDATE foo SET x = \${input} WHERE id = 1\`);
-}
-const apiBase = "http://api.example.com";  // TODO move to https
-`.trim();
+  // One quoted string per line, not one multi-line template: the scanner
+  // reads line by line, so a vulnerable line inside a template spanning
+  // several lines looks like code to it, and this test file reported its own
+  // fixture to the Security tab.
+  const planted = [
+    '// Algosize cloud config',
+    `const AWS_KEY = "${FAKE_AWS_KEY}";`,
+    `const stripe_key = "${FAKE_STRIPE_KEY}";`,
+    'function unsafe(input) {',
+    '  eval(input);',
+    '  const q = "SELECT * FROM users WHERE id = " + input;',
+    '  db.query(`UPDATE foo SET x = ${input} WHERE id = 1`);',
+    '}',
+    'const apiBase = "http://api.example.com";  // TODO move to https',
+  ].join("\n");
   const out = analyzeVuln({ files: [{ path: "config/production.js", content: planted }] });
   const types = out.findings.map(f => f.type);
   const severities = out.findings.map(f => f.severity);
@@ -1216,6 +1220,59 @@ console.log("\nSQL detectors — a keyword is not a query\n");
     "a bare WHERE-comparison fragment still fires");
   expect(fp('const w = "WHERE " + clauses.join(" AND ");').length === 1,
     "a literal that is nothing but a clause keyword still fires");
+}
+
+console.log("\nA mention of a shape is not the shape — the detectors that missed it\n");
+
+// Each case was an alert on this repository's own Security tab: test vectors
+// and log prose reported as the defect they describe. The real spelling of
+// every one still fires.
+{
+  const hits = (type, content, path = "src/app.js") =>
+    analyzeVuln({ files: [{ path, content }] }).findings.filter((f) => f.type === type).length;
+
+  // SQL spelled inside another string is a test feeding code as data.
+  expect(hits("sql_string_concatenation", `const v = 'db.query("SELECT * FROM t WHERE id = " + req.params.id);';`) === 0,
+    "SQL concatenation inside a string literal is data");
+  expect(hits("sql_string_concatenation", `const two = base + '\\n  db.query("SELECT * FROM t WHERE x = " + id);';`) === 0,
+    "…including a JS snippet that is itself one operand of a +");
+  expect(hits("sql_string_concatenation", 'db.query("SELECT * FROM t WHERE id = " + id);') === 1,
+    "…while the same line as code still fires");
+  expect(hits("sql_template_literal_injection", "expect(fp('db.query(`SELECT * FROM u WHERE id = ${id}`);'));") === 0,
+    "a SQL template inside a string literal is data");
+  expect(hits("sql_template_literal_injection", "db.query(`SELECT * FROM u WHERE id = ${id}`);") === 1,
+    "…while the template as code still fires");
+  const tenant = [
+    'await db.prepare("SELECT * FROM t WHERE org_id = ?").bind(o).all();',
+    `const v = 'db.query("SELECT * FROM t WHERE a = " + b);';`,
+  ].join("\n");
+  expect(hits("missing_tenant_scope", tenant) === 0,
+    "a query spelled inside a string is not an unscoped query");
+  expect(hits("missing_tenant_scope", tenant + '\nawait db.prepare("SELECT * FROM t WHERE id = ?").bind(i).first();') === 1,
+    "…while a real unscoped query against a scoped table still fires");
+
+  // A credential word in log PROSE is not a credential being logged.
+  expect(hits("sensitive_data_logging", 'console.log("rate limiting API-key traffic per org");') === 0,
+    "prose naming a credential is not a leak");
+  expect(hits("sensitive_data_logging", "console.log(`${failures} api-key test(s) failed`);") === 0,
+    "…nor is prose beside an unrelated interpolation");
+  expect(hits("sensitive_data_logging", 'console.log("token:", apiKey);') === 1,
+    "a credential identifier passed to the log still fires");
+  expect(hits("sensitive_data_logging", "console.log(`key=${apiKey}`);") === 1,
+    "…as does one interpolated into a template");
+  expect(hits("sensitive_data_logging", 'print(f"key={api_key}")', "app.py") === 1,
+    "…and into a Python f-string");
+
+  // The command-injection regex consumed the character before the call name,
+  // so a quote in front of it put the match start outside the literal.
+  expect(hits("command_injection", 'const v = ["command_injection", "exec(`convert ${f} out.png`)"];') === 0,
+    "a shell command spelled inside a string is data");
+  expect(hits("command_injection", "exec(`convert ${f} out.png`);") === 1,
+    "…while the call itself still fires");
+
+  // The source of a regex that matches URLs is not a URL.
+  expect(hits("insecure_http_url", 'const RE = new RegExp("^http://(?:" + hosts.join("|") + ")");') === 0,
+    "a regex fragment after http:// is not an endpoint");
 }
 
 console.log("\nTest code — capped, labelled, never dropped\n");

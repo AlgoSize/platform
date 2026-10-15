@@ -99,10 +99,26 @@ function describeDomain(env, org) {
   };
 }
 
+// The UPDATE below interpolates column NAMES, so they come from this list and
+// nowhere else — values are always bound. Every caller passes literal keys
+// today; the allowlist is what keeps a future caller that forwards a request
+// body from writing to arbitrary organisation columns.
+const DOMAIN_COLUMNS = new Set([
+  "brand_domain",
+  "brand_domain_status",
+  "brand_domain_detail",
+  "brand_domain_checked_at",
+  "brand_domain_attempts",
+]);
+
 async function writeDomain(env, orgId, fields) {
   const sets = [];
   const vals = [];
-  for (const [col, val] of Object.entries(fields)) { sets.push(`${col} = ?`); vals.push(val); }
+  for (const [col, val] of Object.entries(fields)) {
+    if (!DOMAIN_COLUMNS.has(col)) throw new Error(`writeDomain: unknown column ${col}`);
+    sets.push(`${col} = ?`);
+    vals.push(val);
+  }
   sets.push("updated_at = ?"); vals.push(Math.floor(Date.now() / 1000));
   await env.DB.prepare(`UPDATE organisations SET ${sets.join(", ")} WHERE org_id = ?`)
     .bind(...vals, orgId).run();

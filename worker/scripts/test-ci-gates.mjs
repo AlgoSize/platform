@@ -24,6 +24,7 @@
 // Run with:  node scripts/test-ci-gates.mjs
 
 import { readFileSync, existsSync } from "node:fs";
+import * as acorn from "acorn";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
@@ -374,7 +375,9 @@ for (const g of GATES) {
   for (const b of blocks) {
     // github-script wraps the body in an async function, so top-level await
     // is legal there. Checking it bare reports every real script as broken.
-    try { new Function(`async function __gs(){ ${b} }`); }
+    // Parsed, never compiled: a syntax check has no reason to build a
+    // callable function out of a workflow file.
+    try { acorn.parse(`async function __gs(){ ${b} }`, { ecmaVersion: "latest" }); }
     catch (err) { if (!bad) bad = String(err.message).slice(0, 120); }
   }
   expect(bad === null,

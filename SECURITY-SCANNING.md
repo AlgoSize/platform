@@ -160,6 +160,13 @@ still fires, and the format rules — PEM banners, credentialed URIs — are
 exempt because string data is exactly where those leak. The scanner's own
 source was the proof: five of its rule definitions reported themselves.
 
+SQL lives in strings, so the SQL and tenant-scope detectors ask a narrower
+question: is the query spelled inside *another* string? `"SELECT … WHERE id =
+?"` is a query; `'db.query("SELECT …" + id)'` is a test vector. Credential
+logging is matched against code with string interiors blanked and
+interpolations (`${…}`, f-string `{…}`, Ruby `#{…}`) kept, so `"api-key tests
+passed"` is prose and `` `key=${apiKey}` `` is a leak.
+
 ---
 
 ## Architecture

@@ -1012,13 +1012,18 @@ export async function adminSandboxCheckHandler(request, env) {
   // execute — the exact production failure this endpoint exists for — comes
   // back ok:false here, and reporting it as "working" because HTTP said 200
   // would reproduce the original bug at a new layer.
-  const ran = body.ok !== false && body.sampleResult === 2;
+  //
+  // `result` is the sandbox Worker's field (runUserCode's return, passed
+  // through verbatim). `sampleResult` is the optimizer's name for the same
+  // value one layer up, and reading it here reported every working sandbox
+  // as "returned undefined instead of 2".
+  const ran = body.ok !== false && body.result === 2;
   if (!ran) {
     return jsonResponse({
       ok: false, state: "bad_response", elapsedMs,
       message: body.ok === false
         ? `The sandbox refused the probe: ${body.error || "unknown"} — ${body.message || ""}`.trim()
-        : `The sandbox ran the probe but returned ${JSON.stringify(body.sampleResult)} instead of 2.`,
+        : `The sandbox ran the probe but returned ${JSON.stringify(body.result)} instead of 2.`,
       impact: "Grading fails or produces wrong numbers.",
       fix: "Check the algosize-sandbox Worker's logs; redeploy it if it is out of date.",
     }, 200);

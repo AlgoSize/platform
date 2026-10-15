@@ -599,9 +599,10 @@ const IGNORED_HOSTS =
 const REQUEST_PRIMITIVE_RE =
   /\b(fetch|axios|got|ky|superagent|XMLHttpRequest|https?\.(get|request)|\.(get|post|put|patch|delete|head)\s*\()/;
 
-// Test and fixture files describe scenarios, not the system. `http://x/api/…`
-// is a stand-in origin used across this repo's own test scripts; counted as
-// architecture it produced a service literally named "x" with 96 call sites.
+// Test and fixture files describe scenarios, not the system. Host `x` (as in
+// `x/api/…`) is a stand-in origin used across this repo's own test scripts;
+// counted as architecture it produced a service literally named "x" with 96
+// call sites.
 const TEST_PATH_RE = /(^|\/)(tests?|__tests__|__mocks__|spec|fixtures?|mocks?)\//i
 ;
 const TEST_FILE_RE = /(^|\/)[^/]*\.(test|spec)\.[a-z]+$|(^|\/)test-[^/]*$/i;

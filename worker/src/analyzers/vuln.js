@@ -249,17 +249,70 @@ export function insideLiteral(line, masked, index) {
   return masked[index] !== line[index];
 }
 
-export function maskLiterals(line) {
+/**
+ * Is the match at `index` inside a literal that is itself inside a literal?
+ *
+ * SQL lives in strings, so "starts inside a literal" cannot separate a query
+ * from a mention of one. Nesting can: `"SELECT … WHERE org_id = ?"` is a
+ * query, `'db.query("SELECT … WHERE id = " + id)'` is a test feeding that
+ * code to the scanner as data. A masked literal is blank between its
+ * delimiters, so the nearest non-blank on either side bounds the outer one.
+ */
+export function insideNestedLiteral(line, index) {
+  const masked = maskLiterals(line);
+  if (!insideLiteral(line, masked, index)) return false;
+  let open = index;
+  while (open > 0 && masked[open] === " ") open--;
+  let close = index;
+  while (close < masked.length && masked[close] === " ") close++;
+  const inner = line.slice(open + 1, close);
+  return insideLiteral(inner, maskLiterals(inner), index - open - 1);
+}
+
+// `keepInterpolations` leaves interpolated expressions unmasked — JS
+// `${…}`, Python f-string `{…}`, Ruby `#{…}`. They are code, not data:
+// `` `token=${apiKey}` `` logs the key, and a rule asking "is a credential the
+// thing being logged" must see `apiKey`. Off by default, because every other
+// caller asks where a match STARTS, and that answer must not change
+// underneath them.
+export function maskLiterals(line, { keepInterpolations = false } = {}) {
   let out = "";
   let i = 0;
   const n = line.length;
   while (i < n) {
     const ch = line[i];
     if (ch === '"' || ch === "'" || ch === "`") {
+      const fString = /(?:^|[^\w$])[rRbB]?[fF][rRbB]?$/.test(line.slice(Math.max(0, i - 4), i));
+      // Index of the `{` that opens an interpolation at j, or -1.
+      const interpolationAt = (j) => {
+        if (!keepInterpolations) return -1;
+        if (ch === "`" && line[j] === "$" && line[j + 1] === "{") return j + 1;
+        if (ch === '"' && line[j] === "#" && line[j + 1] === "{") return j + 1;
+        if (fString && line[j] === "{" && line[j + 1] !== "{") return j;
+        return -1;
+      };
       let j = i + 1;
-      while (j < n && line[j] !== ch) j += line[j] === "\\" ? 2 : 1;
+      let body = "";
+      while (j < n && line[j] !== ch) {
+        const brace = interpolationAt(j);
+        if (brace >= 0) {
+          let depth = 0;
+          let k = brace;
+          for (; k < n; k++) {
+            if (line[k] === "{") depth++;
+            else if (line[k] === "}" && --depth === 0) break;
+          }
+          body += line.slice(j, Math.min(k + 1, n));
+          j = k + 1;
+          continue;
+        }
+        // `\x` is one escaped char; `{{` in an f-string is one escaped brace.
+        const step = line[j] === "\\" || (fString && line[j] === "{" && line[j + 1] === "{") ? 2 : 1;
+        body += " ".repeat(Math.min(step, n - j));
+        j += step;
+      }
       const closed = j < n;
-      out += ch + " ".repeat(Math.max(0, Math.min(j, n) - i - 1)) + (closed ? ch : "");
+      out += ch + body.slice(0, Math.max(0, Math.min(j, n) - i - 1)) + (closed ? ch : "");
       i = closed ? j + 1 : n;
       continue;
     }
@@ -432,11 +485,21 @@ function detectSqlConcat(file) {
     // than asking whether a SQL word appears somewhere on the line. The old
     // form matched `"Scanned " + n + " packages from " + names` — an English
     // sentence — because "from" is in it.
-    const left  = /(["'])((?:(?!\1)[^\\]|\\.)*)\1\s*\+\s*[A-Za-z_$][\w$.]*/;
-    const right = /[A-Za-z_$][\w$.]*\s*\+\s*(["'])((?:(?!\1)[^\\]|\\.)*)\1/;
-    const l = left.exec(code);
-    const r = right.exec(code);
-    if ((l && looksLikeSqlLiteral(l[2])) || (r && looksLikeSqlLiteral(r[2]))) {
+    //
+    // The literal's own opening quote must be code. When it is blanked by the
+    // mask, the "SQL" is the inside of another string — a test vector or a
+    // fixture spelled as data — and nothing on this line queries anything.
+    const left  = /(["'])((?:(?!\1)[^\\]|\\.)*)\1\s*\+\s*[A-Za-z_$][\w$.]*/g;
+    const right = /[A-Za-z_$][\w$.]*\s*\+\s*(["'])((?:(?!\1)[^\\]|\\.)*)\1/g;
+    const maskedCode = maskLiterals(code);
+    // And the SQL must be the literal's own text, not a string inside it:
+    // `'db.query("SELECT …" + id)'` is a JS snippet that contains a query.
+    const isQuery = (m, quoteAt) =>
+      looksLikeSqlLiteral(maskLiterals(m[2])) && !insideLiteral(code, maskedCode, quoteAt);
+    const hit =
+      [...code.matchAll(left)].some((m) => isQuery(m, m.index)) ||
+      [...code.matchAll(right)].some((m) => isQuery(m, m.index + m[0].length - m[2].length - 2));
+    if (hit) {
       findings.push({
         severity: "medium", // shape without taint — see the registry note
         type: "sql_string_concatenation",
@@ -468,10 +531,13 @@ function detectSqlTemplateLiteral(file) {
     const ci = commentStartIndex(text);
     const code = ci >= 0 ? text.slice(0, ci) : text;
 
-    const tmpl = /`([^`]*)`/.exec(code);
-    if (!tmpl) continue;
-    const body = tmpl[1];
-    if (looksLikeSqlLiteral(body) && /\$\{[^}]+\}/.test(body)) {
+    // A template whose opening backtick is masked sits inside another string:
+    // data, not a query. Same discriminator as detectSqlConcat.
+    const maskedCode = maskLiterals(code);
+    const hit = [...code.matchAll(/`([^`]*)`/g)].some((t) =>
+      !insideLiteral(code, maskedCode, t.index) &&
+      looksLikeSqlLiteral(maskLiterals(t[1])) && /\$\{[^}]+\}/.test(t[1]));
+    if (hit) {
       findings.push({
         severity: "medium", // shape without taint — see the registry note
         type: "sql_template_literal_injection",
@@ -492,7 +558,11 @@ function detectSqlTemplateLiteral(file) {
 
 const PRODUCTION_PATH_RE = /(?:^|[\\/])(prod|production|\.env(?:\.|$)|config|wrangler\.toml|settings\.py|application\.ya?ml|kubernetes|terraform|helm)/i;
 const LOCAL_HOST_RE = /^http:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[::1\]|[a-z0-9-]+\.local)/i;
-const HTTP_URL_RE = /\bhttp:\/\/[^\s"'`<>]+/g;
+// The authority must start like a host — a name, an IP, a bracketed IPv6, or
+// a template placeholder (`${host}`, `{{host}}`, `%s`). `http://(?:` is the
+// source of a regex that MATCHES URLs, not one; this scanner reported its
+// own allowlist below that way.
+const HTTP_URL_RE = /\bhttp:\/\/[\w[$%{][^\s"'`<>]*/g;
 
 // URIs that are IDENTIFIERS, not endpoints.
 //
@@ -617,8 +687,11 @@ const CODE_PATTERNS = [
     // `child_process.exec`) are matched explicitly rather than being
     // excluded by the bare-call lookbehind.
     regex: new RegExp(
-      // …the call
-      "(?:(?:^|[^.\\w$])(?:exec|execSync|spawnSync?|popen|system)" +
+      // …the call. A lookbehind, not a consumed `[^.\w$]`: the match must
+      // START at the call name, or a quote in front of it — the opening quote
+      // of a test vector like "exec(`convert ${f}`)" — puts the start outside
+      // the literal and the mention reads as a call.
+      "(?:(?<![.\\w$])(?:exec|execSync|spawnSync?|popen|system)" +
       "|\\b(?:os\\.system|child_process\\.exec\\w*|subprocess\\.(?:run|call|Popen)))" +
       // …fed a template with ${}, a concatenated string, or a Python f-string
       "\\s*\\(\\s*(?:`[^`]*\\$\\{|[\"'][^\"']*[\"']\\s*\\+\\s*[A-Za-z_$]|f[\"'][^\"']*\\{)",
@@ -749,6 +822,13 @@ const CODE_PATTERNS = [
     // A logging call whose argument names a credential. Deliberately requires
     // the credential-ish identifier to be the thing logged, not merely present
     // somewhere on the line.
+    //
+    // Which is why it is matched against CODE: string interiors are blanked,
+    // interpolations kept. Raw, the rule read prose as a leak — "api-key tests
+    // passed", "carries the finding, never a secret" — seven times in this
+    // repository's own test output, while `` `key=${apiKey}` `` and
+    // `print(f"{secret}")` must still fire.
+    matchCodeOnly: true,
     regex: /\b(?:console\.(?:log|info|warn|error|debug)|logger?\.(?:info|debug|warn|error|log)|print|println|puts|fmt\.Print\w*)\s*\([^)]*\b(?:password|passwd|secret|api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|private[_-]?key|session[_-]?token|credit[_-]?card|ssn)\b/i,
     // A log that says a secret is MISSING or being redacted names the field
     // without printing it — the exact pattern this codebase uses itself.
@@ -818,9 +898,11 @@ function detectCodePatterns(file) {
     // vulnerabilities. Rules marked scanLiterals (PEM banners, connection
     // strings) are exempt: string data is exactly where those leak.
     const maskedCode = maskLiterals(code);
+    // Same length as `code`, so a match index means the same position in both.
+    const codeOnly = maskLiterals(code, { keepInterpolations: true });
 
     for (const pat of CODE_PATTERNS) {
-      const m = pat.regex.exec(code);
+      const m = pat.regex.exec(pat.matchCodeOnly ? codeOnly : code);
       if (!m) continue;
       if (!pat.scanLiterals && insideLiteral(code, maskedCode, m.index)) continue;
       if (pat.unless && pat.unless.test(code)) continue;
@@ -905,6 +987,9 @@ function detectMissingTenantScope(file) {
     const m = SQL_STATEMENT_RE.exec(text);
     const table = m && (m[2] || m[3]);
     if (!table) continue;
+    // A query spelled inside another string is a test vector, not a query —
+    // neither a candidate nor evidence of the file's scoping convention.
+    if (insideNestedLiteral(text, m.index)) continue;
     const key = table.toLowerCase();
     if (TENANT_COL_RE.test(text)) scopedTables.add(key);
     else if (/\bWHERE\b/i.test(text)) candidates.push({ line: i + 1, text, table: key });

@@ -3,6 +3,7 @@
 // answerable only from a Cloudflare dashboard.
 import { adminSandboxCheckHandler } from "../src/handlers/admin.js";
 import { adminSettingsHandler } from "../src/handlers/admin_panel.js";
+import sandboxWorker from "../../worker-sandbox/src/index.js";
 
 let failures = 0;
 const expect = (cond, label) => {
@@ -15,13 +16,12 @@ const call = async (env) => (await adminSandboxCheckHandler(req, env)).json();
 
 // A sandbox stub whose /run behaviour we choose per case.
 const sandbox = (impl) => ({ fetch: impl });
-const ok = sandbox(async (_url, init) => {
-  const { code, input } = JSON.parse(init.body);
-  // Actually honour the contract: compile and run, so a probe that stops
-  // proving anything fails here rather than passing on a canned 2.
-  const fn = new Function(`${code}; return run;`)();
-  return new Response(JSON.stringify({ ok: true, sampleResult: fn(input) }), { status: 200 });
-});
+// The working case is the REAL algosize-sandbox Worker, not a stub of it. A
+// hand-written stub encodes the author's belief about the response shape,
+// and this one believed `sampleResult` — so the check passed here while every
+// production call reported a healthy sandbox as broken, because the Worker
+// answers with runUserCode's `result`.
+const ok = sandbox((url, init) => sandboxWorker.fetch(new Request(url, init)));
 
 console.log("\nthe sandbox probe distinguishes all four states\n");
 
@@ -60,7 +60,7 @@ console.log("\nthe sandbox probe distinguishes all four states\n");
     "…and surfaces the refusal verbatim");
 }
 {
-  const wrong = sandbox(async () => new Response(JSON.stringify({ ok: true, sampleResult: 99 }), { status: 200 }));
+  const wrong = sandbox(async () => new Response(JSON.stringify({ ok: true, result: 99 }), { status: 200 }));
   const r = await call({ SANDBOX: wrong });
   expect(r.state === "bad_response", "a wrong answer to the probe is not success either");
 }
